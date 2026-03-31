@@ -6,6 +6,7 @@ import platform
 import shutil
 import signal
 import subprocess
+import tempfile
 import threading
 import time
 
@@ -285,7 +286,7 @@ def _make_run_env(env: dict) -> dict:
         elif k not in _HERMES_PROVIDER_ENV_BLOCKLIST or _is_passthrough(k):
             run_env[k] = v
     existing_path = run_env.get("PATH", "")
-    if "/usr/bin" not in existing_path.split(":"):
+    if not _IS_WINDOWS and "/usr/bin" not in existing_path.split(":"):
         run_env["PATH"] = f"{existing_path}:{_SANE_PATH}" if existing_path else _SANE_PATH
     return run_env
 
@@ -335,6 +336,9 @@ class LocalEnvironment(PersistentShellMixin, BaseEnvironment):
 
     @property
     def _temp_prefix(self) -> str:
+        if _IS_WINDOWS:
+            base = tempfile.gettempdir().replace('\\', '/')
+            return f"{base}/hermes-local-{self._session_id}"
         return f"/tmp/hermes-local-{self._session_id}"
 
     def _spawn_shell_process(self) -> subprocess.Popen:
@@ -364,10 +368,16 @@ class LocalEnvironment(PersistentShellMixin, BaseEnvironment):
         if self._shell_pid is None:
             return
         try:
-            subprocess.run(
-                ["pkill", "-P", str(self._shell_pid)],
-                capture_output=True, timeout=5,
-            )
+            if _IS_WINDOWS:
+                subprocess.run(
+                    ["taskkill", "/F", "/FI", f"PPID eq {self._shell_pid}"],
+                    capture_output=True, timeout=5,
+                )
+            else:
+                subprocess.run(
+                    ["pkill", "-P", str(self._shell_pid)],
+                    capture_output=True, timeout=5,
+                )
         except (subprocess.TimeoutExpired, FileNotFoundError):
             pass
 
