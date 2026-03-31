@@ -178,3 +178,146 @@ def vrchat_status() -> dict:
             "host": _VRCHAT_HOST,
             "error": str(exc),
         }
+
+
+def _check_vrchat_requirements() -> dict:
+    try:
+        import pythonosc  # noqa: F401
+        return {"available": True}
+    except ImportError:
+        return {
+            "available": False,
+            "reason": "python-osc not installed. Run: uv pip install 'hermes-agent[vrchat]'",
+        }
+
+
+# ---------------------------------------------------------------------------
+# Registry — makes these tools callable by the Hermes AI agent
+# ---------------------------------------------------------------------------
+from tools.registry import registry  # noqa: E402
+
+registry.register(
+    name="vrchat_chatbox",
+    toolset="vrchat",
+    schema={
+        "name": "vrchat_chatbox",
+        "description": (
+            "Send a text message to the VRChat chatbox via OSC. "
+            "Max 144 characters. VRChat must be running with OSC enabled. "
+            "Use this to communicate in VRChat worlds as はくあ."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "Message to display in VRChat chatbox (max 144 chars)",
+                },
+                "immediate": {
+                    "type": "boolean",
+                    "description": "Show immediately (true) or via keyboard UI (false). Default: true",
+                },
+            },
+            "required": ["text"],
+        },
+    },
+    handler=lambda args, **kw: vrchat_chatbox(
+        text=args["text"],
+        immediate=args.get("immediate", True),
+    ),
+    check_fn=_check_vrchat_requirements,
+    emoji="🌐",
+)
+
+registry.register(
+    name="vrchat_typing",
+    toolset="vrchat",
+    schema={
+        "name": "vrchat_typing",
+        "description": "Show or hide the VRChat chatbox typing indicator.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "is_typing": {
+                    "type": "boolean",
+                    "description": "true to show typing indicator, false to hide",
+                },
+            },
+            "required": ["is_typing"],
+        },
+    },
+    handler=lambda args, **kw: vrchat_typing(args["is_typing"]),
+    check_fn=_check_vrchat_requirements,
+    emoji="✍️",
+)
+
+registry.register(
+    name="vrchat_avatar_param",
+    toolset="vrchat",
+    schema={
+        "name": "vrchat_avatar_param",
+        "description": (
+            "Set a VRChat avatar OSC parameter (expression, gesture, custom param). "
+            "Examples: GestureLeft=1, Viseme=14, IsHappy=true, EmoteSpeed=0.5"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Parameter name (e.g. 'GestureLeft', 'Viseme', 'IsHappy')",
+                },
+                "value": {
+                    "description": "Parameter value: boolean, integer, or float",
+                },
+            },
+            "required": ["name", "value"],
+        },
+    },
+    handler=lambda args, **kw: vrchat_avatar_param(args["name"], args["value"]),
+    check_fn=_check_vrchat_requirements,
+    emoji="🎭",
+)
+
+registry.register(
+    name="vrchat_send_osc",
+    toolset="vrchat",
+    schema={
+        "name": "vrchat_send_osc",
+        "description": (
+            "Send a raw OSC message to VRChat. "
+            "Use when vrchat_chatbox or vrchat_avatar_param don't cover the needed address. "
+            "Examples: /chatbox/input, /avatar/change, /avatar/parameters/MyParam"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "address": {
+                    "type": "string",
+                    "description": "OSC address starting with '/' (e.g. '/chatbox/input')",
+                },
+                "args": {
+                    "type": "array",
+                    "description": "List of argument values (string, number, boolean)",
+                },
+            },
+            "required": ["address", "args"],
+        },
+    },
+    handler=lambda args, **kw: vrchat_send_osc(args["address"], args.get("args", [])),
+    check_fn=_check_vrchat_requirements,
+    emoji="📡",
+)
+
+registry.register(
+    name="vrchat_status",
+    toolset="vrchat",
+    schema={
+        "name": "vrchat_status",
+        "description": "Check whether VRChat is running and the OSC port is reachable.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
+    handler=lambda args, **kw: vrchat_status(),
+    check_fn=_check_vrchat_requirements,
+    emoji="🔍",
+)

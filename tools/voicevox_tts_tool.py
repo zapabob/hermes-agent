@@ -255,3 +255,89 @@ def _play_wav(wav_bytes: bytes, blocking: bool = True) -> dict:
 def _cmd_exists(cmd: str) -> bool:
     import shutil
     return shutil.which(cmd) is not None
+
+
+def _check_voicevox_requirements() -> dict:
+    status = voicevox_status()
+    if status["reachable"]:
+        return {"available": True}
+    return {
+        "available": False,
+        "reason": (
+            f"VOICEVOX engine not reachable at {status['url']}. "
+            "Please start VOICEVOX: https://voicevox.hiroshiba.jp/"
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Registry — makes these tools callable by the Hermes AI agent
+# ---------------------------------------------------------------------------
+from tools.registry import registry  # noqa: E402
+
+registry.register(
+    name="voicevox_speak",
+    toolset="voicevox",
+    schema={
+        "name": "voicevox_speak",
+        "description": (
+            "Speak text aloud using VOICEVOX Japanese TTS engine. "
+            "Produces high-quality Japanese voice output through the system speakers. "
+            "Use this to give はくあ an audible voice in the real world. "
+            "VOICEVOX must be running locally (http://127.0.0.1:50021)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "Text to speak aloud (Japanese recommended, max ~200 chars per call)",
+                },
+                "speaker": {
+                    "type": "integer",
+                    "description": (
+                        "VOICEVOX speaker/style ID. Default: 8 (春日部つむぎ). "
+                        "Use voicevox_list_speakers to see all options."
+                    ),
+                },
+                "blocking": {
+                    "type": "boolean",
+                    "description": "Wait for playback to finish before returning. Default: true",
+                },
+            },
+            "required": ["text"],
+        },
+    },
+    handler=lambda args, **kw: voicevox_speak(
+        text=args["text"],
+        speaker=args.get("speaker"),
+        blocking=args.get("blocking", True),
+    ),
+    check_fn=_check_voicevox_requirements,
+    emoji="🔊",
+)
+
+registry.register(
+    name="voicevox_list_speakers",
+    toolset="voicevox",
+    schema={
+        "name": "voicevox_list_speakers",
+        "description": "List all available VOICEVOX speakers and their style IDs.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
+    handler=lambda args, **kw: voicevox_list_speakers(),
+    check_fn=_check_voicevox_requirements,
+    emoji="🎤",
+)
+
+registry.register(
+    name="voicevox_status",
+    toolset="voicevox",
+    schema={
+        "name": "voicevox_status",
+        "description": "Check whether the VOICEVOX engine is running and reachable.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
+    handler=lambda args, **kw: voicevox_status(),
+    emoji="🔍",
+)

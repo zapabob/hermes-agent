@@ -154,6 +154,25 @@ from .delegate_tool import (
     DELEGATE_TASK_SCHEMA,
 )
 
+# VRChat OSC control
+from .vrchat_osc_tool import (
+    vrchat_chatbox,
+    vrchat_chatbox_clear,
+    vrchat_typing,
+    vrchat_avatar_param,
+    vrchat_avatar_change,
+    vrchat_send_osc,
+    vrchat_status,
+)
+
+# VOICEVOX Japanese TTS
+from .voicevox_tts_tool import (
+    voicevox_speak,
+    voicevox_synthesise,
+    voicevox_list_speakers,
+    voicevox_status,
+)
+
 # File tools have no external requirements - they use the terminal backend
 def check_file_requirements():
     """File tools only require terminal backend to be available."""
@@ -258,5 +277,18 @@ __all__ = [
     'delegate_task',
     'check_delegate_requirements',
     'DELEGATE_TASK_SCHEMA',
+    # VRChat OSC
+    'vrchat_chatbox',
+    'vrchat_chatbox_clear',
+    'vrchat_typing',
+    'vrchat_avatar_param',
+    'vrchat_avatar_change',
+    'vrchat_send_osc',
+    'vrchat_status',
+    # VOICEVOX TTS
+    'voicevox_speak',
+    'voicevox_synthesise',
+    'voicevox_list_speakers',
+    'voicevox_status',
 ]
 

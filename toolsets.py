@@ -64,6 +64,10 @@ _HERMES_CORE_TOOLS = [
     "honcho_context", "honcho_profile", "honcho_search", "honcho_conclude",
     # Home Assistant smart home control (gated on HASS_TOKEN via check_fn)
     "ha_list_entities", "ha_get_state", "ha_list_services", "ha_call_service",
+    # VRChat OSC control (gated on python-osc via check_fn)
+    "vrchat_chatbox", "vrchat_typing", "vrchat_avatar_param", "vrchat_send_osc", "vrchat_status",
+    # VOICEVOX Japanese TTS (gated on engine running via check_fn)
+    "voicevox_speak", "voicevox_list_speakers", "voicevox_status",
 ]
 
 
