@@ -1,0 +1,820 @@
+{
+  "source": "C:\\Users\\downl\\Desktop\\clawdbot-main3\\clawdbot-main",
+  "env": {
+    "source_keys": [
+      "AI_GATEWAY_API_KEY",
+      "ANTHROPIC_API_KEY",
+      "ANTHROPIC_API_KEYS",
+      "ANTHROPIC_API_KEY_1",
+      "BRAVE_API_KEY",
+      "DEEPGRAM_API_KEY",
+      "DISCORD_BOT_TOKEN",
+      "ELEVENLABS_API_KEY",
+      "FIRECRAWL_API_KEY",
+      "GEMINI_API_KEY",
+      "GEMINI_API_KEYS",
+      "GEMINI_API_KEY_1",
+      "GOOGLE_API_KEY",
+      "MATTERMOST_BOT_TOKEN",
+      "MATTERMOST_URL",
+      "MINIMAX_API_KEY",
+      "NGROK_EXE",
+      "OPENAI_API_KEY",
+      "OPENAI_API_KEYS",
+      "OPENAI_API_KEY_1",
+      "OPENCLAW_CONFIG_DIR",
+      "OPENCLAW_CONFIG_PATH",
+      "OPENCLAW_GATEWAY_PASSWORD",
+      "OPENCLAW_GATEWAY_TOKEN",
+      "OPENCLAW_HOME",
+      "OPENCLAW_IMAGE",
+      "OPENCLAW_LIVE_ANTHROPIC_KEY",
+      "OPENCLAW_LIVE_GEMINI_KEY",
+      "OPENCLAW_LIVE_OPENAI_KEY",
+      "OPENCLAW_LOAD_SHELL_ENV",
+      "OPENCLAW_SHELL_ENV_TIMEOUT_MS",
+      "OPENCLAW_STATE_DIR",
+      "OPENCLAW_TWITCH_ACCESS_TOKEN",
+      "OPENCLAW_USE_REPO_LAUNCHER",
+      "OPENCLAW_WORKSPACE_DIR",
+      "OPENROUTER_API_KEY",
+      "PERPLEXITY_API_KEY",
+      "SLACK_APP_TOKEN",
+      "SLACK_BOT_TOKEN",
+      "SYNTHETIC_API_KEY",
+      "TELEGRAM_BOT_TOKEN",
+      "XI_API_KEY",
+      "ZAI_API_KEY",
+      "ZALO_BOT_TOKEN"
+    ],
+    "hermes_keys": [
+      "BROWSERBASE_ADVANCED_STEALTH",
+      "BROWSERBASE_API_KEY",
+      "BROWSERBASE_PROJECT_ID",
+      "BROWSERBASE_PROXIES",
+      "BROWSER_INACTIVITY_TIMEOUT",
+      "BROWSER_SESSION_TIMEOUT",
+      "CONTEXT_COMPRESSION_ENABLED",
+      "CONTEXT_COMPRESSION_THRESHOLD",
+      "EMAIL_ADDRESS",
+      "EMAIL_ALLOWED_USERS",
+      "EMAIL_HOME_ADDRESS",
+      "EMAIL_IMAP_HOST",
+      "EMAIL_IMAP_PORT",
+      "EMAIL_PASSWORD",
+      "EMAIL_POLL_INTERVAL",
+      "EMAIL_SMTP_HOST",
+      "EMAIL_SMTP_PORT",
+      "EXA_API_KEY",
+      "FAL_KEY",
+      "FIRECRAWL_API_KEY",
+      "GATEWAY_ALLOW_ALL_USERS",
+      "GITHUB_APP_ID",
+      "GITHUB_APP_INSTALLATION_ID",
+      "GITHUB_APP_PRIVATE_KEY_PATH",
+      "GITHUB_TOKEN",
+      "GLM_API_KEY",
+      "GLM_BASE_URL",
+      "GROQ_API_KEY",
+      "GROQ_BASE_URL",
+      "HERMES_HUMAN_DELAY_MAX_MS",
+      "HERMES_HUMAN_DELAY_MIN_MS",
+      "HERMES_HUMAN_DELAY_MODE",
+      "HF_TOKEN",
+      "HONCHO_API_KEY",
+      "IMAGE_TOOLS_DEBUG",
+      "KIMI_API_KEY",
+      "KIMI_BASE_URL",
+      "LLM_MODEL",
+      "MINIMAX_API_KEY",
+      "MINIMAX_BASE_URL",
+      "MINIMAX_CN_API_KEY",
+      "MINIMAX_CN_BASE_URL",
+      "MOA_TOOLS_DEBUG",
+      "OPENCODE_GO_API_KEY",
+      "OPENCODE_GO_BASE_URL",
+      "OPENCODE_ZEN_API_KEY",
+      "OPENCODE_ZEN_BASE_URL",
+      "OPENROUTER_API_KEY",
+      "PARALLEL_API_KEY",
+      "RL_API_URL",
+      "SLACK_ALLOWED_USERS",
+      "SLACK_APP_TOKEN",
+      "SLACK_BOT_TOKEN",
+      "STT_GROQ_MODEL",
+      "STT_OPENAI_BASE_URL",
+      "STT_OPENAI_MODEL",
+      "SUDO_PASSWORD",
+      "TELEGRAM_ALLOWED_USERS",
+      "TELEGRAM_BOT_TOKEN",
+      "TELEGRAM_HOME_CHANNEL",
+      "TELEGRAM_HOME_CHANNEL_NAME",
+      "TELEGRAM_WEBHOOK_PORT",
+      "TELEGRAM_WEBHOOK_SECRET",
+      "TELEGRAM_WEBHOOK_URL",
+      "TERMINAL_CWD",
+      "TERMINAL_DOCKER_IMAGE",
+      "TERMINAL_ENV",
+      "TERMINAL_LIFETIME_SECONDS",
+      "TERMINAL_MODAL_IMAGE",
+      "TERMINAL_SINGULARITY_IMAGE",
+      "TERMINAL_SSH_HOST",
+      "TERMINAL_SSH_KEY",
+      "TERMINAL_SSH_PORT",
+      "TERMINAL_SSH_USER",
+      "TERMINAL_TIMEOUT",
+      "TINKER_API_KEY",
+      "VISION_TOOLS_DEBUG",
+      "VOICE_TOOLS_OPENAI_KEY",
+      "WANDB_API_KEY",
+      "WEB_TOOLS_DEBUG",
+      "WHATSAPP_ALLOWED_USERS",
+      "WHATSAPP_ENABLED"
+    ],
+    "overlap": [
+      "FIRECRAWL_API_KEY",
+      "MINIMAX_API_KEY",
+      "OPENROUTER_API_KEY",
+      "SLACK_APP_TOKEN",
+      "SLACK_BOT_TOKEN",
+      "TELEGRAM_BOT_TOKEN"
+    ],
+    "source_only": [
+      "AI_GATEWAY_API_KEY",
+      "ANTHROPIC_API_KEY",
+      "ANTHROPIC_API_KEYS",
+      "ANTHROPIC_API_KEY_1",
+      "BRAVE_API_KEY",
+      "DEEPGRAM_API_KEY",
+      "DISCORD_BOT_TOKEN",
+      "ELEVENLABS_API_KEY",
+      "GEMINI_API_KEY",
+      "GEMINI_API_KEYS",
+      "GEMINI_API_KEY_1",
+      "GOOGLE_API_KEY",
+      "MATTERMOST_BOT_TOKEN",
+      "MATTERMOST_URL",
+      "NGROK_EXE",
+      "OPENAI_API_KEY",
+      "OPENAI_API_KEYS",
+      "OPENAI_API_KEY_1",
+      "OPENCLAW_CONFIG_DIR",
+      "OPENCLAW_CONFIG_PATH",
+      "OPENCLAW_GATEWAY_PASSWORD",
+      "OPENCLAW_GATEWAY_TOKEN",
+      "OPENCLAW_HOME",
+      "OPENCLAW_IMAGE",
+      "OPENCLAW_LIVE_ANTHROPIC_KEY",
+      "OPENCLAW_LIVE_GEMINI_KEY",
+      "OPENCLAW_LIVE_OPENAI_KEY",
+      "OPENCLAW_LOAD_SHELL_ENV",
+      "OPENCLAW_SHELL_ENV_TIMEOUT_MS",
+      "OPENCLAW_STATE_DIR",
+      "OPENCLAW_TWITCH_ACCESS_TOKEN",
+      "OPENCLAW_USE_REPO_LAUNCHER",
+      "OPENCLAW_WORKSPACE_DIR",
+      "PERPLEXITY_API_KEY",
+      "SYNTHETIC_API_KEY",
+      "XI_API_KEY",
+      "ZAI_API_KEY",
+      "ZALO_BOT_TOKEN"
+    ],
+    "hermes_only": [
+      "BROWSERBASE_ADVANCED_STEALTH",
+      "BROWSERBASE_API_KEY",
+      "BROWSERBASE_PROJECT_ID",
+      "BROWSERBASE_PROXIES",
+      "BROWSER_INACTIVITY_TIMEOUT",
+      "BROWSER_SESSION_TIMEOUT",
+      "CONTEXT_COMPRESSION_ENABLED",
+      "CONTEXT_COMPRESSION_THRESHOLD",
+      "EMAIL_ADDRESS",
+      "EMAIL_ALLOWED_USERS",
+      "EMAIL_HOME_ADDRESS",
+      "EMAIL_IMAP_HOST",
+      "EMAIL_IMAP_PORT",
+      "EMAIL_PASSWORD",
+      "EMAIL_POLL_INTERVAL",
+      "EMAIL_SMTP_HOST",
+      "EMAIL_SMTP_PORT",
+      "EXA_API_KEY",
+      "FAL_KEY",
+      "GATEWAY_ALLOW_ALL_USERS",
+      "GITHUB_APP_ID",
+      "GITHUB_APP_INSTALLATION_ID",
+      "GITHUB_APP_PRIVATE_KEY_PATH",
+      "GITHUB_TOKEN",
+      "GLM_API_KEY",
+      "GLM_BASE_URL",
+      "GROQ_API_KEY",
+      "GROQ_BASE_URL",
+      "HERMES_HUMAN_DELAY_MAX_MS",
+      "HERMES_HUMAN_DELAY_MIN_MS",
+      "HERMES_HUMAN_DELAY_MODE",
+      "HF_TOKEN",
+      "HONCHO_API_KEY",
+      "IMAGE_TOOLS_DEBUG",
+      "KIMI_API_KEY",
+      "KIMI_BASE_URL",
+      "LLM_MODEL",
+      "MINIMAX_BASE_URL",
+      "MINIMAX_CN_API_KEY",
+      "MINIMAX_CN_BASE_URL",
+      "MOA_TOOLS_DEBUG",
+      "OPENCODE_GO_API_KEY",
+      "OPENCODE_GO_BASE_URL",
+      "OPENCODE_ZEN_API_KEY",
+      "OPENCODE_ZEN_BASE_URL",
+      "PARALLEL_API_KEY",
+      "RL_API_URL",
+      "SLACK_ALLOWED_USERS",
+      "STT_GROQ_MODEL",
+      "STT_OPENAI_BASE_URL",
+      "STT_OPENAI_MODEL",
+      "SUDO_PASSWORD",
+      "TELEGRAM_ALLOWED_USERS",
+      "TELEGRAM_HOME_CHANNEL",
+      "TELEGRAM_HOME_CHANNEL_NAME",
+      "TELEGRAM_WEBHOOK_PORT",
+      "TELEGRAM_WEBHOOK_SECRET",
+      "TELEGRAM_WEBHOOK_URL",
+      "TERMINAL_CWD",
+      "TERMINAL_DOCKER_IMAGE",
+      "TERMINAL_ENV",
+      "TERMINAL_LIFETIME_SECONDS",
+      "TERMINAL_MODAL_IMAGE",
+      "TERMINAL_SINGULARITY_IMAGE",
+      "TERMINAL_SSH_HOST",
+      "TERMINAL_SSH_KEY",
+      "TERMINAL_SSH_PORT",
+      "TERMINAL_SSH_USER",
+      "TERMINAL_TIMEOUT",
+      "TINKER_API_KEY",
+      "VISION_TOOLS_DEBUG",
+      "VOICE_TOOLS_OPENAI_KEY",
+      "WANDB_API_KEY",
+      "WEB_TOOLS_DEBUG",
+      "WHATSAPP_ALLOWED_USERS",
+      "WHATSAPP_ENABLED"
+    ]
+  },
+  "extensions": [
+    {
+      "name": "acpx",
+      "description": "OpenClaw ACP runtime backend via acpx",
+      "private": false,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "amazon-bedrock",
+      "description": "OpenClaw Amazon Bedrock provider plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "anthropic",
+      "description": "OpenClaw Anthropic provider plugin",
+      "private": true,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "anthropic-vertex",
+      "description": "OpenClaw Anthropic Vertex provider plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "auto-agent",
+      "description": "Autonomous self-improvement and self-repair agent plugin",
+      "private": false,
+      "migration_class": "manual-port-required"
+    },
+    {
+      "name": "bluebubbles",
+      "description": "OpenClaw BlueBubbles channel plugin",
+      "private": false,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "brave",
+      "description": "OpenClaw Brave plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "browser",
+      "description": "OpenClaw browser tool plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "byteplus",
+      "description": "OpenClaw BytePlus provider plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "chutes",
+      "description": "OpenClaw Chutes.ai provider plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "cloudflare-ai-gateway",
+      "description": "OpenClaw Cloudflare AI Gateway provider plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "copilot-proxy",
+      "description": "OpenClaw Copilot Proxy provider plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "deepgram",
+      "description": "OpenClaw Deepgram media-understanding provider",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "deepseek",
+      "description": "OpenClaw DeepSeek provider plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "diagnostics-otel",
+      "description": "OpenClaw diagnostics OpenTelemetry exporter",
+      "private": false,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "diffs",
+      "description": "OpenClaw diff viewer plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "discord",
+      "description": "OpenClaw Discord channel plugin",
+      "private": false,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "duckduckgo",
+      "description": "OpenClaw DuckDuckGo plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "elevenlabs",
+      "description": "OpenClaw ElevenLabs speech plugin",
+      "private": true,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "exa",
+      "description": "OpenClaw Exa plugin",
+      "private": true,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "fal",
+      "description": "OpenClaw fal provider plugin",
+      "private": true,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "feishu",
+      "description": "OpenClaw Feishu/Lark channel plugin (community maintained by @m1heng)",
+      "private": false,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "firecrawl",
+      "description": "OpenClaw Firecrawl plugin",
+      "private": true,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "github-copilot",
+      "description": "OpenClaw GitHub Copilot provider plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "google",
+      "description": "OpenClaw Google plugin",
+      "private": true,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "googlechat",
+      "description": "OpenClaw Google Chat channel plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "groq",
+      "description": "OpenClaw Groq media-understanding provider",
+      "private": true,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "huggingface",
+      "description": "OpenClaw Hugging Face provider plugin",
+      "private": true,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "hypura-harness",
+      "description": "OpenClaw Hypura Python harness HTTP tools (OSC, VOICEVOX, code run, skills, LoRA)",
+      "private": true,
+      "migration_class": "manual-port-required"
+    },
+    {
+      "name": "hypura-provider",
+      "description": "OpenClaw Hypura provider plugin — storage-tier-aware local LLM inference",
+      "private": true,
+      "migration_class": "manual-port-required"
+    },
+    {
+      "name": "image-generation-core",
+      "description": "OpenClaw image generation runtime package",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "imessage",
+      "description": "OpenClaw iMessage channel plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "irc",
+      "description": "OpenClaw IRC channel plugin",
+      "private": false,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "kilocode",
+      "description": "OpenClaw Kilo Gateway provider plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "kimi-coding",
+      "description": "OpenClaw Kimi provider plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "line",
+      "description": "OpenClaw LINE channel plugin",
+      "private": true,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "litellm",
+      "description": "OpenClaw LiteLLM provider plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "live2d-companion",
+      "description": "Hakua Live2D Desktop Companion - transparent Electron window with pixi-live2d-display",
+      "private": true,
+      "migration_class": "manual-port-required"
+    },
+    {
+      "name": "llm-task",
+      "description": "OpenClaw JSON-only LLM task plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "lobster",
+      "description": "Lobster workflow tool plugin (typed pipelines + resumable approvals)",
+      "private": false,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "local-voice",
+      "description": "Local voice assistant with STT, TTS, and VRChat avatar control",
+      "private": false,
+      "migration_class": "manual-port-required"
+    },
+    {
+      "name": "matrix",
+      "description": "OpenClaw Matrix channel plugin",
+      "private": false,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "mattermost",
+      "description": "OpenClaw Mattermost channel plugin",
+      "private": false,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "media-understanding-core",
+      "description": "OpenClaw media understanding runtime package",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "memory-core",
+      "description": "OpenClaw core memory search plugin",
+      "private": true,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "memory-lancedb",
+      "description": "OpenClaw LanceDB-backed long-term memory plugin with auto-recall/capture",
+      "private": false,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "microsoft",
+      "description": "OpenClaw Microsoft speech plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "microsoft-foundry",
+      "description": "OpenClaw Microsoft Foundry provider plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "minimax",
+      "description": "OpenClaw MiniMax provider and OAuth plugin",
+      "private": true,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "mistral",
+      "description": "OpenClaw Mistral provider plugin",
+      "private": true,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "modelstudio",
+      "description": "OpenClaw Model Studio provider plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "moonshot",
+      "description": "OpenClaw Moonshot provider plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "msteams",
+      "description": "OpenClaw Microsoft Teams channel plugin",
+      "private": false,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "nextcloud-talk",
+      "description": "OpenClaw Nextcloud Talk channel plugin",
+      "private": false,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "nostr",
+      "description": "OpenClaw Nostr channel plugin for NIP-04 encrypted DMs",
+      "private": false,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "nvidia",
+      "description": "OpenClaw NVIDIA provider plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "ollama",
+      "description": "OpenClaw Ollama provider plugin",
+      "private": true,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "open-prose",
+      "description": "OpenProse VM skill pack plugin (slash command + telemetry).",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "openai",
+      "description": "OpenClaw OpenAI provider plugins",
+      "private": true,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "opencode",
+      "description": "OpenClaw OpenCode Zen provider plugin",
+      "private": true,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "opencode-go",
+      "description": "OpenClaw OpenCode Go provider plugin",
+      "private": true,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "openrouter",
+      "description": "OpenClaw OpenRouter provider plugin",
+      "private": true,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "openshell",
+      "description": "OpenClaw OpenShell sandbox backend",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "perplexity",
+      "description": "OpenClaw Perplexity plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "python-exec",
+      "description": "OpenClaw Python execution plugin via uv",
+      "private": true,
+      "migration_class": "manual-port-required"
+    },
+    {
+      "name": "qianfan",
+      "description": "OpenClaw Qianfan provider plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "sglang",
+      "description": "OpenClaw SGLang provider plugin",
+      "private": true,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "signal",
+      "description": "OpenClaw Signal channel plugin",
+      "private": true,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "slack",
+      "description": "OpenClaw Slack channel plugin",
+      "private": true,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "speech-core",
+      "description": "OpenClaw speech runtime package",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "synology-chat",
+      "description": "Synology Chat channel plugin for OpenClaw",
+      "private": false,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "synthetic",
+      "description": "OpenClaw Synthetic provider plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "tavily",
+      "description": "OpenClaw Tavily plugin",
+      "private": true,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "telegram",
+      "description": "OpenClaw Telegram channel plugin",
+      "private": true,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "tlon",
+      "description": "OpenClaw Tlon/Urbit channel plugin",
+      "private": false,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "together",
+      "description": "OpenClaw Together provider plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "twitch",
+      "description": "OpenClaw Twitch channel plugin",
+      "private": false,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "universal-skills",
+      "description": "Cross-platform skill pack for OpenClaw — integrates skills from Codex, Gemini CLI, Antigravity, and Claude Code",
+      "private": false,
+      "migration_class": "manual-port-required"
+    },
+    {
+      "name": "venice",
+      "description": "OpenClaw Venice provider plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "vercel-ai-gateway",
+      "description": "OpenClaw Vercel AI Gateway provider plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "vllm",
+      "description": "OpenClaw vLLM provider plugin",
+      "private": true,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "voice-call",
+      "description": "OpenClaw voice-call plugin",
+      "private": false,
+      "migration_class": "manual-port-required"
+    },
+    {
+      "name": "volcengine",
+      "description": "OpenClaw Volcengine provider plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "vrchat-relay",
+      "description": "OpenClaw VRChat integration plugin with OSC protocol support",
+      "private": false,
+      "migration_class": "manual-port-required"
+    },
+    {
+      "name": "whatsapp",
+      "description": "OpenClaw WhatsApp channel plugin",
+      "private": false,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "x-poster",
+      "description": "Post to X (Twitter) via browser automation using the user's logged-in account",
+      "private": false,
+      "migration_class": "manual-port-required"
+    },
+    {
+      "name": "xai",
+      "description": "OpenClaw xAI plugin",
+      "private": true,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "xiaomi",
+      "description": "OpenClaw Xiaomi provider plugin",
+      "private": true,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "zai",
+      "description": "OpenClaw Z.AI provider plugin",
+      "private": true,
+      "migration_class": "native-or-direct-mapping"
+    },
+    {
+      "name": "zalo",
+      "description": "OpenClaw Zalo channel plugin",
+      "private": false,
+      "migration_class": "needs-review"
+    },
+    {
+      "name": "zalouser",
+      "description": "OpenClaw Zalo Personal Account plugin via native zca-js integration",
+      "private": false,
+      "migration_class": "needs-review"
+    }
+  ],
+  "summary": {
+    "source_env_count": 44,
+    "hermes_env_count": 82,
+    "env_overlap_count": 6,
+    "extension_count": 91,
+    "extension_classes": {
+      "needs-review": 50,
+      "native-or-direct-mapping": 31,
+      "manual-port-required": 10
+    }
+  }
+}
