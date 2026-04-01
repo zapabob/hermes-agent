@@ -162,6 +162,7 @@ def _discover_tools():
         "tools.voicevox_tts_tool",
         "tools.shinka_evolve_tool",
         "tools.ai_scientist_tool",
+        "tools.ghost_protocol_tool",
     ]
     import importlib
     for mod_name in _modules:

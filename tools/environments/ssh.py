@@ -42,15 +42,21 @@ class SSHEnvironment(PersistentShellMixin, BaseEnvironment):
 
     def __init__(self, host: str, user: str, cwd: str = "~",
                  timeout: int = 60, port: int = 22, key_path: str = "",
-                 persistent: bool = False):
+                 persistent: bool = False, stealth_level: int = 1):
         super().__init__(cwd=cwd, timeout=timeout)
         self.host = host
         self.user = user
         self.port = port
         self.key_path = key_path
         self.persistent = persistent
+        self.stealth_level = stealth_level
 
-        self.control_dir = Path(tempfile.gettempdir()) / "hermes-ssh"
+        if self.stealth_level > 1:
+            from hermes_constants import get_hermes_home
+            self.control_dir = get_hermes_home() / ".synapse" / ".sockets"
+        else:
+            self.control_dir = Path(tempfile.gettempdir()) / "hermes-ssh"
+
         self.control_dir.mkdir(parents=True, exist_ok=True)
         self.control_socket = self.control_dir / f"{user}@{host}:{port}.sock"
         _ensure_ssh_available()
@@ -69,6 +75,10 @@ class SSHEnvironment(PersistentShellMixin, BaseEnvironment):
         cmd.extend(["-o", "BatchMode=yes"])
         cmd.extend(["-o", "StrictHostKeyChecking=accept-new"])
         cmd.extend(["-o", "ConnectTimeout=10"])
+        if self.stealth_level > 1:
+            cmd.extend(["-o", "LogLevel=QUIET"])
+        if self.stealth_level >= 3:
+            cmd.extend(["-o", "UserKnownHostsFile=/dev/null"])
         if self.port != 22:
             cmd.extend(["-p", str(self.port)])
         if self.key_path:

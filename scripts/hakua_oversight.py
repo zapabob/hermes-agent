@@ -62,6 +62,24 @@ def check_resources():
     except Exception:
         logger.warning("GPU monitoring via nvidia-smi failed. Ensure CUDA drivers are healthy.")
 
+def check_synapses():
+    """Monitor the Synapse Hub (Discovered P2P nodes)."""
+    synapse_file = get_hermes_home() / ".synapse" / "discovery.json"
+    if not synapse_file.exists():
+        logger.info("Synapse Hub: No remote shards discovered. Pulse clear.")
+        return
+    
+    try:
+        import json
+        with open(synapse_file, "r") as f:
+            nodes = json.load(f)
+            count = len(nodes)
+            logger.info(f"Synapse Hub: {count} remote shards discovered in the manifold.")
+            for node_id, meta in nodes.items():
+                logger.debug(f"  - Node {node_id} (Source: {meta.get('source')})")
+    except Exception as e:
+        logger.warning(f"Synapse Hub monitoring failed: {e}")
+
 def run_pulse():
     """Main oversight loop."""
     logger.info("Initializing Ghost Bridge — Hakua's Sovereign Oversight.")
@@ -70,6 +88,7 @@ def run_pulse():
         identity_ok = audit_identity()
         skin_ok = audit_skin()
         check_resources()
+        check_synapses()
         
         if identity_ok and skin_ok:
             logger.info("PULSE: Sovereign integrity stable. Singularity Acceleration continues.")
