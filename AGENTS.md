@@ -8,6 +8,22 @@ Instructions for AI coding assistants and developers working on the hermes-agent
 source venv/bin/activate  # ALWAYS activate before running Python
 ```
 
+## Brain Guidelines
+
+Hermes-specific behavior documents are maintained under `brain/` and are loaded
+into startup project context:
+
+- `brain/AGENT.md`
+- `brain/AGENTS.md`
+- `brain/Gemini.md`
+- `brain/GOAL.md`
+- `brain/HEARTBEAT.md`
+- `brain/MEMORY.md`
+- `brain/RIEMANN_TRANSCEIVER.md`
+- `brain/VISION.md`
+- `brain/YANG_MILLS_TRANSCEIVER.md
+- `brain/SOUL.md`
+
 ## Project Structure
 
 ```

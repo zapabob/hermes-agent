@@ -1,0 +1,68 @@
+{
+  "id": "vrchat-relay",
+  "name": "VRChat Relay",
+  "description": "VRChat integration with OSC protocol for avatar control, chatbox messaging, and input commands",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "osc": {
+        "type": "object",
+        "description": "OSC connection settings",
+        "properties": {
+          "outgoingPort": {
+            "type": "integer",
+            "description": "VRChat受信用送信ポート (sendPort, default: 9000). Chatbox/input をこのポートに送る。",
+            "default": 9000,
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "incomingPort": {
+            "type": "integer",
+            "description": "VRChat送信を受ける受信ポート (listenPort, default: 9001)。",
+            "default": 9001,
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "host": {
+            "type": "string",
+            "description": "VRChat host address (default: 127.0.0.1)",
+            "default": "127.0.0.1"
+          }
+        }
+      },
+      "security": {
+        "type": "object",
+        "description": "Security settings for VRChat controls",
+        "properties": {
+          "allowInputCommands": {
+            "type": "boolean",
+            "description": "Allow input commands (Jump, Move, Look) - requires PRO guard",
+            "default": false
+          }
+        }
+      },
+      "topology": {
+        "type": "object",
+        "description": "Control-plane mode and autostart policy",
+        "properties": {
+          "controlPlane": {
+            "type": "string",
+            "description": "relay-primary or mcp-primary (used to avoid duplicate OSC writers)",
+            "default": "relay-primary"
+          },
+          "autoStartOscListener": {
+            "type": "boolean",
+            "description": "Auto-start OSC listener on plugin registration",
+            "default": true
+          },
+          "autoStartGuardianPulse": {
+            "type": "boolean",
+            "description": "Auto-start guardian pulse loop on plugin registration",
+            "default": true
+          }
+        }
+      }
+    }
+  }
+}

@@ -368,7 +368,7 @@ def get_running_pid() -> Optional[int]:
 
     try:
         os.kill(pid, 0)  # signal 0 = existence check, no actual signal sent
-    except (ProcessLookupError, PermissionError):
+    except (ProcessLookupError, PermissionError, OSError):
         remove_pid_file()
         return None
 

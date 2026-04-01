@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \":*)",
+      "Bash(find /c/Users/downl/Desktop/hermes-agent-main/hermes-agent-main -path */.hermes/* -o -name config.yaml -o -name default_config.yaml)",
+      "Bash(dir C:UsersdownlDesktopclawdbot-main3clawdbot-main)",
+      "Bash(mkdir -p \"$USERPROFILE/.hermes/memories\")",
+      "Bash(cp \"C:\\\\Users\\\\downl\\\\Desktop\\\\clawdbot-main3\\\\clawdbot-main\\\\identity\\\\SOUL.md\" \"$USERPROFILE/.hermes/SOUL.md\")",
+      "Bash(cp \"C:\\\\Users\\\\downl\\\\Desktop\\\\clawdbot-main3\\\\clawdbot-main\\\\MEMORY.md\" \"$USERPROFILE/.hermes/memories/MEMORY.md\")",
+      "Read(//c/Users/downl/Desktop/hermes-agent-main/hermes-agent-main/$USERPROFILE/**)",
+      "Read(//c/Users/downl/Desktop/hermes-agent-main/hermes-agent-main/$USERPROFILE/.hermes/**)"
+    ]
+  }
+}

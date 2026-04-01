@@ -1,0 +1,24 @@
+{
+  "id": "hypura",
+  "providers": ["hypura"],
+  "providerAuthEnvVars": {
+    "hypura": ["HYPURA_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "hypura",
+      "method": "local",
+      "choiceId": "hypura",
+      "choiceLabel": "Hypura",
+      "choiceHint": "Storage-tier-aware local LLM inference (hypura serve)",
+      "groupId": "hypura",
+      "groupLabel": "Hypura",
+      "groupHint": "Local LLM via hypura serve (Ollama-compatible API)"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

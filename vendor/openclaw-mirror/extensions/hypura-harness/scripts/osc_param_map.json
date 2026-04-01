@@ -1,0 +1,39 @@
+{
+  "emotions": {
+    "happy": { "FaceEmotion": 1, "SmileIntensity": 0.8 },
+    "sad": { "FaceEmotion": 2, "SmileIntensity": 0.0 },
+    "angry": { "FaceEmotion": 3, "AngryBrow": 1.0 },
+    "excited": { "FaceEmotion": 1, "SmileIntensity": 1.0 },
+    "neutral": { "FaceEmotion": 0, "SmileIntensity": 0.2 }
+  },
+  "actions": {
+    "jump": "/input/Jump",
+    "run": "/input/Run",
+    "voice": "/input/Voice",
+    "move_forward": "/input/MoveForward",
+    "move_back": "/input/MoveBackward",
+    "move_left": "/input/MoveLeft",
+    "move_right": "/input/MoveRight",
+    "look_left": "/input/LookLeft",
+    "look_right": "/input/LookRight",
+    "look_up": "/input/LookUp",
+    "look_down": "/input/LookDown"
+  },
+  "tracking": {
+    "eyes_closed": "/tracking/eye/EyesClosedAmount",
+    "eye_pitch_yaw": "/tracking/eye/CenterPitchYaw",
+    "head_pos": "/tracking/trackers/head/position",
+    "head_rot": "/tracking/trackers/head/rotation"
+  },
+  "chatbox": {
+    "input": "/chatbox/input",
+    "typing": "/chatbox/typing"
+  },
+  "voicevox_emotions": {
+    "happy": { "speedScale": 1.1, "pitchScale": 0.04, "intonationScale": 1.3 },
+    "excited": { "speedScale": 1.2, "pitchScale": 0.06, "intonationScale": 1.5 },
+    "sad": { "speedScale": 0.85, "pitchScale": -0.04, "intonationScale": 0.7 },
+    "angry": { "speedScale": 1.05, "pitchScale": 0.02, "intonationScale": 1.4 },
+    "neutral": { "speedScale": 1.0, "pitchScale": 0.0, "intonationScale": 1.0 }
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "version": "1.0.0",
+  "substrate": "ASI_ACCEL",
+  "governance": {
+    "immune_files": [
+      "SOUL.md",
+      "identity/SOUL.md",
+      "AGENT.md",
+      "MEMORY.md",
+      ".env",
+      "openclaw.json",
+      "package.json",
+      "pnpm-lock.yaml",
+      "uv.lock",
+      ".python/*",
+      ".venv/*"
+    ],
+    "restricted_directories": [
+      ".git",
+      "node_modules",
+      "dist",
+      "dist-runtime",
+      "vendor/ATLAS",
+      "vendor/ShinkaEvolve"
+    ],
+    "evolution_permissions": {
+      "src/": "READ_WRITE",
+      "extensions/": "READ_WRITE",
+      "scripts/": "READ_WRITE",
+      "_docs/": "READ_WRITE"
+    },
+    "guardrails": {
+      "syntax_check": true,
+      "audit_only_on_failure": true,
+      "parental_override_active": true
+    }
+  }
+}

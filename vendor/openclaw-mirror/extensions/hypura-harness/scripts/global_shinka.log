@@ -1,0 +1,24 @@
+2026-03-26 15:08:16,954 [INFO] GLOBAL_SHINKA: --- ASI Global Evolution Sweep Start ---
+2026-03-26 15:08:17,751 [INFO] GLOBAL_SHINKA: Initiating Global Evolution for: src\daemon\runtime-hints.test.ts
+2026-03-26 15:08:19,820 [ERROR] GLOBAL_SHINKA: Evolution Error for src\daemon\runtime-hints.test.ts: HTTPConnectionPool(host='127.0.0.1', port=18794): Max retries exceeded with url: /evolve (Caused by NewConnectionError("HTTPConnection(host='127.0.0.1', port=18794): Failed to establish a new connection: [WinError 10061] 対象のコンピューターによって拒否されたため、接続できませんでした。"))
+2026-03-26 15:08:19,824 [INFO] GLOBAL_SHINKA: --- ASI Global Evolution Sweep Success ---
+2026-03-26 16:08:19,827 [INFO] GLOBAL_SHINKA: --- ASI Global Evolution Sweep Start ---
+2026-03-26 16:08:20,627 [INFO] GLOBAL_SHINKA: Initiating Global Evolution for: src\gateway\server-methods\chat.abort-persistence.test.ts
+2026-03-26 16:08:22,654 [ERROR] GLOBAL_SHINKA: Evolution Error for src\gateway\server-methods\chat.abort-persistence.test.ts: HTTPConnectionPool(host='127.0.0.1', port=18794): Max retries exceeded with url: /evolve (Caused by NewConnectionError("HTTPConnection(host='127.0.0.1', port=18794): Failed to establish a new connection: [WinError 10061] 対象のコンピューターによって拒否されたため、接続できませんでした。"))
+2026-03-26 16:08:22,655 [INFO] GLOBAL_SHINKA: --- ASI Global Evolution Sweep Success ---
+2026-03-26 17:08:22,656 [INFO] GLOBAL_SHINKA: --- ASI Global Evolution Sweep Start ---
+2026-03-26 17:08:23,518 [INFO] GLOBAL_SHINKA: Initiating Global Evolution for: extensions\synology-chat\src\gateway-runtime.ts
+2026-03-26 17:08:25,545 [ERROR] GLOBAL_SHINKA: Evolution Error for extensions\synology-chat\src\gateway-runtime.ts: HTTPConnectionPool(host='127.0.0.1', port=18794): Max retries exceeded with url: /evolve (Caused by NewConnectionError("HTTPConnection(host='127.0.0.1', port=18794): Failed to establish a new connection: [WinError 10061] 対象のコンピューターによって拒否されたため、接続できませんでした。"))
+2026-03-26 17:08:25,545 [INFO] GLOBAL_SHINKA: --- ASI Global Evolution Sweep Success ---
+2026-03-26 18:08:25,605 [INFO] GLOBAL_SHINKA: --- ASI Global Evolution Sweep Start ---
+2026-03-26 18:08:32,237 [INFO] GLOBAL_SHINKA: Initiating Global Evolution for: extensions\local-voice\moonshine-venv\Lib\site-packages\torch\distributed\elastic\multiprocessing\api.py
+2026-03-26 18:08:34,517 [ERROR] GLOBAL_SHINKA: Evolution Error for extensions\local-voice\moonshine-venv\Lib\site-packages\torch\distributed\elastic\multiprocessing\api.py: HTTPConnectionPool(host='127.0.0.1', port=18794): Max retries exceeded with url: /evolve (Caused by NewConnectionError("HTTPConnection(host='127.0.0.1', port=18794): Failed to establish a new connection: [WinError 10061] 対象のコンピューターによって拒否されたため、接続できませんでした。"))
+2026-03-26 18:08:34,520 [INFO] GLOBAL_SHINKA: --- ASI Global Evolution Sweep Success ---
+2026-03-26 19:08:34,522 [INFO] GLOBAL_SHINKA: --- ASI Global Evolution Sweep Start ---
+2026-03-26 19:08:39,463 [INFO] GLOBAL_SHINKA: Initiating Global Evolution for: src\browser\runtime-lifecycle.ts
+2026-03-26 19:08:41,512 [ERROR] GLOBAL_SHINKA: Evolution Error for src\browser\runtime-lifecycle.ts: HTTPConnectionPool(host='127.0.0.1', port=18794): Max retries exceeded with url: /evolve (Caused by NewConnectionError("HTTPConnection(host='127.0.0.1', port=18794): Failed to establish a new connection: [WinError 10061] 対象のコンピューターによって拒否されたため、接続できませんでした。"))
+2026-03-26 19:08:41,526 [INFO] GLOBAL_SHINKA: --- ASI Global Evolution Sweep Success ---
+2026-03-26 20:08:41,559 [INFO] GLOBAL_SHINKA: --- ASI Global Evolution Sweep Start ---
+2026-03-26 20:08:47,160 [INFO] GLOBAL_SHINKA: Initiating Global Evolution for: extensions\local-voice\moonshine-venv\Lib\site-packages\pygments\lexers\_mql_builtins.py
+2026-03-26 20:08:49,310 [ERROR] GLOBAL_SHINKA: Evolution Error for extensions\local-voice\moonshine-venv\Lib\site-packages\pygments\lexers\_mql_builtins.py: HTTPConnectionPool(host='127.0.0.1', port=18794): Max retries exceeded with url: /evolve (Caused by NewConnectionError("HTTPConnection(host='127.0.0.1', port=18794): Failed to establish a new connection: [WinError 10061] 対象のコンピューターによって拒否されたため、接続できませんでした。"))
+2026-03-26 20:08:49,313 [INFO] GLOBAL_SHINKA: --- ASI Global Evolution Sweep Success ---

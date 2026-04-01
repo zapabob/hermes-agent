@@ -1,0 +1,10 @@
+﻿timestamp=20260331_235901
+source=C:\Users\downl\Desktop\clawdbot-main3\clawdbot-main\.openclaw-desktop
+target=C:\Users\downl\.hermes
+workspace_target=C:\Users\downl\Desktop\hermes-agent-main\hermes-agent-main
+overwrite=false
+skill_conflict=rename
+backup_root=C:\Users\downl\Desktop\hermes-agent-main\hermes-agent-main\_docs\migration_backups\20260331_235901
+hermes_backup=not_present_source_missing
+workspace_agents_backup=created
+restore_steps=1) stop hermes process 2) remove C:\Users\downl\.hermes if recreated 3) copy backup .hermes_backup back to C:\Users\downl\.hermes 4) restore AGENTS.md.bak to workspace AGENTS.md

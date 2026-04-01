@@ -1,0 +1,26 @@
+{
+  "name": "@openclaw/hypura-harness",
+  "version": "2026.3.28",
+  "private": true,
+  "description": "OpenClaw Hypura Python harness HTTP tools (OSC, VOICEVOX, code run, skills, LoRA)",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.28"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

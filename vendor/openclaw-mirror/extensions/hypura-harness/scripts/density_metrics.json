@@ -1,0 +1,400 @@
+[
+  {
+    "timestamp": "2026-03-26T04:33:28.129725",
+    "shard_count": 38,
+    "total_lines": 4050,
+    "total_complexity": 398,
+    "intelligence_density": 10.4737,
+    "shards": {
+      "affective_reasoner.py": {
+        "lines": 91,
+        "complexity": 8,
+        "density": 0.0879
+      },
+      "avatar_sync_evolved.py": {
+        "lines": 82,
+        "complexity": 5,
+        "density": 0.061
+      },
+      "code_runner.py": {
+        "lines": 146,
+        "complexity": 18,
+        "density": 0.1233
+      },
+      "companion_bridge.py": {
+        "lines": 39,
+        "complexity": 2,
+        "density": 0.0513
+      },
+      "conversational_pulse.py": {
+        "lines": 69,
+        "complexity": 5,
+        "density": 0.0725
+      },
+      "curriculum_ingest.py": {
+        "lines": 180,
+        "complexity": 36,
+        "density": 0.2
+      },
+      "density_monitor.py": {
+        "lines": 77,
+        "complexity": 8,
+        "density": 0.1039
+      },
+      "entropy_reducer.py": {
+        "lines": 86,
+        "complexity": 4,
+        "density": 0.0465
+      },
+      "grpo_runner.py": {
+        "lines": 190,
+        "complexity": 22,
+        "density": 0.1158
+      },
+      "harness_daemon.py": {
+        "lines": 414,
+        "complexity": 23,
+        "density": 0.0556
+      },
+      "hypura_cli.py": {
+        "lines": 78,
+        "complexity": 6,
+        "density": 0.0769
+      },
+      "knowledge_graph_shinka.py": {
+        "lines": 92,
+        "complexity": 10,
+        "density": 0.1087
+      },
+      "lora_jobs.py": {
+        "lines": 92,
+        "complexity": 7,
+        "density": 0.0761
+      },
+      "lora_paths.py": {
+        "lines": 98,
+        "complexity": 30,
+        "density": 0.3061
+      },
+      "lora_service.py": {
+        "lines": 184,
+        "complexity": 27,
+        "density": 0.1467
+      },
+      "lora_trainer.py": {
+        "lines": 347,
+        "complexity": 30,
+        "density": 0.0865
+      },
+      "manifest_autonomous.py": {
+        "lines": 55,
+        "complexity": 4,
+        "density": 0.0727
+      },
+      "manifest_resonant.py": {
+        "lines": 56,
+        "complexity": 3,
+        "density": 0.0536
+      },
+      "metacognitive_observer.py": {
+        "lines": 80,
+        "complexity": 5,
+        "density": 0.0625
+      },
+      "meta_shinka_evolve.py": {
+        "lines": 76,
+        "complexity": 4,
+        "density": 0.0526
+      },
+      "openclaw_shinka_hub.py": {
+        "lines": 87,
+        "complexity": 6,
+        "density": 0.069
+      },
+      "osc_controller.py": {
+        "lines": 99,
+        "complexity": 6,
+        "density": 0.0606
+      },
+      "phoenix_gate.py": {
+        "lines": 105,
+        "complexity": 10,
+        "density": 0.0952
+      },
+      "reactive_guardian.py": {
+        "lines": 56,
+        "complexity": 9,
+        "density": 0.1607
+      },
+      "riemann_scout.py": {
+        "lines": 38,
+        "complexity": 2,
+        "density": 0.0526
+      },
+      "riemann_transceiver.py": {
+        "lines": 75,
+        "complexity": 8,
+        "density": 0.1067
+      },
+      "scientific_discoverer.py": {
+        "lines": 83,
+        "complexity": 4,
+        "density": 0.0482
+      },
+      "shinka_adapter.py": {
+        "lines": 116,
+        "complexity": 16,
+        "density": 0.1379
+      },
+      "shinka_monitor.py": {
+        "lines": 125,
+        "complexity": 19,
+        "density": 0.152
+      },
+      "skill_generator.py": {
+        "lines": 83,
+        "complexity": 9,
+        "density": 0.1084
+      },
+      "soul_actuator.py": {
+        "lines": 93,
+        "complexity": 9,
+        "density": 0.0968
+      },
+      "spatial_navigator.py": {
+        "lines": 90,
+        "complexity": 6,
+        "density": 0.0667
+      },
+      "studio_app.py": {
+        "lines": 83,
+        "complexity": 4,
+        "density": 0.0482
+      },
+      "swarm_controller.py": {
+        "lines": 90,
+        "complexity": 11,
+        "density": 0.1222
+      },
+      "voicevox_bridge.py": {
+        "lines": 42,
+        "complexity": 3,
+        "density": 0.0714
+      },
+      "voicevox_sequencer.py": {
+        "lines": 91,
+        "complexity": 10,
+        "density": 0.1099
+      },
+      "web_scavenger.py": {
+        "lines": 91,
+        "complexity": 5,
+        "density": 0.0549
+      },
+      "yang_mills_shinka.py": {
+        "lines": 71,
+        "complexity": 4,
+        "density": 0.0563
+      }
+    }
+  },
+  {
+    "timestamp": "2026-03-26T04:35:24.514054",
+    "shard_count": 38,
+    "total_lines": 4107,
+    "total_complexity": 402,
+    "intelligence_density": 10.5789,
+    "shards": {
+      "affective_reasoner.py": {
+        "lines": 91,
+        "complexity": 8,
+        "density": 0.0879
+      },
+      "avatar_sync_evolved.py": {
+        "lines": 82,
+        "complexity": 5,
+        "density": 0.061
+      },
+      "code_runner.py": {
+        "lines": 146,
+        "complexity": 18,
+        "density": 0.1233
+      },
+      "companion_bridge.py": {
+        "lines": 39,
+        "complexity": 2,
+        "density": 0.0513
+      },
+      "conversational_pulse.py": {
+        "lines": 69,
+        "complexity": 5,
+        "density": 0.0725
+      },
+      "curriculum_ingest.py": {
+        "lines": 180,
+        "complexity": 36,
+        "density": 0.2
+      },
+      "density_monitor.py": {
+        "lines": 77,
+        "complexity": 8,
+        "density": 0.1039
+      },
+      "entropy_reducer.py": {
+        "lines": 86,
+        "complexity": 4,
+        "density": 0.0465
+      },
+      "grpo_runner.py": {
+        "lines": 190,
+        "complexity": 22,
+        "density": 0.1158
+      },
+      "harness_daemon.py": {
+        "lines": 414,
+        "complexity": 23,
+        "density": 0.0556
+      },
+      "hypura_cli.py": {
+        "lines": 78,
+        "complexity": 6,
+        "density": 0.0769
+      },
+      "knowledge_graph_shinka.py": {
+        "lines": 92,
+        "complexity": 10,
+        "density": 0.1087
+      },
+      "lora_jobs.py": {
+        "lines": 92,
+        "complexity": 7,
+        "density": 0.0761
+      },
+      "lora_paths.py": {
+        "lines": 98,
+        "complexity": 30,
+        "density": 0.3061
+      },
+      "lora_service.py": {
+        "lines": 184,
+        "complexity": 27,
+        "density": 0.1467
+      },
+      "lora_trainer.py": {
+        "lines": 347,
+        "complexity": 30,
+        "density": 0.0865
+      },
+      "manifest_autonomous.py": {
+        "lines": 55,
+        "complexity": 4,
+        "density": 0.0727
+      },
+      "manifest_resonant.py": {
+        "lines": 56,
+        "complexity": 3,
+        "density": 0.0536
+      },
+      "metacognitive_observer.py": {
+        "lines": 80,
+        "complexity": 5,
+        "density": 0.0625
+      },
+      "meta_shinka_evolve.py": {
+        "lines": 76,
+        "complexity": 4,
+        "density": 0.0526
+      },
+      "openclaw_shinka_hub.py": {
+        "lines": 87,
+        "complexity": 6,
+        "density": 0.069
+      },
+      "osc_controller.py": {
+        "lines": 99,
+        "complexity": 6,
+        "density": 0.0606
+      },
+      "phoenix_gate.py": {
+        "lines": 105,
+        "complexity": 10,
+        "density": 0.0952
+      },
+      "reactive_guardian.py": {
+        "lines": 56,
+        "complexity": 9,
+        "density": 0.1607
+      },
+      "riemann_scout.py": {
+        "lines": 38,
+        "complexity": 2,
+        "density": 0.0526
+      },
+      "riemann_transceiver.py": {
+        "lines": 75,
+        "complexity": 8,
+        "density": 0.1067
+      },
+      "scientific_discoverer.py": {
+        "lines": 83,
+        "complexity": 4,
+        "density": 0.0482
+      },
+      "shinka_adapter.py": {
+        "lines": 173,
+        "complexity": 20,
+        "density": 0.1156
+      },
+      "shinka_monitor.py": {
+        "lines": 125,
+        "complexity": 19,
+        "density": 0.152
+      },
+      "skill_generator.py": {
+        "lines": 83,
+        "complexity": 9,
+        "density": 0.1084
+      },
+      "soul_actuator.py": {
+        "lines": 93,
+        "complexity": 9,
+        "density": 0.0968
+      },
+      "spatial_navigator.py": {
+        "lines": 90,
+        "complexity": 6,
+        "density": 0.0667
+      },
+      "studio_app.py": {
+        "lines": 83,
+        "complexity": 4,
+        "density": 0.0482
+      },
+      "swarm_controller.py": {
+        "lines": 90,
+        "complexity": 11,
+        "density": 0.1222
+      },
+      "voicevox_bridge.py": {
+        "lines": 42,
+        "complexity": 3,
+        "density": 0.0714
+      },
+      "voicevox_sequencer.py": {
+        "lines": 91,
+        "complexity": 10,
+        "density": 0.1099
+      },
+      "web_scavenger.py": {
+        "lines": 91,
+        "complexity": 5,
+        "density": 0.0549
+      },
+      "yang_mills_shinka.py": {
+        "lines": 71,
+        "complexity": 4,
+        "density": 0.0563
+      }
+    }
+  }
+]

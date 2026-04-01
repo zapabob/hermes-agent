@@ -1,0 +1,6 @@
+2026-03-25 21:45:47,403 [INFO] SHINKA_MONITOR: --- ASI Substrate Audit Start ---
+2026-03-25 21:45:49,438 [ERROR] SHINKA_MONITOR: Harness Daemon: UNREACHABLE (HTTPConnectionPool(host='127.0.0.1', port=18794): Max retries exceeded with url: /status (Caused by NewConnectionError("HTTPConnection(host='127.0.0.1', port=18794): Failed to establish a new connection: [WinError 10061] 対象のコンピューターによって拒否されたため、接続できませんでした。")))
+2026-03-25 21:45:49,444 [INFO] SHINKA_MONITOR: Initiating Recovery for harness_daemon...
+2026-03-26 13:42:56,208 [INFO] SHINKA_MONITOR: --- ASI Substrate Audit Start ---
+2026-03-26 13:42:58,250 [ERROR] SHINKA_MONITOR: Harness Daemon: UNREACHABLE (HTTPConnectionPool(host='127.0.0.1', port=18794): Max retries exceeded with url: /status (Caused by NewConnectionError("HTTPConnection(host='127.0.0.1', port=18794): Failed to establish a new connection: [WinError 10061] 対象のコンピューターによって拒否されたため、接続できませんでした。")))
+2026-03-26 13:42:58,255 [INFO] SHINKA_MONITOR: Initiating Recovery for harness_daemon...

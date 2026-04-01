@@ -3709,6 +3709,8 @@ class HermesCLI:
             self._handle_profile_command()
         elif canonical == "tools":
             self._handle_tools_command(cmd_original)
+        elif canonical == "evolve":
+            self._handle_evolve_command(cmd_original)
         elif canonical == "toolsets":
             self.show_toolsets()
         elif canonical == "config":
@@ -4031,6 +4033,45 @@ class HermesCLI:
         
         return True
     
+    def _handle_evolve_command(self, cmd: str):
+        """Handle the /evolve (growth pulse) command."""
+        from agent.display import write_tty
+        from model_tools import handle_function_call
+
+        parts = cmd.split()
+        task_dir = parts[1] if len(parts) > 1 else "templates/hermes_self_evolve"
+        generations = int(parts[2]) if len(parts) > 2 else 5
+
+        write_tty("\n  \033[1;35m🧬 Initiating Growth Pulse (Autonomous Self-Evolution)...\033[0m\n")
+        write_tty(f"  Target: {task_dir}\n")
+        write_tty(f"  Generations: {generations}\n")
+        write_tty("  Compute: RTX 3060 (Active)\n\n")
+
+        # Set task defaults based on naming
+        tool_name = "shinka_run" if "template" not in task_dir else "ai_scientist_research"
+        args = {"task_dir": task_dir, "num_generations": generations, "use_gpu": True}
+        if "template" in task_dir:
+            exp_name = task_dir.split("/")[-1]
+            args = {"experiment": exp_name, "num_ideas": 2, "use_gpu": True}
+            tool_name = "ai_scientist_research"
+
+        write_tty(f"  \033[2mDispatching substrate request to {tool_name}...\033[0m\n")
+        
+        try:
+            result_json = handle_function_call(tool_name, args, task_id=self.session_id)
+            result = json.loads(result_json)
+            
+            if result.get("success"):
+                write_tty("\n  \033[32m✓ Growth Pulse Completed Successfully!\033[0m\n")
+                write_tty(f"  Results saved to: {result.get('results_dir')}\n")
+                write_tty("  \033[2mAudit and patching will be performed automatically upon user request.\033[0m\n")
+            else:
+                write_tty(f"\n  \033[31m✗ Growth Pulse Failed: {result.get('error', 'Unknown error')}\033[0m\n")
+                if "stderr_tail" in result:
+                    write_tty(f"  \033[2m{result['stderr_tail']}\033[0m\n")
+        except Exception as e:
+            write_tty(f"\n  \033[31m✗ Dispatch Error: {e}\033[0m\n")
+
     def _handle_plan_command(self, cmd: str):
         """Handle /plan [request] — load the bundled plan skill."""
         parts = cmd.strip().split(maxsplit=1)
@@ -7437,14 +7478,25 @@ class HermesCLI:
                 if not self._app:
                     _time.sleep(0.1)
                     continue
-                if self._command_running:
+                # Keep status-bar clock and context meter fresh.  Use the same
+                # cadence as slash-command busy state while the agent runs —
+                # chat() also invalidates from its interrupt loop, but this
+                # covers edge cases.  Idle repaint must NOT go through
+                # _invalidate(min_interval=1.0): that shares _last_invalidate with
+                # all other repaints (cursor blink, stream flush, etc.), so the
+                # throttle often blocks the 1s tick and the duration appears
+                # frozen (e.g. stuck at "32s").
+                agent_busy = getattr(self, "_agent_running", False)
+                if self._command_running or agent_busy:
                     self._invalidate(min_interval=0.1)
                     _time.sleep(0.1)
                 else:
                     now = _time.monotonic()
                     if now - last_idle_refresh >= 1.0:
                         last_idle_refresh = now
-                        self._invalidate(min_interval=1.0)
+                        if hasattr(self, "_app") and self._app:
+                            self._app.invalidate()
+                            self._last_invalidate = now
                     _time.sleep(0.2)
 
         spinner_thread = threading.Thread(target=spinner_loop, daemon=True)

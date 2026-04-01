@@ -1,0 +1,57 @@
+{
+  "_comment": "ATLAS Docker 統合設定。harness.config.json (Ollama/ローカル向け) とは別管理。",
+
+  "daemon_port": 18794,
+
+  "models": {
+    "primary": "local/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q8_0.gguf@http://llama-service:8000/v1",
+    "sub": "local/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q8_0.gguf@http://llama-service:8000/v1",
+    "ollama_base_url": "http://llama-service:8000/v1",
+    "ollama_model": "qwen-Hakua-core2",
+    "_note": "llama-service は qwen-Hakua-core2 と同一ベースモデルを使用"
+  },
+
+  "lora": {
+    "artifacts_dir": "/artifacts/lora",
+    "base_model_dir": "/models/hf/Qwen3.5-9B",
+
+    "_tinylora_note": "TinyLoRA (arXiv:2602.04118): 13 trainable params で RTX 3060 対応",
+    "tinylora": {
+      "enabled": true,
+      "r": 2,
+      "u": 1,
+      "tying": "tile",
+      "use_qlora_base": true,
+      "learning_rate": 0.001,
+      "grpo_group_size": 4,
+      "n_epochs": 1,
+      "_vram_note": "QLoRA 4-bit base ~5.6 GB + TinyLoRA overhead ~0.1 GB = ~5.7 GB total"
+    },
+
+    "sft": {
+      "_note": "USE_TINY_LORA=false の場合のフォールバック設定",
+      "num_train_epochs": 1,
+      "per_device_train_batch_size": 1,
+      "gradient_accumulation_steps": 8,
+      "learning_rate": 0.0002,
+      "max_seq_length": 2048,
+      "lora_r": 8,
+      "lora_alpha": 16,
+      "lora_dropout": 0.05,
+      "use_qlora": true,
+      "allow_cpu": false,
+      "bf16": true
+    }
+  },
+
+  "shinka": {
+    "redis_url": "redis://redis:6379",
+    "max_generations": 5,
+    "population_size": 3
+  },
+
+  "governance": {
+    "allow_auto_code_mutation": false,
+    "allow_global_shinka_engine": false
+  }
+}

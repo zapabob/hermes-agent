@@ -160,6 +160,8 @@ def _discover_tools():
         "tools.homeassistant_tool",
         "tools.vrchat_osc_tool",
         "tools.voicevox_tts_tool",
+        "tools.shinka_evolve_tool",
+        "tools.ai_scientist_tool",
     ]
     import importlib
     for mod_name in _modules:

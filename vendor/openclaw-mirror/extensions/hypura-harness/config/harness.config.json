@@ -1,0 +1,18 @@
+{
+  "daemon_port": 18794,
+  "osc_host": "127.0.0.1",
+  "osc_port": 9000,
+  "osc_receive_port": 9001,
+  "voicevox_url": "http://127.0.0.1:50021",
+  "companion_url": "http://127.0.0.1:18791",
+  "models": {
+    "ollama_base_url": "http://127.0.0.1:11434",
+    "ollama_model": "qwen-Hakua-core2"
+  },
+  "lora": {
+    "artifacts_dir": "artifacts/lora"
+  },
+  "shinka": {
+    "redis_url": "redis://127.0.0.1:6379"
+  }
+}

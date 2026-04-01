@@ -1,0 +1,15 @@
+{
+  "id": "hypura-harness",
+  "name": "Hypura Harness",
+  "description": "HTTP tools for the Hypura Python harness daemon (VRChat OSC, VOICEVOX, code execution, skill generation, Shinka evolve, LoRA jobs).",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "description": "Hypura harness base URL (must match scripts/hypura/harness.config.json daemon_port; default http://127.0.0.1:18794)"
+      }
+    }
+  }
+}

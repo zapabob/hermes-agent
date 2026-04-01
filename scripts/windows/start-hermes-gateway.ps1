@@ -29,11 +29,13 @@ $HermesHome = if ($env:HERMES_HOME -and $env:HERMES_HOME.Trim()) {
 $LogDir = Join-Path $HermesHome "logs"
 New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
 
-$StdoutLog = Join-Path $LogDir "gateway-autostart.log"
-$StderrLog = Join-Path $LogDir "gateway-autostart-error.log"
-
 # Avoid duplicate launches.
-$isRunning = & py -3 -c "from gateway.status import is_gateway_running; print('1' if is_gateway_running() else '0')" 2>$null
+$isRunning = "0"
+try {
+    $isRunning = & py -3 -c "from gateway.status import is_gateway_running; print('1' if is_gateway_running() else '0')" 2>$null
+} catch {
+    $isRunning = "0"
+}
 if ($isRunning -eq "1") {
     exit 0
 }
@@ -43,9 +45,7 @@ if ($DelaySeconds -gt 0) {
 }
 
 Start-Process `
-    -FilePath "py" `
-    -ArgumentList "-3", "-m", "hermes_cli.main", "gateway", "run" `
+    -FilePath "cmd.exe" `
+    -ArgumentList "/c", "set PYTHONIOENCODING=utf-8&& set PYTHONUTF8=1&& py -3 -m hermes_cli.main gateway run" `
     -WorkingDirectory $RepoRoot `
-    -WindowStyle $WindowStyle `
-    -RedirectStandardOutput $StdoutLog `
-    -RedirectStandardError $StderrLog
+    -WindowStyle $WindowStyle

@@ -119,6 +119,8 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("browser", "Connect browser tools to your live Chrome via CDP", "Tools & Skills",
                cli_only=True, args_hint="[connect|disconnect|status]",
                subcommands=("connect", "disconnect", "status")),
+    CommandDef("evolve", "Trigger a Growth Pulse for self-evolution and code optimization", "Tools & Skills",
+               aliases=("growth-pulse",), args_hint="[task_dir] [generations]"),
     CommandDef("plugins", "List installed plugins and their status",
                "Tools & Skills", cli_only=True),
 

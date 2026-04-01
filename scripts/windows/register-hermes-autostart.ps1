@@ -1,11 +1,11 @@
 param(
-    [string]$TaskName = "HermesAgentGatewayAutoStart"
+    [string]$TaskName = "HermesAgentStackAutoStart"
 )
 
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$StartScript = Resolve-Path (Join-Path $ScriptDir "start-hermes-gateway.ps1")
+$StartScript = Resolve-Path (Join-Path $ScriptDir "start-hermes-stack.ps1")
 
 $actionArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$StartScript`""
 $registered = $false
@@ -17,7 +17,7 @@ try {
         -TaskName $TaskName `
         -Action $action `
         -Trigger $trigger `
-        -Description "Auto start Hermes gateway at logon" `
+        -Description "Auto start Hermes stack at logon" `
         -Force | Out-Null
     $registered = $true
 } catch {
@@ -33,7 +33,7 @@ if ($registered) {
 # Fallback: Startup folder launcher.
 $startupDir = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup"
 New-Item -ItemType Directory -Path $startupDir -Force | Out-Null
-$startupCmd = Join-Path $startupDir "HermesAgentGatewayAutoStart.cmd"
+$startupCmd = Join-Path $startupDir "HermesAgentStackAutoStart.cmd"
 @(
     "@echo off"
     "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$StartScript`""
