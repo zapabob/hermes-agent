@@ -58,3 +58,5 @@ mini-swe-agent/
 # Nix
 .direnv/
 result
+vendor/openclaw-mirror/AI-Scientist
+vendor/openclaw-mirror/ShinkaEvolve
