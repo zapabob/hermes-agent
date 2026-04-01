@@ -158,10 +158,7 @@ def _discover_tools():
         "tools.send_message_tool",
         "tools.honcho_tools",
         "tools.homeassistant_tool",
-        "tools.vrchat_osc_tool",
-        "tools.voicevox_tts_tool",
-        "tools.shinka_evolve_tool",
-        "tools.ai_scientist_tool",
+        "tools.harness_tools",
         "tools.ghost_protocol_tool",
     ]
     import importlib

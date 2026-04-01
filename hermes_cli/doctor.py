@@ -510,6 +510,21 @@ def run_doctor(args):
                 pass
 
     # =========================================================================
+    # Check: Hypura Harness
+    # =========================================================================
+    print()
+    print(color("◆ Hypura Harness", Colors.CYAN, Colors.BOLD))
+    try:
+        from hermes_cli.harness import is_harness_running, get_harness_url
+        url = get_harness_url()
+        if is_harness_running():
+            check_ok("Harness reachable", f"({url})")
+        else:
+            check_warn("Harness unreachable", f"({url} — run 'hermes harness start')")
+    except Exception as e:
+        check_warn("Harness check failed", f"({e})")
+
+    # =========================================================================
     # Check: API connectivity
     # =========================================================================
     print()

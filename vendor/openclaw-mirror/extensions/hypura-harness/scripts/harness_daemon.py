@@ -88,6 +88,12 @@ web_scavenger: WebScavenger = WebScavenger()
 knowledge_graph: KnowledgeGraphShinka = KnowledgeGraphShinka()
 
 
+@app.get("/status")
+async def get_status() -> dict:
+    """Check if the harness is reachable."""
+    return {"status": "online", "version": "0.1.0"}
+
+
 class OscRequest(BaseModel):
     action: str
     payload: dict[str, Any] = {}

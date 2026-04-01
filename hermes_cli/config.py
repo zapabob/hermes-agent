@@ -503,8 +503,16 @@ DEFAULT_CONFIG = {
         "wrap_response": True,
     },
 
+    # Hypura Harness — central actuator for Hakua (OSC, VOICEVOX, Evolution)
+    "harness": {
+        "enabled": True,
+        "auto_start": True,
+        "host": "127.0.0.1",
+        "port": 18794,
+    },
+
     # Config schema version - bump this when adding new required fields
-    "_config_version": 11,
+    "_config_version": 12,
 }
 
 # =============================================================================
@@ -519,6 +527,7 @@ ENV_VARS_BY_VERSION: Dict[int, List[str]] = {
     5: ["WHATSAPP_ENABLED", "WHATSAPP_MODE", "WHATSAPP_ALLOWED_USERS",
         "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_ALLOWED_USERS"],
     10: ["TAVILY_API_KEY"],
+    12: ["HYPURA_HARNESS_PORT", "HYPURA_HARNESS_HOST"],
 }
 
 # Required environment variables with metadata for migration prompts.
@@ -529,6 +538,22 @@ REQUIRED_ENV_VARS = {}
 
 # Optional environment variables that enhance functionality
 OPTIONAL_ENV_VARS = {
+    "HYPURA_HARNESS_PORT": {
+        "description": "Port for the Hypura Harness daemon (default: 18794)",
+        "prompt": "Harness Port",
+        "url": None,
+        "password": False,
+        "category": "setting",
+        "advanced": True,
+    },
+    "HYPURA_HARNESS_HOST": {
+        "description": "Host for the Hypura Harness daemon (default: 127.0.0.1)",
+        "prompt": "Harness Host",
+        "url": None,
+        "password": False,
+        "category": "setting",
+        "advanced": True,
+    },
     # ── Provider (handled in provider selection, not shown in checklists) ──
     "NOUS_BASE_URL": {
         "description": "Nous Portal base URL override",

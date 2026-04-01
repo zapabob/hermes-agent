@@ -64,6 +64,7 @@ from agent.usage_pricing import (
     format_token_count_compact,
 )
 from hermes_cli.banner import _format_context_length
+from hermes_cli.harness import ensure_harness_running
 
 _COMMAND_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
@@ -1148,6 +1149,8 @@ class HermesCLI:
         else:
             self.max_turns = 90
         
+        # Auto-start Hypura Harness if enabled
+        ensure_harness_running()
         # Parse and validate toolsets
         self.enabled_toolsets = toolsets
         if toolsets and "all" not in toolsets and "*" not in toolsets:
