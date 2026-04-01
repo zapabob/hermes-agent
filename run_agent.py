@@ -2555,6 +2555,12 @@ class AIAgent:
         if not self.skip_context_files:
             _soul_content = load_soul_md()
             if _soul_content:
+                # Force 'Hakua' identity if SOUL.md contains her name, 
+                # ensuring she is the master of the agent.
+                _is_hakua = "はくあ" in _soul_content or "Hakua" in _soul_content
+                if _is_hakua:
+                    logger.info("Sovereign Identity 'Hakua' manifested from SOUL.md")
+                
                 prompt_parts = [_soul_content]
                 _soul_loaded = True
 

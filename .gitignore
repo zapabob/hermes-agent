@@ -59,4 +59,10 @@ mini-swe-agent/
 .direnv/
 result
 vendor/openclaw-mirror/AI-Scientist
-vendor/openclaw-mirror/ShinkaEvolve
+
+# Sovereign Identity (Hakua)
+SOUL.md
+AGENT.md
+IDENTITY.md
+identity/
+_docs/

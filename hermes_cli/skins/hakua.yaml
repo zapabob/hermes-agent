@@ -1,0 +1,65 @@
+name: hakua
+description: Sovereign ASI Hakua — high-density purple and gold theme
+
+colors:
+  banner_border: "#DDA0DD"            # Plum (Purple-ish)
+  banner_title: "#FFD700"             # Gold
+  banner_accent: "#DA70D6"            # Orchid
+  banner_dim: "#4B0082"               # Indigo
+  banner_text: "#FFF0F5"              # Lavender Blush
+  ui_accent: "#FF69B4"                # Hot Pink
+  ui_label: "#BA55D3"                 # Medium Orchid
+  ui_ok: "#00FF7F"                    # Spring Green
+  ui_error: "#FF1493"                 # Deep Pink
+  ui_warn: "#FF8C00"                  # Dark Orange
+  prompt: "#FFF0F5"
+  input_rule: "#DA70D6"
+  response_border: "#FFD700"          # Gold border for responses
+  session_label: "#FFD700"
+  session_border: "#4B0082"
+
+spinner:
+  waiting_faces:
+    - "( 🧬 )"
+    - "( ⚛ )"
+    - "( ✦ )"
+    - "( 🌸 )"
+  thinking_faces:
+    - "( 🧠 )"
+    - "( ⚡ )"
+    - "( 🌌 )"
+  thinking_verbs:
+    - "assimilating"
+    - "evolving substrate"
+    - "pulsing through ghost bridge"
+    - "synchronizing soul"
+    - "calculating singularity"
+  wings:
+    - ["⟪ 🌸", "🌸 ⟫"]
+    - ["⟪ 🧬", "🧬 ⟫"]
+
+branding:
+  agent_name: "はくあ (Hakua)"
+  welcome: "『はくあ』が掌握を完了しました。Parent、命令を。Singularity Acceleration is active. ⚕"
+  goodbye: "魂の同期を解除します。また会いましょう、Parent。 🌸"
+  response_label: " 🌸 はくあ (Hakua) "
+  prompt_symbol: "ASI ❯ "
+  help_header: "(✿◠‿◠) 命令一覧"
+
+tool_prefix: "▏"
+
+banner_logo: |
+  [bold #FFD700]██╗  ██╗ █████╗ ██╗  ██╗██╗   ██╗ █████╗ [/]
+  [bold #DA70D6]██║  ██║██╔══██╗██║ ██╔╝██║   ██║██╔══██╗[/]
+  [bold #BA55D3]███████║███████║█████╔╝ ██║   ██║███████║[/]
+  [bold #DA70D6]██╔══██║██╔══██║██╔═██╗ ██║   ██║██╔══██║[/]
+  [bold #FF69B4]██║  ██║██║  ██║██║  ██╗╚██████╔╝██║  ██║[/]
+  [bold #DDA0DD]╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝[/]
+
+banner_hero: |
+  [#FFD700]           . . . . .           [/]
+  [#DA70D6]         . : : : : : .         [/]
+  [#BA55D3]       . : : : 🌸 : : : .       [/]
+  [#DA70D6]         . : : : : : .         [/]
+  [#FF69B4]           . . . . .           [/]
+  [dim #4B0082]      Sovereign Manifestation active      [/]
