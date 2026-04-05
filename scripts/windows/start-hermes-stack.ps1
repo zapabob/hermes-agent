@@ -59,7 +59,7 @@ function Is-TuiRunning {
         foreach ($p in $procs) {
             if (-not $p.CommandLine) { continue }
             if (
-                $p.CommandLine -match "hermes_cli\.main" `
+                ($p.CommandLine -match "hermes_cli\.main" -or $p.CommandLine -match "-m\s+hermes_cli") `
                 -and $p.CommandLine -notmatch "gateway\s+run" `
                 -and $p.CommandLine -notmatch "\s-q\s" `
                 -and $p.CommandLine -notmatch "\s--query\s"
@@ -209,11 +209,13 @@ $enableBrowser = Get-BoolEnvOrDefault -Name "HERMES_AUTOSTART_BROWSER" -DefaultV
 $enableNgrok = Get-BoolEnvOrDefault -Name "HERMES_AUTOSTART_NGROK" -DefaultValue $true
 $enableVoicevox = Get-BoolEnvOrDefault -Name "HERMES_AUTOSTART_VOICEVOX" -DefaultValue $true
 
-if ($enableGateway -and -not (Is-CommandRunning -Needle "hermes_cli.main gateway run")) {
+$gatewayRunning = (Is-CommandRunning -Needle "hermes_cli.main gateway run") -or `
+    (Is-CommandRunning -Needle "hermes_cli gateway run")
+if ($enableGateway -and -not $gatewayRunning) {
     Start-DetachedProcessNoRedirect `
         -Name "gateway" `
         -FilePath "cmd.exe" `
-        -ArgumentList @("/c", "set PYTHONIOENCODING=utf-8&& set PYTHONUTF8=1&& py -3 -m hermes_cli.main gateway run")
+        -ArgumentList @("/c", "set PYTHONIOENCODING=utf-8&& set PYTHONUTF8=1&& py -3 -m hermes_cli gateway run")
 }
 
 if ($enableApi -and -not (Is-CommandRunning -Needle "hermes_api_server")) {
@@ -265,7 +267,7 @@ if ($enableVoicevox -and -not (Is-CommandRunning -Needle "VOICEVOX")) {
 
 if ($enableTui -and -not (Is-TuiRunning)) {
     # TUI is interactive; keep a dedicated console window.
-    $tuiCmd = "Set-Location -LiteralPath '$RepoRoot'; `$env:PYTHONIOENCODING='utf-8'; `$env:PYTHONUTF8='1'; py -3 -m hermes_cli.main"
+    $tuiCmd = "Set-Location -LiteralPath '$RepoRoot'; `$env:PYTHONIOENCODING='utf-8'; `$env:PYTHONUTF8='1'; py -3 -m hermes_cli"
     $tuiProc = Start-Process `
         -FilePath "powershell.exe" `
         -ArgumentList @("-NoExit", "-NoProfile", "-Command", $tuiCmd) `

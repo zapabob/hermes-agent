@@ -126,6 +126,9 @@ class TestLaunchdPlistReplace:
         run_idx = string_values.index("run")
         replace_idx = string_values.index("--replace")
         assert replace_idx == run_idx + 1
+        # Prefer ``python -m hermes_cli`` (package __main__) over ``hermes_cli.main``
+        m_idx = string_values.index("-m")
+        assert string_values[m_idx + 1] == "hermes_cli"
 
 
 class TestLaunchdPlistPath:

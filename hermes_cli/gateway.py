@@ -32,6 +32,7 @@ def find_gateway_pids() -> list:
     """Find PIDs of running gateway processes."""
     pids = []
     patterns = [
+        "-m hermes_cli gateway",
         "hermes_cli.main gateway",
         "hermes_cli/main.py gateway",
         "hermes gateway",
@@ -484,8 +485,8 @@ def get_hermes_cli_path() -> str:
     if hermes_bin:
         return hermes_bin
     
-    # Fallback to direct module execution
-    return f"{get_python_path()} -m hermes_cli.main"
+    # Fallback to direct module execution (hermes_cli.__main__)
+    return f"{get_python_path()} -m hermes_cli"
 
 
 # =============================================================================
@@ -563,7 +564,7 @@ StartLimitBurst=5
 Type=simple
 User={username}
 Group={group_name}
-ExecStart={python_path} -m hermes_cli.main gateway run --replace
+ExecStart={python_path} -m hermes_cli gateway run --replace
 WorkingDirectory={working_dir}
 Environment="HOME={home_dir}"
 Environment="USER={username}"
@@ -595,7 +596,7 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-ExecStart={python_path} -m hermes_cli.main gateway run --replace
+ExecStart={python_path} -m hermes_cli gateway run --replace
 WorkingDirectory={working_dir}
 Environment="PATH={sane_path}"
 Environment="VIRTUAL_ENV={venv_dir}"
@@ -912,7 +913,7 @@ def generate_launchd_plist() -> str:
     <array>
         <string>{python_path}</string>
         <string>-m</string>
-        <string>hermes_cli.main</string>
+        <string>hermes_cli</string>
         <string>gateway</string>
         <string>run</string>
         <string>--replace</string>

@@ -4,6 +4,7 @@ Hermes CLI - Main entry point.
 
 Usage:
     hermes                     # Interactive chat (default)
+    python -m hermes_cli       # Same as ``hermes`` (no PATH shim required)
     hermes chat                # Interactive chat
     hermes gateway             # Run gateway in foreground
     hermes gateway start       # Start gateway as service
@@ -3997,8 +3998,27 @@ def cmd_completion(args):
         print(generate_bash_completion())
 
 
+_MIN_PYTHON = (3, 11)
+
+
+def _ensure_runtime_python() -> None:
+    """Fail fast on unsupported interpreters (matches pyproject requires-python)."""
+    if sys.version_info >= _MIN_PYTHON:
+        return
+    need = f"{_MIN_PYTHON[0]}.{_MIN_PYTHON[1]}"
+    found = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    print(
+        f"Error: Hermes requires Python {need}+ (this interpreter is {found}).\n"
+        "Use a newer Python or activate a 3.11+ venv, then retry.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
 def main():
     """Main entry point for hermes CLI."""
+    _ensure_runtime_python()
+
     parser = argparse.ArgumentParser(
         prog="hermes",
         description="Hermes Agent - AI assistant with tool-calling capabilities",
@@ -5208,10 +5228,10 @@ For more help on a command:
             if hermes_bin:
                 os.execvp(hermes_bin, ["hermes", "--resume", selected_id])
             else:
-                # Fallback: re-invoke via python -m
+                # Fallback: re-invoke via python -m package (see hermes_cli/__main__.py)
                 os.execvp(
                     sys.executable,
-                    [sys.executable, "-m", "hermes_cli.main", "--resume", selected_id],
+                    [sys.executable, "-m", "hermes_cli", "--resume", selected_id],
                 )
             return  # won't reach here after execvp
 

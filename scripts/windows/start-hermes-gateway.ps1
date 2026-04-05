@@ -46,6 +46,6 @@ if ($DelaySeconds -gt 0) {
 
 Start-Process `
     -FilePath "cmd.exe" `
-    -ArgumentList "/c", "set PYTHONIOENCODING=utf-8&& set PYTHONUTF8=1&& py -3 -m hermes_cli.main gateway run" `
+    -ArgumentList "/c", "set PYTHONIOENCODING=utf-8&& set PYTHONUTF8=1&& py -3 -m hermes_cli gateway run" `
     -WorkingDirectory $RepoRoot `
     -WindowStyle $WindowStyle
