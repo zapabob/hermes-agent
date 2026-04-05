@@ -29,6 +29,27 @@ WSL2 なしで Windows 11 上でそのまま動作します。
 | `local.py` `_make_run_env` | Windows では Unix 専用の `_SANE_PATH` (`/opt/homebrew/bin` 等) をサブプロセス PATH に混入しないよう修正 |
 | `local.py` `_kill_shell_children` | `pkill -P` (Unix 専用) を `taskkill /F /FI "PPID eq <pid>"` (Windows 標準) に置き換え |
 
+実装は集約モジュール [`tools/environments/platform_shell_compat.py`](tools/environments/platform_shell_compat.py) に寄せてあり、公式側の `local.py` / `persistent_shell.py` 更新時のマージ衝突を減らしています。
+
+---
+
+## アップストリーム（公式）との同期
+
+`NousResearch/hermes-agent` の `main` を取り込みつつ上記の Windows 差分を維持する手順です。
+
+1. **リモート**（初回のみ）: `git remote add upstream https://github.com/NousResearch/hermes-agent.git`
+2. **差分確認**: `py -3 scripts/sync_upstream.py --dry-run`（`fetch` + 分岐サマリ + ウォッチリスト表示）
+3. **作業ツリーをクリーンにしてから** マージ用ブランチ作成＋マージ: `py -3 scripts/sync_upstream.py --merge`  
+   オプションでマージ直後にツール系テスト: `--merge --pytest`
+4. **コンフリクト時**はスクリプトが案内する **ウォッチリスト** を優先確認:
+   - `tools/environments/local.py`
+   - `tools/environments/persistent_shell.py`
+   - `tools/environments/platform_shell_compat.py`
+   - `README.md`
+5. 解決後: `py -3 scripts/sync_upstream.py --pytest-only`（`tests/tools/test_local_persistent.py` 等）
+
+自動で `ours`/`theirs` を機械適用しない設計です（セキュリティ修正の取りこぼし防止）。
+
 ---
 
 ## クイックインストール

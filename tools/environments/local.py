@@ -2,18 +2,22 @@
 
 import glob
 import os
-import platform
 import shutil
-import signal
 import subprocess
-import tempfile
 import threading
 import time
 
-_IS_WINDOWS = platform.system() == "Windows"
-
 from tools.environments.base import BaseEnvironment
 from tools.environments.persistent_shell import PersistentShellMixin
+from tools.environments.platform_shell_compat import (
+    apply_sane_path_if_unix,
+    get_popen_preexec_fn,
+    hermes_temp_prefix,
+    is_windows,
+    kill_shell_children,
+    terminate_process_on_timeout,
+    terminate_process_on_user_interrupt,
+)
 from tools.interrupt import is_interrupted
 
 # Unique marker to isolate real command output from shell init/exit noise.
@@ -170,7 +174,7 @@ def _find_bash() -> str:
     must use bash — not the user's $SHELL which could be fish/zsh/etc.
     On Windows: uses Git Bash (bundled with Git for Windows).
     """
-    if not _IS_WINDOWS:
+    if not is_windows():
         return (
             shutil.which("bash")
             or ("/usr/bin/bash" if os.path.isfile("/usr/bin/bash") else None)
@@ -262,14 +266,6 @@ def _clean_shell_noise(output: str) -> str:
     return result
 
 
-# Standard PATH entries for environments with minimal PATH (e.g. systemd services).
-# Includes macOS Homebrew paths (/opt/homebrew/* for Apple Silicon).
-_SANE_PATH = (
-    "/opt/homebrew/bin:/opt/homebrew/sbin:"
-    "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-)
-
-
 def _make_run_env(env: dict) -> dict:
     """Build a run environment with a sane PATH and provider-var stripping."""
     try:
@@ -285,9 +281,7 @@ def _make_run_env(env: dict) -> dict:
             run_env[real_key] = v
         elif k not in _HERMES_PROVIDER_ENV_BLOCKLIST or _is_passthrough(k):
             run_env[k] = v
-    existing_path = run_env.get("PATH", "")
-    if not _IS_WINDOWS and "/usr/bin" not in existing_path.split(":"):
-        run_env["PATH"] = f"{existing_path}:{_SANE_PATH}" if existing_path else _SANE_PATH
+    apply_sane_path_if_unix(run_env)
     return run_env
 
 
@@ -336,10 +330,7 @@ class LocalEnvironment(PersistentShellMixin, BaseEnvironment):
 
     @property
     def _temp_prefix(self) -> str:
-        if _IS_WINDOWS:
-            base = tempfile.gettempdir().replace('\\', '/')
-            return f"{base}/hermes-local-{self._session_id}"
-        return f"/tmp/hermes-local-{self._session_id}"
+        return hermes_temp_prefix("local", self._session_id)
 
     def _spawn_shell_process(self) -> subprocess.Popen:
         user_shell = _find_bash()
@@ -351,7 +342,7 @@ class LocalEnvironment(PersistentShellMixin, BaseEnvironment):
             stderr=subprocess.DEVNULL,
             text=True,
             env=run_env,
-            preexec_fn=None if _IS_WINDOWS else os.setsid,
+            preexec_fn=get_popen_preexec_fn(),
         )
 
     def _read_temp_files(self, *paths: str) -> list[str]:
@@ -365,21 +356,7 @@ class LocalEnvironment(PersistentShellMixin, BaseEnvironment):
         return results
 
     def _kill_shell_children(self):
-        if self._shell_pid is None:
-            return
-        try:
-            if _IS_WINDOWS:
-                subprocess.run(
-                    ["taskkill", "/F", "/FI", f"PPID eq {self._shell_pid}"],
-                    capture_output=True, timeout=5,
-                )
-            else:
-                subprocess.run(
-                    ["pkill", "-P", str(self._shell_pid)],
-                    capture_output=True, timeout=5,
-                )
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass
+        kill_shell_children(self._shell_pid)
 
     def _cleanup_temp_files(self):
         for f in glob.glob(f"{self._temp_prefix}-*"):
@@ -425,7 +402,7 @@ class LocalEnvironment(PersistentShellMixin, BaseEnvironment):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             stdin=subprocess.PIPE if effective_stdin is not None else subprocess.DEVNULL,
-            preexec_fn=None if _IS_WINDOWS else os.setsid,
+            preexec_fn=get_popen_preexec_fn(),
         )
 
         if effective_stdin is not None:
@@ -457,31 +434,14 @@ class LocalEnvironment(PersistentShellMixin, BaseEnvironment):
 
         while proc.poll() is None:
             if is_interrupted():
-                try:
-                    if _IS_WINDOWS:
-                        proc.terminate()
-                    else:
-                        pgid = os.getpgid(proc.pid)
-                        os.killpg(pgid, signal.SIGTERM)
-                        try:
-                            proc.wait(timeout=1.0)
-                        except subprocess.TimeoutExpired:
-                            os.killpg(pgid, signal.SIGKILL)
-                except (ProcessLookupError, PermissionError):
-                    proc.kill()
+                terminate_process_on_user_interrupt(proc)
                 reader.join(timeout=2)
                 return {
                     "output": "".join(_output_chunks) + "\n[Command interrupted — user sent a new message]",
                     "returncode": 130,
                 }
             if time.monotonic() > deadline:
-                try:
-                    if _IS_WINDOWS:
-                        proc.terminate()
-                    else:
-                        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                except (ProcessLookupError, PermissionError):
-                    proc.kill()
+                terminate_process_on_timeout(proc)
                 reader.join(timeout=2)
                 partial = "".join(_output_chunks)
                 timeout_msg = f"\n[Command timed out after {effective_timeout}s]"

@@ -9,8 +9,11 @@ See: https://github.com/NousResearch/hermes-agent/issues/1264
 """
 
 import os
+import sys
 import threading
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from tools.environments.local import (
     LocalEnvironment,
@@ -294,13 +297,14 @@ class TestSanePathIncludesHomebrew:
     """Verify _SANE_PATH includes macOS Homebrew directories."""
 
     def test_sane_path_includes_homebrew_bin(self):
-        from tools.environments.local import _SANE_PATH
+        from tools.environments.platform_shell_compat import _SANE_PATH
         assert "/opt/homebrew/bin" in _SANE_PATH
 
     def test_sane_path_includes_homebrew_sbin(self):
-        from tools.environments.local import _SANE_PATH
+        from tools.environments.platform_shell_compat import _SANE_PATH
         assert "/opt/homebrew/sbin" in _SANE_PATH
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="Unix-only PATH augmentation")
     def test_make_run_env_appends_homebrew_on_minimal_path(self):
         """When PATH is minimal (no /usr/bin), _make_run_env should append
         _SANE_PATH which now includes Homebrew dirs."""
