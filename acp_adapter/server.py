@@ -354,7 +354,7 @@ class HermesACPAgent(acp.Agent):
 
         if approval_cb:
             try:
-                from tools import terminal_tool as _terminal_tool
+                import tools.terminal_tool as _terminal_tool
                 previous_approval_cb = getattr(_terminal_tool, "_approval_callback", None)
                 _terminal_tool.set_approval_callback(approval_cb)
             except Exception:
@@ -374,7 +374,7 @@ class HermesACPAgent(acp.Agent):
             finally:
                 if approval_cb:
                     try:
-                        from tools import terminal_tool as _terminal_tool
+                        import tools.terminal_tool as _terminal_tool
                         _terminal_tool.set_approval_callback(previous_approval_cb)
                     except Exception:
                         logger.debug("Could not restore approval callback", exc_info=True)
