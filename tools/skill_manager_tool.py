@@ -82,6 +82,8 @@ SKILLS_DIR = HERMES_HOME / "skills"
 
 MAX_NAME_LENGTH = 64
 MAX_DESCRIPTION_LENGTH = 1024
+MAX_SKILL_CONTENT_CHARS = 100_000   # ~36k tokens at 2.75 chars/token
+MAX_SKILL_FILE_BYTES = 1_048_576    # 1 MiB per supporting file
 
 # Characters allowed in skill names (filesystem-safe, URL-friendly)
 VALID_NAME_RE = re.compile(r'^[a-z0-9][a-z0-9._-]*$')
@@ -177,6 +179,21 @@ def _validate_frontmatter(content: str) -> Optional[str]:
     return None
 
 
+def _validate_content_size(content: str, label: str = "SKILL.md") -> Optional[str]:
+    """Check that content doesn't exceed the character limit for agent writes.
+
+    Returns an error message or None if within bounds.
+    """
+    if len(content) > MAX_SKILL_CONTENT_CHARS:
+        return (
+            f"{label} content is {len(content):,} characters "
+            f"(limit: {MAX_SKILL_CONTENT_CHARS:,}). "
+            f"Consider splitting into a smaller SKILL.md with supporting files "
+            f"in references/ or templates/."
+        )
+    return None
+
+
 def _resolve_skill_dir(name: str, category: str = None) -> Path:
     """Build the directory path for a new skill, optionally under a category."""
     if category:
@@ -186,14 +203,19 @@ def _resolve_skill_dir(name: str, category: str = None) -> Path:
 
 def _find_skill(name: str) -> Optional[Dict[str, Any]]:
     """
-    Find a skill by name in ~/.hermes/skills/.
-    Returns {"path": Path} or None.
+    Find a skill by name across all skill directories.
+
+    Searches the local skills dir (~/.hermes/skills/) first, then any
+    external dirs configured via skills.external_dirs.  Returns
+    {"path": Path} or None.
     """
-    if not SKILLS_DIR.exists():
-        return None
-    for skill_md in SKILLS_DIR.rglob("SKILL.md"):
-        if skill_md.parent.name == name:
-            return {"path": skill_md.parent}
+    from agent.skill_utils import get_all_skills_dirs
+    for skills_dir in get_all_skills_dirs():
+        if not skills_dir.exists():
+            continue
+        for skill_md in skills_dir.rglob("SKILL.md"):
+            if skill_md.parent.name == name:
+                return {"path": skill_md.parent}
     return None
 
 
@@ -275,6 +297,10 @@ def _create_skill(name: str, content: str, category: str = None) -> Dict[str, An
     if err:
         return {"success": False, "error": err}
 
+    err = _validate_content_size(content)
+    if err:
+        return {"success": False, "error": err}
+
     # Check for name collisions across all directories
     existing = _find_skill(name)
     if existing:
@@ -315,6 +341,10 @@ def _create_skill(name: str, content: str, category: str = None) -> Dict[str, An
 def _edit_skill(name: str, content: str) -> Dict[str, Any]:
     """Replace the SKILL.md of any existing skill (full rewrite)."""
     err = _validate_frontmatter(content)
+    if err:
+        return {"success": False, "error": err}
+
+    err = _validate_content_size(content)
     if err:
         return {"success": False, "error": err}
 
@@ -379,27 +409,29 @@ def _patch_skill(
 
     content = target.read_text(encoding="utf-8")
 
-    count = content.count(old_string)
-    if count == 0:
+    # Use the same fuzzy matching engine as the file patch tool.
+    # This handles whitespace normalization, indentation differences,
+    # escape sequences, and block-anchor matching — saving the agent
+    # from exact-match failures on minor formatting mismatches.
+    from tools.fuzzy_match import fuzzy_find_and_replace
+
+    new_content, match_count, match_error = fuzzy_find_and_replace(
+        content, old_string, new_string, replace_all
+    )
+    if match_error:
         # Show a short preview of the file so the model can self-correct
         preview = content[:500] + ("..." if len(content) > 500 else "")
         return {
             "success": False,
-            "error": "old_string not found in the file.",
+            "error": match_error,
             "file_preview": preview,
         }
 
-    if count > 1 and not replace_all:
-        return {
-            "success": False,
-            "error": (
-                f"old_string matched {count} times. Provide more surrounding context "
-                f"to make the match unique, or set replace_all=true to replace all occurrences."
-            ),
-            "match_count": count,
-        }
-
-    new_content = content.replace(old_string, new_string) if replace_all else content.replace(old_string, new_string, 1)
+    # Check size limit on the result
+    target_label = "SKILL.md" if not file_path else file_path
+    err = _validate_content_size(new_content, label=target_label)
+    if err:
+        return {"success": False, "error": err}
 
     # If patching SKILL.md, validate frontmatter is still intact
     if not file_path:
@@ -419,10 +451,9 @@ def _patch_skill(
         _atomic_write_text(target, original_content)
         return {"success": False, "error": scan_error}
 
-    replacements = count if replace_all else 1
     return {
         "success": True,
-        "message": f"Patched {'SKILL.md' if not file_path else file_path} in skill '{name}' ({replacements} replacement{'s' if replacements > 1 else ''}).",
+        "message": f"Patched {'SKILL.md' if not file_path else file_path} in skill '{name}' ({match_count} replacement{'s' if match_count > 1 else ''}).",
     }
 
 
@@ -454,6 +485,21 @@ def _write_file(name: str, file_path: str, file_content: str) -> Dict[str, Any]:
 
     if not file_content and file_content != "":
         return {"success": False, "error": "file_content is required."}
+
+    # Check size limits
+    content_bytes = len(file_content.encode("utf-8"))
+    if content_bytes > MAX_SKILL_FILE_BYTES:
+        return {
+            "success": False,
+            "error": (
+                f"File content is {content_bytes:,} bytes "
+                f"(limit: {MAX_SKILL_FILE_BYTES:,} bytes / 1 MiB). "
+                f"Consider splitting into smaller files."
+            ),
+        }
+    err = _validate_content_size(file_content, label=file_path)
+    if err:
+        return {"success": False, "error": err}
 
     existing = _find_skill(name)
     if not existing:

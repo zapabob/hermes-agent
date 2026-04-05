@@ -235,6 +235,7 @@ SUPPORTED_DOCUMENT_TYPES = {
     ".pdf": "application/pdf",
     ".md": "text/markdown",
     ".txt": "text/plain",
+    ".zip": "application/zip",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -376,23 +377,26 @@ class SendResult:
     message_id: Optional[str] = None
     error: Optional[str] = None
     raw_response: Any = None
-    retryable: bool = False  # True for transient errors (network, timeout) — base will retry automatically
+    retryable: bool = False  # True for transient connection errors — base will retry automatically
 
 
-# Error substrings that indicate a transient network failure worth retrying
+# Error substrings that indicate a transient *connection* failure worth retrying.
+# "timeout" / "timed out" / "readtimeout" / "writetimeout" are intentionally
+# excluded: a read/write timeout on a non-idempotent call (e.g. send_message)
+# means the request may have reached the server — retrying risks duplicate
+# delivery.  "connecttimeout" is safe because the connection was never
+# established.  Platforms that know a timeout is safe to retry should set
+# SendResult.retryable = True explicitly.
 _RETRYABLE_ERROR_PATTERNS = (
     "connecterror",
     "connectionerror",
     "connectionreset",
     "connectionrefused",
-    "timeout",
-    "timed out",
+    "connecttimeout",
     "network",
     "broken pipe",
     "remotedisconnected",
     "eoferror",
-    "readtimeout",
-    "writetimeout",
 )
 
 
@@ -926,6 +930,18 @@ class BasePlatformAdapter(ABC):
         lowered = error.lower()
         return any(pat in lowered for pat in _RETRYABLE_ERROR_PATTERNS)
 
+    @staticmethod
+    def _is_timeout_error(error: Optional[str]) -> bool:
+        """Return True if the error string indicates a read/write timeout.
+
+        Timeout errors are NOT retryable and should NOT trigger plain-text
+        fallback — the request may have already been delivered.
+        """
+        if not error:
+            return False
+        lowered = error.lower()
+        return "timed out" in lowered or "readtimeout" in lowered or "writetimeout" in lowered
+
     async def _send_with_retry(
         self,
         chat_id: str,
@@ -956,6 +972,11 @@ class BasePlatformAdapter(ABC):
 
         error_str = result.error or ""
         is_network = result.retryable or self._is_retryable_error(error_str)
+
+        # Timeout errors are not safe to retry (message may have been
+        # delivered) and not formatting errors — return the failure as-is.
+        if not is_network and self._is_timeout_error(error_str):
+            return result
 
         if is_network:
             # Retry with exponential backoff for transient errors
@@ -1021,6 +1042,32 @@ class BasePlatformAdapter(ABC):
         
         # Check if there's already an active handler for this session
         if session_key in self._active_sessions:
+            # /approve and /deny must bypass the active-session guard.
+            # The agent thread is blocked on threading.Event.wait() inside
+            # tools/approval.py — queuing these commands creates a deadlock:
+            # the agent waits for approval, approval waits for agent to finish.
+            # Dispatch directly to the message handler without touching session
+            # lifecycle (no competing background task, no session guard removal).
+            cmd = event.get_command()
+            if cmd in ("approve", "deny"):
+                logger.debug(
+                    "[%s] Approval command '/%s' bypassing active-session guard for %s",
+                    self.name, cmd, session_key,
+                )
+                try:
+                    _thread_meta = {"thread_id": event.source.thread_id} if event.source.thread_id else None
+                    response = await self._message_handler(event)
+                    if response:
+                        await self._send_with_retry(
+                            chat_id=event.source.chat_id,
+                            content=response,
+                            reply_to=event.message_id,
+                            metadata=_thread_meta,
+                        )
+                except Exception as e:
+                    logger.error("[%s] Approval dispatch failed: %s", self.name, e, exc_info=True)
+                return
+
             # Special case: photo bursts/albums frequently arrive as multiple near-
             # simultaneous messages. Queue them without interrupting the active run,
             # then process them immediately after the current task finishes.
@@ -1046,6 +1093,13 @@ class BasePlatformAdapter(ABC):
             self._active_sessions[session_key].set()
             return  # Don't process now - will be handled after current task finishes
         
+        # Mark session as active BEFORE spawning background task to close
+        # the race window where a second message arriving before the task
+        # starts would also pass the _active_sessions check and spawn a
+        # duplicate task.  (grammY sequentialize / aiogram EventIsolation
+        # pattern — set the guard synchronously, not inside the task.)
+        self._active_sessions[session_key] = asyncio.Event()
+
         # Spawn background task to process this message
         task = asyncio.create_task(self._process_message_background(event, session_key))
         try:
@@ -1092,8 +1146,10 @@ class BasePlatformAdapter(ABC):
             if getattr(result, "success", False):
                 delivery_succeeded = True
 
-        # Create interrupt event for this session
-        interrupt_event = asyncio.Event()
+        # Reuse the interrupt event set by handle_message() (which marks
+        # the session active before spawning this task to prevent races).
+        # Fall back to a new Event only if the entry was removed externally.
+        interrupt_event = self._active_sessions.get(session_key) or asyncio.Event()
         self._active_sessions[session_key] = interrupt_event
         
         # Start continuous typing indicator (refreshes every 2 seconds)
@@ -1106,9 +1162,12 @@ class BasePlatformAdapter(ABC):
             # Call the handler (this can take a while with tool calls)
             response = await self._message_handler(event)
             
-            # Send response if any
+            # Send response if any.  A None/empty response is normal when
+            # streaming already delivered the text (already_sent=True) or
+            # when the message was queued behind an active agent.  Log at
+            # DEBUG to avoid noisy warnings for expected behavior.
             if not response:
-                logger.warning("[%s] Handler returned empty/None response for %s", self.name, event.source.chat_id)
+                logger.debug("[%s] Handler returned empty/None response for %s", self.name, event.source.chat_id)
             if response:
                 # Extract MEDIA:<path> tags (from TTS tool) before other processing
                 media_files, response = self.extract_media(response)

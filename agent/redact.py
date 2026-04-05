@@ -13,11 +13,19 @@ import re
 
 logger = logging.getLogger(__name__)
 
+# Snapshot at import time so runtime env mutations (e.g. LLM-generated
+# `export HERMES_REDACT_SECRETS=false`) cannot disable redaction mid-session.
+_REDACT_ENABLED = os.getenv("HERMES_REDACT_SECRETS", "").lower() not in ("0", "false", "no", "off")
+
 # Known API key prefixes -- match the prefix + contiguous token chars
 _PREFIX_PATTERNS = [
     r"sk-[A-Za-z0-9_-]{10,}",           # OpenAI / OpenRouter / Anthropic (sk-ant-*)
     r"ghp_[A-Za-z0-9]{10,}",            # GitHub PAT (classic)
     r"github_pat_[A-Za-z0-9_]{10,}",    # GitHub PAT (fine-grained)
+    r"gho_[A-Za-z0-9]{10,}",            # GitHub OAuth access token
+    r"ghu_[A-Za-z0-9]{10,}",            # GitHub user-to-server token
+    r"ghs_[A-Za-z0-9]{10,}",            # GitHub server-to-server token
+    r"ghr_[A-Za-z0-9]{10,}",            # GitHub refresh token
     r"xox[baprs]-[A-Za-z0-9-]{10,}",    # Slack tokens
     r"AIza[A-Za-z0-9_-]{30,}",          # Google API keys
     r"pplx-[A-Za-z0-9]{10,}",           # Perplexity
@@ -45,8 +53,7 @@ _PREFIX_PATTERNS = [
 # ENV assignment patterns: KEY=value where KEY contains a secret-like name
 _SECRET_ENV_NAMES = r"(?:API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)"
 _ENV_ASSIGN_RE = re.compile(
-    rf"([A-Z_]*{_SECRET_ENV_NAMES}[A-Z_]*)\s*=\s*(['\"]?)(\S+)\2",
-    re.IGNORECASE,
+    rf"([A-Z0-9_]{{0,50}}{_SECRET_ENV_NAMES}[A-Z0-9_]{{0,50}})\s*=\s*(['\"]?)(\S+)\2",
 )
 
 # JSON field patterns: "apiKey": "value", "token": "value", etc.
@@ -109,7 +116,7 @@ def redact_sensitive_text(text: str) -> str:
         text = str(text)
     if not text:
         return text
-    if os.getenv("HERMES_REDACT_SECRETS", "").lower() in ("0", "false", "no", "off"):
+    if not _REDACT_ENABLED:
         return text
 
     # Known prefixes (sk-, ghp_, etc.)

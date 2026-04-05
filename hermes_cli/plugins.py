@@ -38,6 +38,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
 
+from utils import env_var_enabled
+
 try:
     import yaml
 except ImportError:  # pragma: no cover – yaml is optional at import time
@@ -65,7 +67,7 @@ _NS_PARENT = "hermes_plugins"
 
 def _env_enabled(name: str) -> bool:
     """Return True when an env var is set to a truthy opt-in value."""
-    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+    return env_var_enabled(name)
 
 
 def _get_disabled_plugins() -> set:
@@ -439,8 +441,18 @@ class PluginManager:
         plugin cannot break the core agent loop.
 
         Returns a list of non-``None`` return values from callbacks.
-        This allows hooks like ``pre_llm_call`` to contribute context
-        that the agent core can collect and inject.
+
+        For ``pre_llm_call``, callbacks may return a dict describing
+        context to inject into the current turn's user message::
+
+            {"context": "recalled text..."}
+            "recalled text..."          # plain string, equivalent
+
+        Context is ALWAYS injected into the user message, never the
+        system prompt.  This preserves the prompt cache prefix — the
+        system prompt stays identical across turns so cached tokens
+        are reused.  All injected context is ephemeral — never
+        persisted to session DB.
         """
         callbacks = self._hooks.get(hook_name, [])
         results: List[Any] = []

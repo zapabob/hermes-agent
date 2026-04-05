@@ -71,6 +71,9 @@ WRITE_DENIED_PREFIXES = [
         os.path.join(_HOME, ".kube"),
         "/etc/sudoers.d",
         "/etc/systemd",
+        os.path.join(_HOME, ".docker"),
+        os.path.join(_HOME, ".azure"),
+        os.path.join(_HOME, ".config", "gh"),
     ]
 ]
 
@@ -895,7 +898,7 @@ class ShellFileOperations(FileOperations):
         hidden_exclude = "-not -path '*/.*'"
 
         cmd = f"find {self._escape_shell_arg(path)} {hidden_exclude} -type f -name {self._escape_shell_arg(search_pattern)} " \
-              f"-printf '%T@ %p\\\\n' 2>/dev/null | sort -rn | tail -n +{offset + 1} | head -n {limit}"
+              f"-printf '%T@ %p\\n' 2>/dev/null | sort -rn | tail -n +{offset + 1} | head -n {limit}"
 
         result = self._exec(cmd, timeout=60)
 

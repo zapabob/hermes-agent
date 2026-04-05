@@ -16,7 +16,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from hermes_cli.config import get_hermes_home
+from hermes_constants import get_hermes_home
 from tools.environments.base import BaseEnvironment
 from tools.interrupt import is_interrupted
 
@@ -265,8 +265,7 @@ class SingularityEnvironment(BaseEnvironment):
                     mount_entry["host_path"],
                     mount_entry["container_path"],
                 )
-            skills_mount = get_skills_directory_mount()
-            if skills_mount:
+            for skills_mount in get_skills_directory_mount():
                 cmd.extend(["--bind", f"{skills_mount['host_path']}:{skills_mount['container_path']}:ro"])
                 logger.info(
                     "Singularity: binding skills dir %s -> %s",
