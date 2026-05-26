@@ -47,7 +47,7 @@ def test_bundled_plugins_discovered():
 
 
 def test_provider_profiles_register():
-    """Discovery registers bundled provider profiles without catalog snapshots."""
+    """Discovery registers bundled provider profiles through stable invariants."""
     _clear_provider_caches()
     from providers import list_providers
 
