@@ -847,6 +847,23 @@ def skill_view(
         JSON string with skill content or error message
     """
     try:
+        from tools.path_security import has_traversal_component
+
+        lookup_path = Path(name)
+        if (
+            has_traversal_component(name)
+            or lookup_path.is_absolute()
+            or bool(lookup_path.drive)
+        ):
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": "Skill names must be relative paths within a trusted skills directory.",
+                    "hint": "Use a skill name like 'axolotl' or 'category/skill-name'.",
+                },
+                ensure_ascii=False,
+            )
+
         local_category_name: str | None = None
         # ── Qualified name dispatch (plugin skills) ──────────────────
         # Names containing ':' are routed to the plugin skill registry.

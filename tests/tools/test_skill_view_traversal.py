@@ -34,6 +34,37 @@ def fake_skills(tmp_path):
 
 
 class TestPathTraversalBlocked:
+    def test_dotdot_in_skill_name(self, fake_skills):
+        """A skill name must not escape the trusted skills root."""
+        outside = fake_skills["tmp_path"] / "outside-skill"
+        outside.mkdir()
+        (outside / "SKILL.md").write_text("SECRET_API_KEY=sk-name-leak")
+
+        result = json.loads(skill_view("../outside-skill"))
+
+        assert result["success"] is False
+        assert "relative paths" in result["error"]
+        assert "sk-name-leak" not in json.dumps(result)
+
+    def test_absolute_skill_name_blocked(self, fake_skills):
+        """Absolute paths must not be accepted as skill names."""
+        outside = fake_skills["tmp_path"] / "outside-skill"
+        outside.mkdir()
+        (outside / "SKILL.md").write_text("ABSOLUTE_SECRET=sk-absolute-leak")
+
+        result = json.loads(skill_view(str(outside)))
+
+        assert result["success"] is False
+        assert "relative paths" in result["error"]
+        assert "sk-absolute-leak" not in json.dumps(result)
+
+    def test_windows_drive_skill_name_blocked(self, fake_skills):
+        """Windows drive-qualified names are rejected before path lookup."""
+        result = json.loads(skill_view("C:/Users/alice/.hermes/skills/secret"))
+
+        assert result["success"] is False
+        assert "relative paths" in result["error"]
+
     def test_dotdot_in_file_path(self, fake_skills):
         """Direct .. traversal should be rejected."""
         result = json.loads(skill_view("test-skill", file_path="../../.env"))
