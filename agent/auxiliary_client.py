@@ -4598,9 +4598,11 @@ def _resolve_task_provider_model(
       3. "auto" (full auto-detection chain)
 
     Returns (provider, model, base_url, api_key, api_mode) where model may
-    be None (use provider default). When base_url is set, provider is forced
-    to "custom" and the task uses that direct endpoint. api_mode is one of
-    "chat_completions", "codex_responses", or None (auto-detect).
+    be None (use provider default). When base_url is set without a concrete
+    provider, the task uses a "custom" direct endpoint. When a concrete
+    provider is also set, keep that provider so credential/model defaults stay
+    provider-aware. api_mode is one of "chat_completions", "codex_responses",
+    or None (auto-detect).
     """
     cfg_provider = None
     cfg_model = None
@@ -4639,20 +4641,25 @@ def _resolve_task_provider_model(
         cfg_provider, cfg_base_url = _expand_direct_api_alias(cfg_provider, cfg_base_url)
 
     if base_url:
+        provider_id = _normalize_aux_provider(provider) if provider else ""
+        if provider_id and provider_id not in {"auto", "custom"}:
+            return provider, resolved_model, base_url, api_key, resolved_api_mode
         return "custom", resolved_model, base_url, api_key, resolved_api_mode
     if provider:
         return provider, resolved_model, base_url, api_key, resolved_api_mode
 
     if task:
         # Config.yaml is the primary source for per-task overrides.
-        if cfg_base_url and cfg_api_key:
-            # Both base_url and api_key explicitly set → custom endpoint.
-            return "custom", resolved_model, cfg_base_url, cfg_api_key, resolved_api_mode
         if cfg_base_url and cfg_provider and cfg_provider != "auto":
-            # base_url set without api_key but with a known provider — use
-            # the provider so it can resolve credentials from env vars
-            # (e.g. OPENROUTER_API_KEY) instead of locking into "custom".
-            return cfg_provider, resolved_model, cfg_base_url, None, resolved_api_mode
+            # base_url set with a known provider: keep the provider so it can
+            # resolve credentials and model defaults from its own registry
+            # entry (e.g. Gemini uses GOOGLE_API_KEY/GEMINI_API_KEY), instead
+            # of falling into the OpenAI-shaped custom endpoint branch.
+            return cfg_provider, resolved_model, cfg_base_url, cfg_api_key, resolved_api_mode
+        if cfg_base_url and cfg_api_key:
+            # Both base_url and api_key explicitly set without a provider:
+            # custom endpoint.
+            return "custom", resolved_model, cfg_base_url, cfg_api_key, resolved_api_mode
         if cfg_provider and cfg_provider != "auto":
             return cfg_provider, resolved_model, cfg_base_url, cfg_api_key, resolved_api_mode
 

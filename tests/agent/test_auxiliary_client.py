@@ -2809,6 +2809,56 @@ class TestVisionAutoSkipsKimiCoding:
         })
 
 
+class TestVisionExplicitBaseUrlProviderRouting:
+    def test_explicit_base_url_keeps_concrete_provider(self):
+        from agent.auxiliary_client import _resolve_task_provider_model
+
+        base_url = "https://generativelanguage.googleapis.com/v1beta"
+
+        provider, model, resolved_base_url, api_key, api_mode = (
+            _resolve_task_provider_model(
+                "vision",
+                provider="gemini",
+                model=None,
+                base_url=base_url,
+                api_key=None,
+            )
+        )
+
+        assert provider == "gemini"
+        assert model is None
+        assert resolved_base_url == base_url
+        assert api_key is None
+        assert api_mode is None
+
+    def test_gemini_base_url_uses_gemini_credentials_not_openai(self, monkeypatch):
+        import agent.auxiliary_client as mod
+
+        base_url = "https://generativelanguage.googleapis.com/v1beta"
+        google_key = "google-vision-key"
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-proj-" + "o" * 32)
+        monkeypatch.setenv("GOOGLE_API_KEY", google_key)
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.setattr(mod, "_read_main_model", lambda: "gpt-5.5")
+
+        provider, client, model = resolve_vision_provider_client(
+            provider="gemini",
+            model=None,
+            base_url=base_url,
+            api_key=None,
+        )
+
+        try:
+            assert provider == "gemini"
+            assert getattr(client, "api_key", None) == google_key
+            assert getattr(client, "base_url", "") == base_url
+            assert model != "gpt-5.5"
+            assert model.startswith("gemini-")
+        finally:
+            if hasattr(client, "close"):
+                client.close()
+
+
 class TestCodexAuxiliaryAdapterTimeout:
     def test_forwards_timeout_to_responses_create(self):
         message_item = SimpleNamespace(
