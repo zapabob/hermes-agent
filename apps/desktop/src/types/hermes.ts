@@ -466,6 +466,10 @@ export interface ProfileInfo {
   skill_count: number
 }
 
+export interface ProfileSetupCommand {
+  command: string
+}
+
 export interface ProfileSoul {
   content: string
   exists: boolean
@@ -602,6 +606,14 @@ export interface ModelAssignmentRequest {
   task?: string
 }
 
+/** An auxiliary task still pinned to a provider that differs from the
+ *  newly-selected main provider after a main-model switch. */
+export interface StaleAuxAssignment {
+  task: string
+  provider: string
+  model: string
+}
+
 export interface ModelAssignmentResponse {
   /** Persisted endpoint URL for custom/local providers (echoed back). */
   base_url?: string
@@ -614,5 +626,9 @@ export interface ModelAssignmentResponse {
   provider?: string
   reset?: boolean
   scope?: string
+  /** Auxiliary slots still pinned to a different provider than the new main.
+   *  Switching main never clears aux pins; this lets the UI warn the user
+   *  their helper tasks aren't following the switch. Only set on scope:'main'. */
+  stale_aux?: StaleAuxAssignment[]
   tasks?: string[]
 }
