@@ -305,6 +305,7 @@ def init_agent(
     notice_callback: callable = None,
     notice_clear_callback: callable = None,
     event_callback: Optional[Callable[[str, dict], None]] = None,
+    reaction_callback: Optional[Callable[[str], None]] = None,
     max_tokens: int = None,
     reasoning_config: Dict[str, Any] = None,
     service_tier: str = None,
@@ -416,7 +417,6 @@ def init_agent(
     agent.skip_context_files = skip_context_files
     agent.load_soul_identity = load_soul_identity
     agent.pass_session_id = pass_session_id
-    agent._credential_pool = credential_pool
     agent.log_prefix_chars = log_prefix_chars
     agent.log_prefix = f"{log_prefix} " if log_prefix else ""
     # Store effective base URL for feature detection (prompt caching, reasoning, etc.)
@@ -427,6 +427,19 @@ def init_agent(
         else None
     )
     agent.provider = provider_name or ""
+    if credential_pool is not None:
+        try:
+            from agent.credential_pool import credential_pool_matches_provider
+
+            if not credential_pool_matches_provider(
+                credential_pool,
+                agent.provider,
+                base_url=agent.base_url,
+            ):
+                credential_pool = None
+        except Exception:
+            credential_pool = None
+    agent._credential_pool = credential_pool
     agent.acp_command = acp_command or command
     agent.acp_args = list(acp_args or args or [])
     if api_mode in {
@@ -553,6 +566,7 @@ def init_agent(
     agent.notice_callback = notice_callback
     agent.notice_clear_callback = notice_clear_callback
     agent.event_callback = event_callback
+    agent.reaction_callback = reaction_callback
     agent.tool_gen_callback = tool_gen_callback
 
     # Tool execution state — allows _vprint during tool execution

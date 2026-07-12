@@ -90,9 +90,14 @@ export const en: Translations = {
       retry: 'Retry',
       repairInstall: 'Repair install',
       useLocalGateway: 'Use local gateway',
+      gatewaySettings: 'Gateway settings',
+      back: 'Back',
       openLogs: 'Open logs',
       repairHint: 'Repair re-runs the installer and can take a few minutes on a fresh machine.',
-      remoteSignInHint: 'Opens the gateway login window. Use local gateway to switch to the bundled backend instead.',
+      remoteSignInHint: signInLabel =>
+        `Signs out of the saved remote browser session, then opens ${signInLabel}. Use local gateway to switch to the bundled backend instead.`,
+      signOutAndSignIn: 'Sign out & sign in',
+      remoteFailureHint: 'Check the gateway URL and sign-in under Gateway settings, or switch to the local gateway.',
       hideRecentLogs: 'Hide recent logs',
       showRecentLogs: 'Show recent logs',
       signedInTitle: 'Signed in',
@@ -1470,7 +1475,10 @@ export const en: Translations = {
     customPlaceholder: '0 9 * * * or weekdays at 9am',
     customHint: 'Cron expression, or phrases like "every hour" or "weekdays at 9am".',
     optional: 'Optional',
+    promptRequired: 'Prompt is required.',
     promptScheduleRequired: 'Prompt and schedule are required.',
+    scheduleRequired: 'Schedule is required.',
+    scriptOnlyEditHint: 'Script-only job (no AI prompt). Job id:',
     saveChanges: 'Save changes',
     createAction: 'Create cron'
   },
@@ -1930,6 +1938,10 @@ export const en: Translations = {
     featuredPitch: 'One subscription, 300+ frontier models — the recommended way to run Hermes',
     openRouterPitch: 'One key, hundreds of models — a solid default',
     apiKeyOptions: {
+      fireworks: {
+        short: 'direct model API',
+        description: 'Direct access to models hosted by Fireworks AI.'
+      },
       openrouter: {
         short: 'one key, many models',
         description: 'Hosts hundreds of models behind a single key. Good default for new installs.'
@@ -2032,7 +2044,9 @@ export const en: Translations = {
       low: 'Low',
       medium: 'Medium',
       high: 'High',
+      xhigh: 'Extra High',
       max: 'Max',
+      ultra: 'Ultra',
       updateFailed: 'Model option update failed',
       fastFailed: 'Fast mode update failed'
     },
@@ -2310,6 +2324,7 @@ export const en: Translations = {
       other: 'Other (type your answer)',
       placeholder: 'Type your answer…',
       skip: 'Skip',
+      skipped: 'Skipped',
       continueLabel: 'Continue'
     },
     tool: {
