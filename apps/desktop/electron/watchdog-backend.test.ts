@@ -50,8 +50,10 @@ describe('resolveWatchdogPrewarmedBackend', () => {
       const url = String(input)
       assert.match(url, /\/api\/sessions$/)
       assert.equal((init?.headers as Record<string, string>)?.Authorization, 'Bearer abc')
+
       return { ok: true }
     })
+
     vi.stubGlobal('fetch', fetchMock)
 
     const got = await resolveWatchdogPrewarmedBackend({
@@ -82,9 +84,11 @@ describe('resolveWatchdogPrewarmedBackend', () => {
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input)
+
         if (url.endsWith('/api/status')) {
           return { ok: true }
         }
+
         return { ok: false, status: 401 }
       })
     )

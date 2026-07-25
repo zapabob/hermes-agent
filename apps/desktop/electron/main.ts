@@ -174,7 +174,6 @@ import {
 import { isOfficialSshRemote, OFFICIAL_REPO_HTTPS_URL } from './update-remote'
 import { spawnUpdaterProcess } from './updater-process'
 import { fetchMarketplaceThemes, searchMarketplaceThemes } from './vscode-marketplace'
-import { resolveWatchdogPrewarmedBackend } from './watchdog-backend'
 import {
   computeWindowOptions,
   debounce,

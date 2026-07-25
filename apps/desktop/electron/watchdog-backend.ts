@@ -43,6 +43,7 @@ function readManifest(): Record<string, unknown> | null {
  */
 async function probeAuthenticatedSessions(baseUrl: string, token: string, timeoutMs: number) {
   const url = `${String(baseUrl || '').replace(/\/+$/, '')}/api/sessions`
+
   const res = await fetch(url, {
     headers: {
       Authorization: `Bearer ${token}`,
@@ -116,9 +117,4 @@ async function resolveWatchdogPrewarmedBackend(
   }
 }
 
-export {
-  DEFAULT_PROBE_TIMEOUT_MS,
-  probeAuthenticatedSessions,
-  resolveWatchdogPrewarmedBackend,
-  watchdogManifestPath
-}
+export { DEFAULT_PROBE_TIMEOUT_MS, probeAuthenticatedSessions, resolveWatchdogPrewarmedBackend, watchdogManifestPath }
