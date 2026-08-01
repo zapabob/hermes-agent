@@ -8432,9 +8432,7 @@ async function startHermes() {
     // of cold-spawning another serve --port 0. This is how shortcut launches
     // without HERMES_DESKTOP_REMOTE_* still attach to managed :9119.
     const prewarmed = await resolveWatchdogPrewarmedBackend({
-      hermesRoot: process.env.HERMES_DESKTOP_HERMES_ROOT
-        ? path.resolve(process.env.HERMES_DESKTOP_HERMES_ROOT)
-        : null,
+      hermesRoot: process.env.HERMES_DESKTOP_HERMES_ROOT ? path.resolve(process.env.HERMES_DESKTOP_HERMES_ROOT) : null,
       platform: process.platform,
       timeoutMs: 5_000
     })
