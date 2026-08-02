@@ -43,6 +43,7 @@ vi.mock('@/hermes', () => ({
 
 const {
   maybeNotifyUpdateAvailable,
+  dismissUpdateReminder,
   checkBackendUpdates,
   $backendUpdateStatus,
   applyBackendUpdate,
@@ -121,6 +122,19 @@ describe('maybeNotifyUpdateAvailable', () => {
 
   it('does nothing when already up to date', () => {
     maybeNotifyUpdateAvailable(status({ behind: 0 }))
+    expect(notifySpy).not.toHaveBeenCalled()
+  })
+
+  it('stays quiet after dismissUpdateReminder (overlay「後で」)', () => {
+    maybeNotifyUpdateAvailable(status())
+    expect(notifySpy).toHaveBeenCalledTimes(1)
+    notifySpy.mockClear()
+    dismissSpy.mockClear()
+
+    dismissUpdateReminder()
+    expect(dismissSpy).toHaveBeenCalledWith('desktop-update-available')
+
+    maybeNotifyUpdateAvailable(status({ targetSha: 'sha-b', behind: 9 }))
     expect(notifySpy).not.toHaveBeenCalled()
   })
 })

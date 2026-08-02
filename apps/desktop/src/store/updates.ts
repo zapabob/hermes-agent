@@ -87,6 +87,18 @@ function isUpdateToastSnoozed(): boolean {
   return Number.isFinite(until) && Date.now() < until
 }
 
+/**
+ * User said "maybe later" (or closed the updates overlay while an update is
+ * still available). Mirror toast-dismiss: start the cooldown and clear any
+ * lingering gift toast so focus/poll rechecks don't immediately re-nag.
+ * Closing without this left the overlay feeling "broken" — click Later, then
+ * the same prompt returns on the next checkUpdates().
+ */
+export function dismissUpdateReminder(): void {
+  snoozeUpdateToast()
+  dismissNotification(UPDATE_TOAST_ID)
+}
+
 // Must match tui_gateway's DESKTOP_BACKEND_CONTRACT that this build was written
 // against. The backend reports its own value in session runtime info; a lower
 // value (or none — a pre-GUI checkout) means GUI<->backend skew.

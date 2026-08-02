@@ -33,6 +33,7 @@ import {
   applyUpdates,
   checkBackendUpdates,
   checkUpdates,
+  dismissUpdateReminder,
   resetUpdateApplyState,
   setUpdateOverlayOpen,
   type UpdateApplyState
@@ -83,6 +84,12 @@ export function UpdatesOverlay() {
   const handleClose = (next: boolean) => {
     if (phase === 'applying') {
       return
+    }
+
+    // 「後で」/ dismiss while an update is still waiting must snooze the gift
+    // toast — otherwise checkUpdates on focus/poll re-opens the same nag.
+    if (!next && phase === 'idle' && updateAvailable) {
+      dismissUpdateReminder()
     }
 
     setUpdateOverlayOpen(next)
