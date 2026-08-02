@@ -60,7 +60,12 @@ from agent.conversation_compression import (
 from agent.conversation_loop import INTERRUPT_WAITING_FOR_MODEL_PREFIX
 from agent.i18n import t
 from hermes_cli.config import cfg_get
-from hermes_cli.fallback_config import get_fallback_chain, resolve_fallback_chain
+from hermes_cli.fallback_config import get_fallback_chain
+
+try:
+    from hermes_cli.fallback_config import resolve_fallback_chain
+except ImportError:  # pragma: no cover - mixed/partial checkout shim
+    resolve_fallback_chain = get_fallback_chain
 
 # --- Agent cache tuning ---------------------------------------------------
 # Bounds the per-session AIAgent cache to prevent unbounded growth in

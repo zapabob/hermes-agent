@@ -50,7 +50,15 @@ logger = logging.getLogger(__name__)
 # Suppress startup messages for clean CLI experience
 os.environ["HERMES_QUIET"] = "1"  # Our own modules
 
-from hermes_cli.fallback_config import get_fallback_chain, resolve_fallback_chain
+from hermes_cli.fallback_config import get_fallback_chain
+
+try:
+    from hermes_cli.fallback_config import resolve_fallback_chain
+except ImportError:  # pragma: no cover - mixed/partial checkout shim
+    # Older trees only exported get_fallback_chain; Desktop/gateway callers that
+    # expect resolve_fallback_chain would otherwise crash at import time.
+    resolve_fallback_chain = get_fallback_chain
+
 from hermes_cli.cli_agent_setup_mixin import CLIAgentSetupMixin
 from hermes_cli.cli_commands_mixin import CLICommandsMixin
 from hermes_cli.cli_billing_mixin import CLIBillingMixin

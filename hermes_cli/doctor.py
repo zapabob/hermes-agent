@@ -934,6 +934,39 @@ def run_doctor(args):
             check_ok(name, "(optional)")
         except ImportError:
             check_warn(name, "(optional, not installed)")
+
+    # Mixed/partial checkouts (Desktop pointing at an older hermes root while
+    # newer gateway/TUI code is loaded) previously crashed prompts with:
+    #   ImportError: cannot import name 'resolve_fallback_chain'
+    # Surface that API gap here so `hermes doctor` points at git pull / root pin.
+    try:
+        from hermes_cli import fallback_config as _fb_cfg
+
+        if not hasattr(_fb_cfg, "resolve_fallback_chain"):
+            _fail_and_issue(
+                "fallback_config.resolve_fallback_chain",
+                "(missing — LLM provider fallback will fail)",
+                "Update this hermes-agent checkout to current main "
+                "(git pull) or point Desktop at HERMES_DESKTOP_HERMES_ROOT "
+                "that includes resolve_fallback_chain.",
+                issues,
+            )
+        elif not hasattr(_fb_cfg, "get_fallback_chain"):
+            _fail_and_issue(
+                "fallback_config.get_fallback_chain",
+                "(missing)",
+                "fallback_config.py is incomplete — reinstall or git checkout hermes_cli/fallback_config.py",
+                issues,
+            )
+        else:
+            check_ok("fallback_config API", "(get + resolve)")
+    except ImportError as exc:
+        _fail_and_issue(
+            "fallback_config",
+            f"(import failed: {exc})",
+            "hermes_cli.fallback_config could not be imported",
+            issues,
+        )
     
     _section("Configuration Files")
     # Managed scope (administrator-pinned config/env), when present.

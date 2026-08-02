@@ -5841,7 +5841,10 @@ def _load_fallback_model():
     (deduped on provider/model/base_url), then NVIDIA/Nous dynamic entries
     expanded for runtime failover.
     """
-    from hermes_cli.fallback_config import resolve_fallback_chain
+    try:
+        from hermes_cli.fallback_config import resolve_fallback_chain
+    except ImportError:  # pragma: no cover - mixed/partial checkout shim
+        from hermes_cli.fallback_config import get_fallback_chain as resolve_fallback_chain
 
     return resolve_fallback_chain(_load_cfg())
 
