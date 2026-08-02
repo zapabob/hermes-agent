@@ -246,15 +246,52 @@ function New-HermesPowerShellScriptShortcut {
         -IconLocation "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe,0"
 }
 
+function Get-ManagedHermesAgentRoot {
+    if (-not $env:LOCALAPPDATA) {
+        return $null
+    }
+    return Join-Path $env:LOCALAPPDATA "hermes\hermes-agent"
+}
+
+function Test-IsManagedHermesAgentRoot {
+    param([string]$RepoRoot)
+
+    $managed = Get-ManagedHermesAgentRoot
+    if (-not $managed) {
+        return $false
+    }
+
+    try {
+        $a = [System.IO.Path]::GetFullPath($RepoRoot).TrimEnd('\')
+        $b = [System.IO.Path]::GetFullPath($managed).TrimEnd('\')
+        return ($a -ieq $b)
+    }
+    catch {
+        return $false
+    }
+}
+
 function Resolve-PackagedHermesDesktop {
     param([string]$RepoRoot)
 
-    $candidates = @(
-        (Join-Path $env:LOCALAPPDATA "hermes\hermes-agent\apps\desktop\release\win-unpacked\Hermes.exe"),
-        (Join-Path $RepoRoot "apps\desktop\release\win-unpacked\Hermes.exe")
-    )
+    # Dev checkouts (Documents, clones): prefer THAT tree's win-unpacked first so a
+    # stale %LOCALAPPDATA% Hermes.exe does not win and keep Client at cNNNN.
+    # Managed install root: keep LOCALAPPDATA packaged exe as primary.
+    $candidates = if (Test-IsManagedHermesAgentRoot -RepoRoot $RepoRoot) {
+        @(
+            (Join-Path $env:LOCALAPPDATA "hermes\hermes-agent\apps\desktop\release\win-unpacked\Hermes.exe"),
+            (Join-Path $RepoRoot "apps\desktop\release\win-unpacked\Hermes.exe")
+        )
+    }
+    else {
+        @(
+            (Join-Path $RepoRoot "apps\desktop\release\win-unpacked\Hermes.exe"),
+            (Join-Path $env:LOCALAPPDATA "hermes\hermes-agent\apps\desktop\release\win-unpacked\Hermes.exe")
+        )
+    }
+
     foreach ($exe in $candidates) {
-        if (Test-Path -LiteralPath $exe) {
+        if ($exe -and (Test-Path -LiteralPath $exe)) {
             return $exe
         }
     }
@@ -287,28 +324,39 @@ function New-HermesDesktopShortcut {
         [string]$LinkPath,
         [string]$RepoRoot,
         [string]$HermesHome,
-        [string]$StartScript
+        [string]$StartScript,
+        [switch]$PreferSource
     )
 
-    # Prefer packaged Hermes.exe (.lnk -> exe + Hermes icon), not a PowerShell/.ps1 wrapper.
-    $hermesExe = Resolve-PackagedHermesDesktop -RepoRoot $RepoRoot
-    if ($hermesExe) {
-        $workDir = Split-Path -Parent $hermesExe
-        $icon = Resolve-HermesDesktopIcon -RepoRoot $RepoRoot -HermesExe $hermesExe
-        return New-HermesShortcut `
-            -LinkPath $LinkPath `
-            -TargetPath $hermesExe `
-            -Arguments "" `
-            -WorkingDirectory $workDir `
-            -Description "Hermes Desktop (packaged Hermes.exe; HERMES_DESKTOP_* set by Electron/main)" `
-            -IconLocation $icon `
-            -WindowStyle 1
+    # Dev / Documents checkouts: always launch via start-hermes-desktop.ps1 so
+    # HERMES_DESKTOP_HERMES_ROOT pins the tree you just pulled. Packaged
+    # %LOCALAPPDATA%\...\Hermes.exe ignores Documents and keeps showing cNNNN.
+    # Managed install: keep .lnk → Hermes.exe when present.
+    $useSource = $PreferSource -or -not (Test-IsManagedHermesAgentRoot -RepoRoot $RepoRoot)
+
+    if (-not $useSource) {
+        $hermesExe = Resolve-PackagedHermesDesktop -RepoRoot $RepoRoot
+        if ($hermesExe) {
+            $workDir = Split-Path -Parent $hermesExe
+            $icon = Resolve-HermesDesktopIcon -RepoRoot $RepoRoot -HermesExe $hermesExe
+            return New-HermesShortcut `
+                -LinkPath $LinkPath `
+                -TargetPath $hermesExe `
+                -Arguments "" `
+                -WorkingDirectory $workDir `
+                -Description "Hermes Desktop (packaged Hermes.exe; HERMES_DESKTOP_* set by Electron/main)" `
+                -IconLocation $icon `
+                -WindowStyle 1
+        }
     }
 
-    # Fallback: source launch via start-hermes-desktop.ps1 when packaged exe is missing.
     $hermesIcon = Join-Path $RepoRoot ".venv\Scripts\hermes.exe"
+    $packagedForIcon = Resolve-PackagedHermesDesktop -RepoRoot $RepoRoot
     $icon = if (Test-Path -LiteralPath $hermesIcon) {
         "$hermesIcon,0"
+    }
+    elseif ($packagedForIcon) {
+        "$packagedForIcon,0"
     }
     else {
         "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe,0"
@@ -319,7 +367,7 @@ function New-HermesDesktopShortcut {
         -TargetPath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
         -Arguments "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$StartScript`" -HermesRoot `"$RepoRoot`" -Cwd `"$RepoRoot`" -HermesHome `"$HermesHome`"" `
         -WorkingDirectory $RepoRoot `
-        -Description "Hermes Desktop connected to the canonical source checkout" `
+        -Description "Hermes Desktop → source checkout ($RepoRoot)" `
         -IconLocation $icon `
         -WindowStyle 7
 }

@@ -157,6 +157,13 @@ if ($docsFinal -ne $managedFinal) {
     exit 2
 }
 
-Write-Step "Trees match. Restart Hermes Desktop (packaged Hermes.exe or hermes desktop)."
-Write-Host "  Packaged tip: $env:LOCALAPPDATA\hermes\hermes-agent\apps\desktop\release\win-unpacked\Hermes.exe"
+Write-Step "Trees match. Retarget Desktop shortcuts to Documents (source launch)."
+$retarget = Join-Path $PSScriptRoot "Retarget-HermesDesktopShortcut.ps1"
+if (Test-Path -LiteralPath $retarget) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $retarget -RepoRoot $DocsRoot
+}
+else {
+    Write-Warning "Retarget script missing — run scripts\windows\Retarget-HermesDesktopShortcut.ps1 after pull"
+}
+Write-Step "Restart via Desktop\Hermes.lnk (not the old LOCALAPPDATA Hermes.exe)."
 exit 0
