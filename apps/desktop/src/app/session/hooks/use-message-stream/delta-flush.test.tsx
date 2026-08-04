@@ -9,8 +9,9 @@ import { createClientSessionState } from '@/lib/chat-runtime'
 
 import { useSessionStateCache } from '../use-session-state-cache'
 
-import { useMessageStream } from './index'
 import { STREAM_DELTA_FLUSH_MS } from './utils'
+
+import { useMessageStream } from './index'
 
 const SID = 'session-1'
 let appendAssistantDelta: ((sessionId: string, delta: string) => void) | null = null
