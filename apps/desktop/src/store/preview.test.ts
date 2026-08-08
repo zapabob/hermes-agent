@@ -75,10 +75,7 @@ describe('preview store', () => {
     const urlTabs = $previewTabs.get().filter(tab => tab.target.kind === 'url')
 
     expect(urlTabs).toHaveLength(2)
-    expect(urlTabs.map(tab => tab.target.url)).toEqual([
-      'https://news.ycombinator.com',
-      'https://www.reddit.com'
-    ])
+    expect(urlTabs.map(tab => tab.target.url)).toEqual(['https://news.ycombinator.com', 'https://www.reddit.com'])
     expect($rightRailActiveTabId.get()).toBe(urlTabs[1].id)
   })
 
