@@ -141,6 +141,7 @@ describe('loadArtifactsForSessions', () => {
       makeSession({ id: 'session-2' }),
       makeSession({ id: 'session-3' })
     ]
+
     const callOrder: string[] = []
     let activeLoads = 0
     let maxActiveLoads = 0
