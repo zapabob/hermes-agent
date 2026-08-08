@@ -28,6 +28,9 @@ func TestParseReadyPortLine(t *testing.T) {
 }
 
 func TestBuildServeCommandIncludesSkipBuild(t *testing.T) {
+	if DefaultManagedBackendPort != 9118 {
+		t.Fatalf("DefaultManagedBackendPort = %d, want 9118", DefaultManagedBackendPort)
+	}
 	dir := t.TempDir()
 	venvPy := filepath.Join(dir, ".venv", "Scripts")
 	if err := os.MkdirAll(venvPy, 0o755); err != nil {
@@ -174,15 +177,29 @@ func TestBackendManagerWriteReadManifest(t *testing.T) {
 	if err := bm.publishManifestLocked(12345, 999); err != nil {
 		t.Fatal(err)
 	}
+	bm.mu.Lock()
+	bm.token = "updated"
+	bm.mu.Unlock()
+	if err := bm.publishManifestLocked(23456, 1000); err != nil {
+		t.Fatal(err)
+	}
 	got, err := bm.readManifest()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Port != 12345 || got.Token != "abc" || !got.Managed {
+	if got.Port != 23456 || got.Token != "updated" || !got.Managed {
 		t.Fatalf("unexpected manifest: %+v", got)
 	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), ".tmp") {
+			t.Fatalf("temporary manifest file left behind: %s", entry.Name())
+		}
+	}
 }
-
 
 func TestWaitManagedPortClearedEmptyPort(t *testing.T) {
 	if !waitManagedPortCleared(0, time.Second, nil) {

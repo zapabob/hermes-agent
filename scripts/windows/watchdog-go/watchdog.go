@@ -18,15 +18,16 @@ type cycleResult struct {
 }
 
 type WatchdogState struct {
-	UpdatedAt               string       `json:"updatedAt"`
-	WatchdogPID             int          `json:"watchdogPid"`
-	Paused                  bool         `json:"paused"`
-	Result                  cycleResult  `json:"result"`
-	ConsecutiveBackendFails int          `json:"consecutiveBackendFails"`
-	PackagedExe             string       `json:"packagedExe,omitempty"`
-	ListenAddr              string       `json:"listenAddr,omitempty"`
-	TsnetHostname           string       `json:"tsnetHostname,omitempty"`
-	TsnetEnabled            bool         `json:"tsnetEnabled"`
+	UpdatedAt               string      `json:"updatedAt"`
+	WatchdogPID             int         `json:"watchdogPid"`
+	Paused                  bool        `json:"paused"`
+	Result                  cycleResult `json:"result"`
+	ConsecutiveBackendFails int         `json:"consecutiveBackendFails"`
+	PackagedExe             string      `json:"packagedExe,omitempty"`
+	ListenAddr              string      `json:"listenAddr,omitempty"`
+	TsnetHostname           string      `json:"tsnetHostname,omitempty"`
+	TsnetEnabled            bool        `json:"tsnetEnabled"`
+	DesktopManaged          bool        `json:"desktopManaged"`
 }
 
 type Watchdog struct {
@@ -46,11 +47,12 @@ func NewWatchdog(cfg Config, logger *Logger) *Watchdog {
 		logger: logger,
 		back:   NewBackendManager(cfg, logger),
 		lastState: WatchdogState{
-			WatchdogPID: os.Getpid(),
-			PackagedExe: cfg.PackagedExe,
-			ListenAddr:  cfg.ListenAddr,
-			TsnetHostname: cfg.TsnetHostname,
-			TsnetEnabled:  cfg.EnableTsnet && cfg.TsAuthKey != "",
+			WatchdogPID:    os.Getpid(),
+			PackagedExe:    cfg.PackagedExe,
+			ListenAddr:     cfg.ListenAddr,
+			TsnetHostname:  cfg.TsnetHostname,
+			TsnetEnabled:   cfg.EnableTsnet && cfg.TsAuthKey != "",
+			DesktopManaged: cfg.ManageDesktop,
 		},
 	}
 }
@@ -106,12 +108,39 @@ func (w *Watchdog) saveState(result cycleResult) {
 		ListenAddr:              w.cfg.ListenAddr,
 		TsnetHostname:           w.cfg.TsnetHostname,
 		TsnetEnabled:            w.cfg.EnableTsnet && w.cfg.TsAuthKey != "",
+		DesktopManaged:          w.cfg.ManageDesktop,
 	}
 	raw, err := json.MarshalIndent(w.lastState, "", "  ")
 	if err != nil {
 		return
 	}
 	_ = os.WriteFile(w.cfg.StatePath, raw, 0o644)
+}
+
+func cycleResultWithBackend(desktop string, backend *backendInfo) cycleResult {
+	if backend == nil {
+		return cycleResult{Desktop: desktop, Backend: "down"}
+	}
+	return cycleResult{
+		Desktop:     desktop,
+		Backend:     "up",
+		BackendPID:  backend.PID,
+		BackendPort: backend.Port,
+	}
+}
+
+// shouldLaunchDesktop treats a failed process probe as unknown, not as proof
+// that Desktop has stopped. Desktop supervision is an explicit operator choice
+// because a headless host may intentionally run only a prewarmed backend.
+func shouldLaunchDesktop(manageDesktop bool, desktopErr error, desktopCount int) bool {
+	return manageDesktop && desktopErr == nil && desktopCount == 0
+}
+
+func shouldRestartDesktop(manageDesktop bool, failCount, failThreshold int) bool {
+	if failThreshold < 1 {
+		failThreshold = 1
+	}
+	return manageDesktop && failCount >= failThreshold
 }
 
 func (w *Watchdog) RunCycle() cycleResult {
@@ -133,7 +162,20 @@ func (w *Watchdog) RunCycle() cycleResult {
 	}
 	backend := w.findAnyHealthyBackend()
 
-	if derr != nil || len(desktop) == 0 {
+	if derr != nil {
+		w.logger.Infof("Desktop probe unavailable: %v; leaving Desktop untouched", derr)
+		res := cycleResultWithBackend("unknown", backend)
+		w.saveState(res)
+		return res
+	}
+
+	if len(desktop) == 0 {
+		if !shouldLaunchDesktop(w.cfg.ManageDesktop, derr, len(desktop)) {
+			w.logger.Infof("Desktop absent; automatic launch disabled")
+			res := cycleResultWithBackend("absent", backend)
+			w.saveState(res)
+			return res
+		}
 		// Avoid Hermes.exe proliferation: cold Desktop without an auth-ok
 		// prewarm manifest times out at 90s and dies, then we relaunch forever.
 		if w.cfg.PrewarmBackend && !managedReady {
@@ -157,7 +199,7 @@ func (w *Watchdog) RunCycle() cycleResult {
 		return res
 	}
 
-		if backend == nil {
+	if backend == nil {
 		w.logger.Infof("Desktop UP but backend DOWN — starting managed serve")
 		if _, err := w.back.EnsureHealthy(); err != nil {
 			w.logger.Infof("managed backend assist failed: %v", err)
@@ -171,7 +213,7 @@ func (w *Watchdog) RunCycle() cycleResult {
 		fails := w.failCount
 		w.mu.Unlock()
 		w.logger.Infof("Desktop UP but backend still DOWN (fail=%d/%d)", fails, w.cfg.FailThreshold)
-		if fails >= w.cfg.FailThreshold {
+		if shouldRestartDesktop(w.cfg.ManageDesktop, fails, w.cfg.FailThreshold) {
 			restartPackagedDesktop(w.cfg, w.logger, w.back)
 			w.mu.Lock()
 			w.failCount = 0
@@ -179,6 +221,9 @@ func (w *Watchdog) RunCycle() cycleResult {
 			res := cycleResult{Desktop: "restarted", Backend: "respawning"}
 			w.saveState(res)
 			return res
+		}
+		if fails >= w.cfg.FailThreshold {
+			w.logger.Infof("Desktop restart withheld because -manage-desktop is disabled")
 		}
 		res := cycleResult{Desktop: "up", Backend: "down"}
 		w.saveState(res)
@@ -200,7 +245,7 @@ func (w *Watchdog) RunCycle() cycleResult {
 }
 
 func (w *Watchdog) RunLoop(stop <-chan struct{}) {
-	w.logger.Infof("watchdog loop interval=%ds threshold=%d exe=%s", w.cfg.IntervalSec, w.cfg.FailThreshold, w.cfg.PackagedExe)
+	w.logger.Infof("watchdog loop interval=%ds threshold=%d manageDesktop=%t exe=%s", w.cfg.IntervalSec, w.cfg.FailThreshold, w.cfg.ManageDesktop, w.cfg.PackagedExe)
 	for {
 		w.RunCycle()
 		if w.cfg.Once {

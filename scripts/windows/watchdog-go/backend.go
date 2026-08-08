@@ -17,9 +17,10 @@ import (
 
 const desktopBackendManifestName = "desktop-backend.json"
 
-// DefaultManagedBackendPort matches Desktop local serve expectation (:9119).
-// 9120 remains reserved for the operator dashboard UI.
-const DefaultManagedBackendPort = 9119
+// DefaultManagedBackendPort is reserved for the watchdog-managed prewarmed
+// backend. Keep it separate from the Desktop local serve (:9119) and the
+// operator dashboard (:9120).
+const DefaultManagedBackendPort = 9118
 
 var backendReadyRE = regexp.MustCompile(`^HERMES_(?:BACKEND|DASHBOARD)_READY port=(\d+)`)
 
@@ -204,7 +205,31 @@ func (bm *BackendManager) writeManifest(manifest DesktopBackendManifest) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(bm.ManifestPath(), raw, 0o644)
+
+	path := bm.ManifestPath()
+	dir := filepath.Dir(path)
+	if err := ensureDir(dir); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, desktopBackendManifestName+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+	}()
+	if _, err := tmp.Write(raw); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	// Desktop reads this file while it starts. Replacing it in one rename keeps
+	// a reader from observing a half-written JSON document and falling back to a
+	// slow, independent backend spawn.
+	return os.Rename(tmpPath, path)
 }
 
 func (bm *BackendManager) clearManifest() {

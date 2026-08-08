@@ -36,8 +36,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows\Start-Hermes
 | フラグ | 既定 | 説明 |
 |--------|------|------|
 | `-IntervalSec` | 20 | 監視周期 |
-| `-FailThreshold` | 2 | backend 連続失敗で Desktop 再起動 |
+| `-FailThreshold` | 2 | `-ManageDesktop` 時の backend 連続失敗しきい値 |
 | `-Once` | off | 1 周期だけ実行して終了 |
+| `-ManageDesktop` | off | 明示時のみ Desktop の起動・再起動を許可 |
+| `-HotSwap` | off | 候補 exe を検証ビルドし、watchdog だけを差し替えて `/health` を確認 |
 | `-NoTsnet` | off | tsnet を強制 OFF |
 | `-Listen` | 127.0.0.1:9920 | ローカル HTTP |
 
@@ -63,11 +65,11 @@ Admin 認証: `Authorization: Bearer <token>` または `X-Admin-Token: <token>`
 
 ## 監視ロジック
 
-1. **起動時 prewarm（非同期）** — HTTP / RunLoop 起動後に goroutine で managed `hermes serve --skip-build`（既定 `:9118`）を立ち上げ、`%LOCALAPPDATA%\HermesWatchdog\desktop-backend.json` に URL/token/port を公開。cold start で制御プレーンをブロックしない
-2. `Hermes.exe` 不在 → 管理 backend は reaping しない → Desktop 起動（manifest があれば `HERMES_DESKTOP_REMOTE_*` も注入）
-3. Desktop 生存 + backend 不在 → **Electron 再起動の前に** managed serve を起動/復旧
-4. 連続失敗が `-FailThreshold` 以上 → Desktop 強制再起動
-5. 予約 ops ポート (9120/8787/9119/…) は backend 判定・reap 対象外（従来どおり）
+1. **起動時 prewarm（非同期）** — HTTP / RunLoop 起動後に goroutine で managed `hermes serve --skip-build`（既定 `:9118`）を立ち上げ、`%LOCALAPPDATA%\HermesWatchdog\desktop-backend.json` に URL/token/port を原子的に公開する。cold start で制御プレーンをブロックしない
+2. 標準では `Hermes.exe` の不在を記録するだけで、Desktop を起動・再起動しない。headless 運用や手動起動の Desktop に干渉しないためである
+3. Desktop 生存 + backend 不在 → managed serve を起動・復旧する。回復しない場合も、標準では Desktop を停止しない
+4. `-ManageDesktop` を明示した場合のみ、Desktop 不在時の起動と、連続失敗が `-FailThreshold` 以上の再起動を許可する。WMI 取得失敗は停止と見なさず、Desktop には触れない
+5. 予約 ops ポート (9119/9120/8787/…) は backend 判定・reap 対象外。watchdog-managed serve は固定 `:9118` を使う
 
 ### Desktop ショートカット
 
@@ -79,8 +81,9 @@ Admin 認証: `Authorization: Bearer <token>` または `X-Admin-Token: <token>`
 |--------|------|------|
 | `-prewarm-backend` | on | serve の prewarm / 常時監督 |
 | `-managed-backend-port` | 9118 | watchdog 管理の固定 serve ポート（9120/8787/9119 とは別） |
-| `-backend-start-timeout` | 120 | `/api/status` 待ち (秒) |
-| `-backend-ready-timeout` | 45 | `/api/status` 待ち (秒) |
+| `-manage-desktop` | off | packaged Desktop の起動・再起動を明示的に許可 |
+| `-backend-start-timeout` | 300 | `/api/status` 待ち (秒) |
+| `-backend-ready-timeout` | 180 | 追加の `/api/status` 待ち (秒) |
 
 ## 監視ロジック（旧 PowerShell 版との差分）
 
@@ -89,6 +92,16 @@ Admin 認証: `Authorization: Bearer <token>` または `X-Admin-Token: <token>`
 - タスクマネージャで `hermes-watchdog.exe` を終了
 - または Admin API: `POST /api/v1/stop` + Bearer token
 - ロック: `%LOCALAPPDATA%\HermesWatchdog\watchdog.lock`
+
+## ホットスワップ
+
+次の実行は、候補 exe を `hermes-watchdog.next.exe` としてビルドし、既存 watchdog を graceful stop（管理トークン未設定時のみ強制停止）した後に原子的に置換する。`Hermes.exe`、既存の `hermes serve`、dashboard は停止しない。新しい watchdog の `/health` が制限時間内に応答しなければ、直前の exe に戻して起動を試みる。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows\Start-HermesGoWatchdog.ps1 -HotSwap -RunBuildTests
+```
+
+別の作業ツリーで候補をビルドし、稼働用 exe だけを差し替える場合は `-RuntimeExe <live hermes-watchdog.exe path>` を `-HotSwap` と併用する。
 
 ## スタック再起動との関係
 

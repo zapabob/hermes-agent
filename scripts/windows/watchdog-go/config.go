@@ -13,6 +13,7 @@ type Config struct {
 	FailThreshold          int
 	Once                   bool
 	PrewarmBackend         bool
+	ManageDesktop          bool
 	BackendStartTimeoutSec int
 	BackendReadyTimeoutSec int
 	ManagedBackendPort     int

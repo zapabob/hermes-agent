@@ -44,7 +44,7 @@ func getDesktopProcesses() ([]win32Process, error) {
 
 // reservedOpsPorts are stack-owned listeners — never treat as Desktop's ephemeral hermes serve.
 var reservedOpsPorts = map[int]struct{}{
-	8080: {}, 8081: {}, 8646: {}, 8765: {}, 8787: {}, 9120: {}, 9920: {}, 18794: {},
+	8080: {}, 8081: {}, 8646: {}, 8765: {}, 8787: {}, 9119: {}, 9120: {}, 9920: {}, 18794: {},
 }
 
 func isReservedOpsPort(port int) bool {
@@ -67,7 +67,8 @@ func isDesktopBackendCommandLine(cl string) bool {
 		return false
 	}
 	// Explicit ops dashboard / fixed ports are not Desktop-spawned backends.
-	if strings.Contains(cl, "--port 9120") || strings.Contains(cl, "--port=9120") ||
+	if strings.Contains(cl, "--port 9119") || strings.Contains(cl, "--port=9119") ||
+		strings.Contains(cl, "--port 9120") || strings.Contains(cl, "--port=9120") ||
 		strings.Contains(cl, "--port 8787") || strings.Contains(cl, "--port=8787") {
 		return false
 	}

@@ -8,7 +8,7 @@ import (
 
 func TestRequireAdminRejectsEmptyToken(t *testing.T) {
 	cfg := Config{AdminToken: ""}
-	wd := NewWatchdog(cfg, NewLogger(t.TempDir() + "/test.log"))
+	wd := NewWatchdog(cfg, NewLogger(t.TempDir()+"/test.log"))
 	srv := NewHTTPServer(cfg, wd, func() {})
 	req := httptest.NewRequest("POST", "/api/v1/pause", nil)
 	req.Header.Set("Authorization", "Bearer anything")
@@ -49,7 +49,7 @@ func TestRequireAdminAcceptsBearer(t *testing.T) {
 }
 
 func TestStatusJSON(t *testing.T) {
-	cfg := Config{AdminToken: "x", ListenAddr: "127.0.0.1:9920"}
+	cfg := Config{AdminToken: "x", ListenAddr: "127.0.0.1:9920", ManageDesktop: true}
 	wd := NewWatchdog(cfg, NewLogger(t.TempDir()+"/test.log"))
 	srv := NewHTTPServer(cfg, wd, func() {})
 	req := httptest.NewRequest("GET", "/api/status", nil)
@@ -65,6 +65,9 @@ func TestStatusJSON(t *testing.T) {
 	if state.ListenAddr != cfg.ListenAddr {
 		t.Fatalf("unexpected listen addr %q", state.ListenAddr)
 	}
+	if !state.DesktopManaged {
+		t.Fatal("expected desktop management state")
+	}
 }
 
 func TestIsDesktopBackendCommandLine(t *testing.T) {
@@ -74,6 +77,7 @@ func TestIsDesktopBackendCommandLine(t *testing.T) {
 	}{
 		{"python -m hermes_cli.main serve", true},
 		{"python -m hermes_cli.main serve --host 127.0.0.1 --port 0", true},
+		{"python -m hermes_cli.main serve --port 9119", false},
 		{"python -m hermes_cli.main serve --port 9120", false},
 		{"python -m hermes_cli.main dashboard --no-open", true},
 		{"python -m hermes_cli.main gateway start", false},
@@ -88,8 +92,8 @@ func TestIsDesktopBackendCommandLine(t *testing.T) {
 }
 
 func TestIsReservedOpsPort(t *testing.T) {
-	if !isReservedOpsPort(9120) || !isReservedOpsPort(8787) {
-		t.Fatal("expected 9120/8787 reserved")
+	if !isReservedOpsPort(9119) || !isReservedOpsPort(9120) || !isReservedOpsPort(8787) {
+		t.Fatal("expected 9119/9120/8787 reserved")
 	}
 	if isReservedOpsPort(54321) {
 		t.Fatal("ephemeral port must not be reserved")
