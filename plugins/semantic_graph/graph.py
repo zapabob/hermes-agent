@@ -8,7 +8,7 @@ import uuid
 from typing import Any, Optional
 
 from .models import AUTHORITIES, EDGE_TYPES, NODE_TYPES, STATUSES, STRENGTH_LABELS
-from .sanitize import normalize_key, normalize_text, sanitize_metadata
+from .sanitize import normalize_key, normalize_text, sanitize_metadata, sanitize_text
 
 RATIONALE_REQUIRED = frozenset({"supports", "contradicts", "caused_by", "supersedes"})
 EVIDENCE_RELATIONS = frozenset({"supports", "contradicts", "mentions", "derived_from"})
@@ -261,6 +261,31 @@ def apply_fragment_to_store(
     model: str = "",
     fragment_id: Optional[str] = None,
 ) -> dict[str, Any]:
+    """Apply a fragment atomically, including its deduplication row."""
+    with store.transaction():
+        return _apply_fragment_to_store(
+            store,
+            run_id,
+            fragment,
+            producer_role=producer_role,
+            producer_type=producer_type,
+            producer_id=producer_id,
+            model=model,
+            fragment_id=fragment_id,
+        )
+
+
+def _apply_fragment_to_store(
+    store: Any,
+    run_id: str,
+    fragment: dict[str, Any],
+    *,
+    producer_role: str,
+    producer_type: str = "subagent",
+    producer_id: str = "",
+    model: str = "",
+    fragment_id: Optional[str] = None,
+) -> dict[str, Any]:
     """Validate then apply. Invalid fragments are not partially committed."""
     result = validate_fragment(fragment, store)
     if not result["valid"]:
@@ -424,9 +449,15 @@ def promote_strict(store: Any, run_id: str) -> dict[str, Any]:
             if verdict in {"reject", "fail"}:
                 reject.add(tid)
 
-    nodes = store.list_nodes(limit=5000)
-    # Only touch nodes that belong to this run via run_nodes — approximate by
-    # scanning all nodes and using evidence + authority rules.
+    nodes = store.list_nodes_for_run(run_id, limit=5000)
+    evaluations = store.list_evaluations_for_run(run_id)
+    for evaluation in evaluations:
+        target_id = str(evaluation.get("target_id") or "")
+        verdict = str(evaluation.get("verdict") or "")
+        if target_id and verdict in {"support", "pass"}:
+            support.add(target_id)
+        if target_id and verdict in {"reject", "fail"}:
+            reject.add(target_id)
     changed: list[dict[str, str]] = []
     for node in nodes:
         nid = node["node_id"]
@@ -440,7 +471,7 @@ def promote_strict(store: Any, run_id: str) -> dict[str, Any]:
         new_status = status
         if authority == "user" and has_ev and conf >= 0.70:
             new_status = "asserted"
-        elif authority != "user" and has_ev and conf >= 0.75 and nid in support:
+        elif authority != "user" and conf >= 0.75 and nid in support:
             new_status = "accepted"
         elif nid in reject:
             new_status = "rejected"

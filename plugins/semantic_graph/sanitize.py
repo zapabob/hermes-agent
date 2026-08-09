@@ -9,10 +9,19 @@ from dataclasses import dataclass
 from typing import Any
 
 SECRET_RE = re.compile(
-    r"(?i)(api[_-]?key|token|secret|password|passwd|authorization|bearer|cookie|session)"
-    r"\s*[:=]\s*[^\s`\"']{6,}"
+    r"(?i)(api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password|passwd|authorization|cookie|session)"
+    r"\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s`\"']+)"
 )
-BEARER_RE = re.compile(r"(?i)Authorization:\s*Bearer\s+\S+")
+# Match the complete header before generic assignment patterns can consume its
+# key.  A partial header redaction is a storage violation because the value may
+# still be recoverable from the remaining text.
+BEARER_RE = re.compile(r"(?i)(authorization\s*:\s*bearer\s+)[^\s,;]+")
+JSON_SECRET_RE = re.compile(
+    r"(?i)([\"'](?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password|passwd|authorization|cookie|session)[\"']\s*:\s*)([\"'][^\"']*[\"']|[^,}\s]+)"
+)
+ASSIGN_SECRET_RE = re.compile(
+    r"(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password|passwd|authorization|cookie|session)\s*[:=]\s*)(\"[^\"]*\"|'[^']*'|[^\s,;&]+)"
+)
 LONG_TOKEN_RE = re.compile(r"\b[A-Za-z0-9_\-]{32,}\b")
 EMAIL_RE = re.compile(r"\b[\w.%-]+@[\w.-]+\.[A-Za-z]{2,}\b")
 WIN_HOME_RE = re.compile(r"C:\\Users\\[^\\\s`\"]+", re.I)
@@ -54,8 +63,26 @@ def _redact(text: str) -> tuple[str, int]:
         count += 1
         return replacement
 
+    # Consume a complete bearer header before the core generic assignment
+    # redactor can split it into a key and a trailing value.
+    text = BEARER_RE.sub(lambda m: _bump(m, f"{m.group(1)}[REDACTED]"), text)
+
+    # Use Hermes' central redactor first at this persistence boundary. The
+    # plugin-specific passes below cover PII and remain available in minimal
+    # environments where the core module cannot be imported.
+    try:
+        from agent.redact import redact_sensitive_text
+        core_text = redact_sensitive_text(text, force=True, file_read=True)
+        if core_text != text:
+            count += 1
+        text = core_text
+    except Exception:
+        pass
+
+    text = BEARER_RE.sub(lambda m: _bump(m, f"{m.group(1)}[REDACTED]"), text)
+    text = JSON_SECRET_RE.sub(lambda m: _bump(m, f"{m.group(1)}[REDACTED]"), text)
+    text = ASSIGN_SECRET_RE.sub(lambda m: _bump(m, f"{m.group(1)}[REDACTED]"), text)
     text = SECRET_RE.sub(lambda m: _bump(m, f"{m.group(1)}=[REDACTED]"), text)
-    text = BEARER_RE.sub(lambda m: _bump(m, "Authorization: Bearer [REDACTED]"), text)
     text = EMAIL_RE.sub(lambda m: _bump(m, "[EMAIL_REDACTED]"), text)
     text = WIN_HOME_RE.sub(lambda m: _bump(m, "~"), text)
     text = MSYS_HOME_RE.sub(lambda m: _bump(m, "~"), text)
@@ -73,6 +100,24 @@ def sanitize_text(text: str, *, max_chars: int) -> SanitizedText:
         redacted = redacted[: max(0, max_chars - 1)] + "…"
         truncated = True
     return SanitizedText(text=redacted, redaction_count=count, truncated=truncated)
+
+
+def sanitize_value(value: Any, *, max_chars: int = 4000, depth: int = 0) -> Any:
+    """Sanitize arbitrary persistence-bound values without changing primitives."""
+    if depth > 6:
+        return "[TRUNCATED_DEPTH]"
+    if isinstance(value, str):
+        return sanitize_text(value, max_chars=max_chars).text
+    if isinstance(value, dict):
+        return {
+            sanitize_text(str(k), max_chars=128).text: sanitize_value(
+                v, max_chars=max_chars, depth=depth + 1
+            )
+            for k, v in list(value.items())[:64]
+        }
+    if isinstance(value, (list, tuple)):
+        return [sanitize_value(v, max_chars=max_chars, depth=depth + 1) for v in list(value)[:64]]
+    return value
 
 
 def sanitize_metadata(value: Any, *, max_bytes: int = _MAX_METADATA_BYTES) -> dict[str, Any]:

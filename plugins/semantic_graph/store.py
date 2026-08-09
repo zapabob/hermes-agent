@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import threading
 import uuid
@@ -11,6 +12,8 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Optional
+
+from .sanitize import sanitize_metadata, sanitize_value
 
 logger = logging.getLogger("hermes.plugins.semantic_graph")
 
@@ -229,6 +232,7 @@ class SemanticGraphStore:
         self.fts_enabled = False
         self._ready = False
         self._lock = threading.Lock()
+        self._local = threading.local()
 
     def ensure_ready(self) -> None:
         if self._ready:
@@ -243,6 +247,10 @@ class SemanticGraphStore:
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
+        active = getattr(self._local, "connection", None)
+        if active is not None:
+            yield active
+            return
         conn = sqlite3.connect(
             str(self.db_path),
             timeout=5.0,
@@ -258,6 +266,26 @@ class SemanticGraphStore:
             yield conn
         finally:
             conn.close()
+
+    @contextmanager
+    def transaction(self) -> Iterator[sqlite3.Connection]:
+        """Share one connection with nested operations and rollback atomically."""
+        self.ensure_ready()
+        active = getattr(self._local, "connection", None)
+        if active is not None:
+            yield active
+            return
+        with self._connect() as conn:
+            self._local.connection = conn
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield conn
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            finally:
+                self._local.connection = None
 
     def _migrate(self, conn: sqlite3.Connection) -> None:
         version = int(conn.execute("PRAGMA user_version").fetchone()[0])
@@ -309,6 +337,14 @@ class SemanticGraphStore:
         self.ensure_ready()
         run_id = new_id()
         now = _utcnow()
+        objective = sanitize_value(objective, max_chars=4000)
+        scope = sanitize_value(scope, max_chars=128)
+        title = sanitize_value(title, max_chars=500)
+        session_id = sanitize_value(session_id, max_chars=256)
+        turn_id = sanitize_value(turn_id, max_chars=256)
+        model = sanitize_value(model, max_chars=256)
+        platform = sanitize_value(platform, max_chars=256)
+        metadata = sanitize_metadata(metadata or {})
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO graph_runs("
@@ -345,6 +381,11 @@ class SemanticGraphStore:
         self.ensure_ready()
         artifact_id = artifact.get("artifact_id") or new_id()
         now = artifact.get("created_at") or _utcnow()
+        artifact = dict(artifact)
+        for key, limit in (("artifact_type", 128), ("title", 500), ("content", 12000), ("authority", 64), ("model", 256), ("platform", 256)):
+            if key in artifact:
+                artifact[key] = sanitize_value(artifact[key], max_chars=limit)
+        artifact["metadata"] = sanitize_metadata(artifact.get("metadata") or {})
         with self._connect() as conn:
             existing = conn.execute(
                 "SELECT artifact_id FROM artifacts "
@@ -407,6 +448,11 @@ class SemanticGraphStore:
 
     def upsert_node(self, node: dict[str, Any]) -> dict[str, Any]:
         self.ensure_ready()
+        node = dict(node)
+        for key, limit in (("node_type", 64), ("subtype", 128), ("label", 500), ("normalized_label", 500), ("summary", 4000), ("identity_key", 500), ("status", 32), ("authority", 64)):
+            if key in node:
+                node[key] = sanitize_value(node[key], max_chars=limit)
+        node["metadata"] = sanitize_metadata(node.get("metadata") or {})
         node_id = node["node_id"]
         now = _utcnow()
         with self._connect() as conn:
@@ -434,6 +480,17 @@ class SemanticGraphStore:
                         merged_meta[k] = v
                 if conflicts:
                     merged_meta["metadata_conflicts"] = conflicts
+                old_authority = str(existing["authority"])
+                new_authority = str(node.get("authority", old_authority))
+                authority_rank = {"assistant": 10, "subagent": 20, "tool": 30, "external": 40, "system": 50, "user": 60}
+                if authority_rank.get(old_authority, 0) > authority_rank.get(new_authority, 0):
+                    new_authority = old_authority
+                old_status = str(existing["status"])
+                new_status = str(node.get("status", old_status))
+                if old_status in {"accepted", "asserted"} and new_status == "candidate":
+                    new_status = old_status
+                if old_status in {"rejected", "superseded"} and new_status not in {"rejected", "superseded"}:
+                    new_status = old_status
                 conn.execute(
                     "UPDATE nodes SET subtype=?, label=?, normalized_label=?, summary=?, "
                     "identity_key=?, status=?, authority=?, confidence=?, salience=?, "
@@ -444,8 +501,8 @@ class SemanticGraphStore:
                         node.get("normalized_label", existing["normalized_label"]),
                         summary,
                         node.get("identity_key", existing["identity_key"]),
-                        node.get("status", existing["status"]),
-                        node.get("authority", existing["authority"]),
+                        new_status,
+                        new_authority,
                         conf,
                         float(node.get("salience", existing["salience"])),
                         _dumps(merged_meta),
@@ -492,6 +549,11 @@ class SemanticGraphStore:
 
     def upsert_edge(self, edge: dict[str, Any]) -> dict[str, Any]:
         self.ensure_ready()
+        edge = dict(edge)
+        for key, limit in (("edge_type", 64), ("relation_label", 128), ("status", 32), ("rationale", 2000)):
+            if key in edge:
+                edge[key] = sanitize_value(edge[key], max_chars=limit)
+        edge["metadata"] = sanitize_metadata(edge.get("metadata") or {})
         edge_id = edge["edge_id"]
         now = _utcnow()
         with self._connect() as conn:
@@ -547,6 +609,10 @@ class SemanticGraphStore:
 
     def insert_evidence(self, evidence: dict[str, Any]) -> str:
         self.ensure_ready()
+        evidence = dict(evidence)
+        for key, limit in (("relation", 64), ("quote", 2000)):
+            if key in evidence:
+                evidence[key] = sanitize_value(evidence[key], max_chars=limit)
         eid = evidence.get("evidence_id") or new_id()
         with self._connect() as conn:
             conn.execute(
@@ -572,6 +638,10 @@ class SemanticGraphStore:
 
     def insert_fragment(self, fragment: dict[str, Any]) -> dict[str, Any]:
         self.ensure_ready()
+        fragment = dict(fragment)
+        for key, limit in (("producer_role", 128), ("producer_type", 128), ("producer_id", 256), ("model", 256), ("payload_json", 50000), ("status", 32)):
+            if key in fragment:
+                fragment[key] = sanitize_value(fragment[key], max_chars=limit)
         fid = fragment.get("fragment_id") or new_id()
         with self._connect() as conn:
             try:
@@ -610,6 +680,11 @@ class SemanticGraphStore:
 
     def insert_evaluation(self, evaluation: dict[str, Any]) -> str:
         self.ensure_ready()
+        evaluation = dict(evaluation)
+        for key, limit in (("target_type", 64), ("evaluator_role", 128), ("verdict", 64), ("notes", 4000), ("suggested_revision", 8000)):
+            if key in evaluation:
+                evaluation[key] = sanitize_value(evaluation[key], max_chars=limit)
+        evaluation["criteria"] = sanitize_value(evaluation.get("criteria") or {}, max_chars=4000)
         eid = evaluation.get("evaluation_id") or new_id()
         with self._connect() as conn:
             conn.execute(
@@ -635,6 +710,11 @@ class SemanticGraphStore:
 
     def insert_event(self, event: dict[str, Any]) -> str:
         self.ensure_ready()
+        event = dict(event)
+        for key, limit in (("event_type", 128), ("actor_type", 64), ("actor_id", 256), ("session_id", 256), ("turn_id", 256), ("task_id", 256)):
+            if key in event:
+                event[key] = sanitize_value(event[key], max_chars=limit)
+        event["payload"] = sanitize_value(event.get("payload") or {}, max_chars=4000)
         eid = event.get("event_id") or new_id()
         with self._connect() as conn:
             conn.execute(
@@ -724,6 +804,55 @@ class SemanticGraphStore:
                 ).fetchall()
             return [dict(r) for r in rows]
 
+    def list_nodes_for_run(
+        self,
+        run_id: str,
+        *,
+        statuses: Optional[list[str]] = None,
+        node_types: Optional[list[str]] = None,
+        subtypes: Optional[list[str]] = None,
+        authorities: Optional[list[str]] = None,
+        limit: int = 5000,
+    ) -> list[dict[str, Any]]:
+        self.ensure_ready()
+        clauses = ["rn.run_id = ?"]
+        params: list[Any] = [run_id]
+        for column, values in (("n.status", statuses), ("n.node_type", node_types), ("n.subtype", subtypes), ("n.authority", authorities)):
+            if values:
+                clauses.append(f"{column} IN ({','.join('?' for _ in values)})")
+                params.extend(values)
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT n.* FROM nodes n JOIN run_nodes rn ON rn.node_id = n.node_id "
+                f"WHERE {' AND '.join(clauses)} ORDER BY n.updated_at DESC LIMIT ?",
+                (*params, max(1, limit)),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def list_edges_for_run(
+        self,
+        run_id: str,
+        *,
+        include_rejected: bool = False,
+        limit: int = 10000,
+    ) -> list[dict[str, Any]]:
+        self.ensure_ready()
+        status_clause = "" if include_rejected else " AND e.status NOT IN ('rejected','superseded')"
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT e.* FROM edges e JOIN run_edges re ON re.edge_id = e.edge_id "
+                f"WHERE re.run_id = ?{status_clause} ORDER BY e.updated_at DESC LIMIT ?",
+                (run_id, max(1, limit)),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+
+    def list_evaluations_for_run(self, run_id: str) -> list[dict[str, Any]]:
+        self.ensure_ready()
+        with self._connect() as conn:
+            rows = conn.execute("SELECT * FROM evaluations WHERE run_id=? ORDER BY created_at ASC", (run_id,)).fetchall()
+            return [dict(r) for r in rows]
+
     def list_artifacts(self, *, run_id: Optional[str] = None, limit: int = 200) -> list[dict[str, Any]]:
         self.ensure_ready()
         with self._connect() as conn:
@@ -761,6 +890,9 @@ class SemanticGraphStore:
         *,
         statuses: Optional[list[str]] = None,
         node_types: Optional[list[str]] = None,
+        subtypes: Optional[list[str]] = None,
+        authorities: Optional[list[str]] = None,
+        run_id: Optional[str] = None,
         top_k: int = 8,
         min_confidence: float = 0.0,
     ) -> list[dict[str, Any]]:
@@ -769,55 +901,53 @@ class SemanticGraphStore:
         q = (query or "").strip()
         if not q:
             return []
+        terms = re.findall(r"[A-Za-z0-9_]+|[\u3040-\u30ff\u3400-\u9fff]", q.casefold())
+        compact = "".join(terms)
+        terms.extend(compact[i:i + 2] for i in range(max(0, len(compact) - 1)))
+        terms = list(dict.fromkeys(t for t in terms if len(t) >= 2))[:16] or [q]
         with self._connect() as conn:
+            def extras(alias: str = "n") -> tuple[str, list[Any]]:
+                clauses: list[str] = []
+                params: list[Any] = []
+                for column, values in ((f"{alias}.subtype", subtypes), (f"{alias}.authority", authorities)):
+                    if values:
+                        clauses.append(f"{column} IN ({','.join('?' for _ in values)})")
+                        params.extend(values)
+                if run_id:
+                    clauses.append(f"{alias}.node_id IN (SELECT node_id FROM run_nodes WHERE run_id = ?)")
+                    params.append(run_id)
+                return (" AND " + " AND ".join(clauses)) if clauses else "", params
+
             if self.fts_enabled:
                 try:
-                    # Escape FTS special chars lightly.
-                    fts_q = '"' + q.replace('"', " ") + '"'
+                    ascii_terms = [t for t in terms if t.isascii()]
+                    fts_q = " OR ".join(f'"{t.replace(chr(34), " ")}"' for t in ascii_terms) or '"' + q.replace('"', ' ') + '"'
+                    extra_sql, extra_params = extras()
                     rows = conn.execute(
-                        "SELECT n.*, bm25(nodes_fts) AS bm25_score "
-                        "FROM nodes_fts "
+                        "SELECT n.*, bm25(nodes_fts) AS bm25_score FROM nodes_fts "
                         "JOIN nodes n ON n.node_id = nodes_fts.node_id "
                         f"WHERE nodes_fts MATCH ? AND n.status IN ({','.join('?' for _ in statuses)}) "
                         "AND n.confidence >= ? "
-                        + (
-                            f"AND n.node_type IN ({','.join('?' for _ in node_types)}) "
-                            if node_types
-                            else ""
-                        )
-                        + "ORDER BY bm25(nodes_fts) LIMIT ?",
-                        (
-                            fts_q,
-                            *statuses,
-                            min_confidence,
-                            *(node_types or []),
-                            top_k * 3,
-                        ),
+                        + (f"AND n.node_type IN ({','.join('?' for _ in node_types)}) " if node_types else "")
+                        + extra_sql + " ORDER BY bm25(nodes_fts) LIMIT ?",
+                        (fts_q, *statuses, min_confidence, *(node_types or []), *extra_params, top_k * 3),
                     ).fetchall()
-                    return [dict(r) for r in rows]
+                    if rows:
+                        return [dict(r) for r in rows]
                 except sqlite3.Error:
                     pass
-            like = f"%{q}%"
+            term_sql = []
+            term_params: list[Any] = []
+            for term in terms:
+                term_sql.append("(label LIKE ? OR summary LIKE ? OR identity_key LIKE ? OR subtype LIKE ?)")
+                term_params.extend([f"%{term}%"] * 4)
+            extra_sql, extra_params = extras(alias="nodes")
             rows = conn.execute(
-                "SELECT *, 1.0 AS bm25_score FROM nodes "
-                f"WHERE (label LIKE ? OR summary LIKE ? OR identity_key LIKE ? OR subtype LIKE ?) "
+                "SELECT *, 1.0 AS bm25_score FROM nodes WHERE (" + " OR ".join(term_sql) + ") "
                 f"AND status IN ({','.join('?' for _ in statuses)}) AND confidence >= ? "
-                + (
-                    f"AND node_type IN ({','.join('?' for _ in node_types)}) "
-                    if node_types
-                    else ""
-                )
-                + "ORDER BY confidence DESC, salience DESC LIMIT ?",
-                (
-                    like,
-                    like,
-                    like,
-                    like,
-                    *statuses,
-                    min_confidence,
-                    *(node_types or []),
-                    top_k * 3,
-                ),
+                + (f"AND node_type IN ({','.join('?' for _ in node_types)}) " if node_types else "")
+                + extra_sql + " ORDER BY confidence DESC, salience DESC LIMIT ?",
+                (*term_params, *statuses, min_confidence, *(node_types or []), *extra_params, top_k * 3),
             ).fetchall()
             return [dict(r) for r in rows]
 

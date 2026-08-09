@@ -58,6 +58,9 @@ def search_and_rank(
     min_confidence: float = 0.60,
     statuses: Optional[list[str]] = None,
     node_types: Optional[list[str]] = None,
+    subtypes: Optional[list[str]] = None,
+    authorities: Optional[list[str]] = None,
+    run_id: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     q = (query or "").strip()
     if len(q) < 2:
@@ -67,6 +70,9 @@ def search_and_rank(
         q,
         statuses=statuses,
         node_types=node_types,
+        subtypes=subtypes,
+        authorities=authorities,
+        run_id=run_id,
         top_k=top_k,
         min_confidence=min_confidence,
     )

@@ -63,10 +63,16 @@ def export_graph(
         raise ValueError("export_root required")
 
     statuses = None if include_rejected else ["asserted", "accepted", "candidate"]
-    nodes = store.list_nodes(statuses=statuses, limit=5000) if statuses else store.list_nodes(limit=5000)
+    if run_id:
+        nodes = store.list_nodes_for_run(run_id, statuses=statuses, limit=5000)
+        edges = store.list_edges_for_run(
+            run_id, include_rejected=include_rejected, limit=10000
+        )
+    else:
+        nodes = store.list_nodes(statuses=statuses, limit=5000) if statuses else store.list_nodes(limit=5000)
+        edges = store.list_edges(include_rejected=include_rejected, limit=10000)
     if not include_rejected:
         nodes = [n for n in nodes if n.get("status") not in {"rejected", "superseded"}]
-    edges = store.list_edges(include_rejected=include_rejected, limit=10000)
     payload: dict[str, Any] = {
         "run_id": run_id,
         "nodes": nodes,

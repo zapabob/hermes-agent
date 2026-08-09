@@ -195,7 +195,15 @@ class SemanticGraphRuntime:
                 min_confidence=self._config.min_recall_confidence,
                 statuses=list(statuses),
                 node_types=args.get("node_types"),
+                subtypes=args.get("subtypes"),
+                authorities=args.get("authorities"),
+                run_id=args.get("run_id"),
             )
+            if args.get("include_artifacts"):
+                for hit in hits:
+                    hit["artifacts"] = self.store().list_artifacts(
+                        run_id=args.get("run_id"), limit=20
+                    )
             if args.get("include_evidence"):
                 for hit in hits:
                     hit["evidence"] = self.store().list_evidence_for_node(hit["node_id"])
@@ -305,9 +313,15 @@ class SemanticGraphRuntime:
                 )
                 text = cleaned.text
                 target_id = new_id()
+            reference_nodes = []
+            for node_id in args.get("reference_node_ids") or []:
+                node = self.store().get_node(str(node_id))
+                if node is not None:
+                    reference_nodes.append(node)
             evaluation = self._inference.evaluate_output(
                 text,
                 criteria=args.get("criteria"),
+                reference_nodes=reference_nodes,
             )
             evaluation_id = None
             if args.get("store_result", True):
@@ -651,17 +665,21 @@ class SemanticGraphRuntime:
         try:
             if not self._config.capture_subagents:
                 return
-            goal = sanitize_text(str(kwargs.get("goal") or ""), max_chars=500)
+            goal = sanitize_text(
+                str(kwargs.get("child_goal") or kwargs.get("goal") or ""),
+                max_chars=500,
+            )
             self.store().insert_event(
                 {
                     "event_type": "subagent_start",
                     "actor_type": "subagent",
-                    "actor_id": str(kwargs.get("subagent_id") or kwargs.get("task_id") or ""),
-                    "session_id": str(kwargs.get("session_id") or ""),
-                    "task_id": str(kwargs.get("task_id") or ""),
+                    "actor_id": str(kwargs.get("child_subagent_id") or kwargs.get("subagent_id") or kwargs.get("task_id") or ""),
+                    "session_id": str(kwargs.get("parent_session_id") or kwargs.get("session_id") or ""),
+                    "turn_id": str(kwargs.get("parent_turn_id") or kwargs.get("turn_id") or ""),
+                    "task_id": str(kwargs.get("child_subagent_id") or kwargs.get("task_id") or ""),
                     "payload": {
-                        "parent_id": kwargs.get("parent_id"),
-                        "role": kwargs.get("role"),
+                        "parent_id": kwargs.get("parent_subagent_id") or kwargs.get("parent_id"),
+                        "role": kwargs.get("child_role") or kwargs.get("role"),
                         "goal_preview": goal.text,
                         "model": kwargs.get("model"),
                     },
@@ -675,21 +693,22 @@ class SemanticGraphRuntime:
             if not self._config.capture_subagents:
                 return
             summary = sanitize_text(
-                str(kwargs.get("summary") or kwargs.get("final_summary") or ""),
+                str(kwargs.get("child_summary") or kwargs.get("summary") or kwargs.get("final_summary") or ""),
                 max_chars=1000,
             )
             self.store().insert_event(
                 {
                     "event_type": "subagent_stop",
                     "actor_type": "subagent",
-                    "actor_id": str(kwargs.get("subagent_id") or kwargs.get("task_id") or ""),
-                    "session_id": str(kwargs.get("session_id") or ""),
-                    "task_id": str(kwargs.get("task_id") or ""),
+                    "actor_id": str(kwargs.get("child_subagent_id") or kwargs.get("subagent_id") or kwargs.get("task_id") or ""),
+                    "session_id": str(kwargs.get("child_session_id") or kwargs.get("session_id") or ""),
+                    "turn_id": str(kwargs.get("parent_turn_id") or kwargs.get("turn_id") or ""),
+                    "task_id": str(kwargs.get("child_subagent_id") or kwargs.get("task_id") or ""),
                     "payload": {
-                        "status": kwargs.get("status"),
-                        "duration": kwargs.get("duration"),
+                        "status": kwargs.get("child_status") or kwargs.get("status"),
+                        "duration_ms": kwargs.get("duration_ms", kwargs.get("duration")),
                         "summary_preview": summary.text,
-                        "token_usage": kwargs.get("token_usage") or kwargs.get("usage"),
+                        "tool_call_history": sanitize_metadata(kwargs.get("tool_call_history") or []),
                     },
                 }
             )
