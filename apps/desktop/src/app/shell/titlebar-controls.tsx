@@ -6,7 +6,6 @@ import { hudTargetSessionId } from '@/app/hud/handoff'
 import { toggleLayoutEditMode } from '@/components/pane-shell/edit-mode'
 import { resetLayoutTree } from '@/components/pane-shell/tree/store'
 import { Button } from '@/components/ui/button'
-import { Codicon } from '@/components/ui/codicon'
 import { Tip, TipKeybindLabel } from '@/components/ui/tooltip'
 import { useI18n } from '@/i18n'
 import { triggerHaptic } from '@/lib/haptics'
@@ -173,7 +172,7 @@ export function TitlebarControls({ leftTools = [], tools = [], onOpenSettings }:
     {
       actionId: 'view.toggleReview',
       active: reviewOpen,
-      icon: <Codicon name="source-control" />,
+      icon: <TitlebarIcon name="source-control" />,
       id: 'git',
       label: t.titlebar.openGit,
       onSelect: () => {
