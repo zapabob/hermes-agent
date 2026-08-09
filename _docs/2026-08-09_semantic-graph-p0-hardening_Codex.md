@@ -64,15 +64,16 @@ git diff --check
 ```
 
 ## テスト・検証結果
-- hardening + Semantic Graph + Skill: **35 passed**
-- Hermes plugin regression: **68 passed**
-- compileall: exit 0
+- hardening + Semantic Graph + Skill: **35 passed** via canonical `scripts/run_tests.sh`
+- Hermes plugin regression: **68 passed** via canonical `scripts/run_tests.sh`
+- canonical runner exit code: **0** for both scopes
+- compileall / py_compile: exit 0
 - git diff --check: exit 0
-- `scripts/run_tests.sh` はこの Windows/MSYS 環境で既知の `Bad file descriptor` 終了障害があるため、テスト証拠には直接 pytest の結果を使用した。
+- The duration-cache persistence failure was subsequently made non-fatal in separate runner commit `be1ffaf5fe`; the remaining cache warning is diagnostic and non-blocking.
 
 ## 残留リスク
 - repository 全体の full suite は未実行。
-- Windows/MSYS 標準 runner の descriptor lifecycle 問題は未修正。
+- duration-cache persistence remains degraded and best-effort under this Windows/MSYS worktree; it does not override authoritative test results.
 - embedding なしの検索であり、語彙が完全に異なる paraphrase の recall は保証しない。
 - `semantic_graph_feedback` の `user_confirmed` は model-facing API であり、人間の実確認を暗号学的には証明しない。
 - purge の accepted node と evidence 保持ポリシーは別途 production gate で再確認する。
@@ -82,3 +83,58 @@ git diff --check
 2. 既存の production profile では `capture_turns=true` / `auto_extract=all` を、運用 DB の backup と purge 方針確認後に段階的に有効化する。
 3. runner の Windows Bad file descriptor を別 issue として再現・修正する。
 4. human approval gate と purge の evidence retention を production readiness の P1 として設計する。
+
+## 追加記録: runtime patch attempt
+
+A subsequent attempted patch against `plugins/semantic_graph/runtime.py` did not apply because the target hunk no longer matched. No `runtime.py` modification was included in that turn. The verified Semantic Graph hardening remained at commit `41feb7f78b`.
+
+## Final verification
+
+Verified on Windows/MSYS using the canonical `scripts/run_tests.sh` runner after making duration-cache persistence non-fatal.
+
+The Semantic Graph evidence was initially collected on commit `41feb7f78b` plus the then-uncommitted runner fix. The runner fix was subsequently committed separately as `be1ffaf5fe` (`fix(test-runner): make duration cache persistence best-effort`), and both scopes were re-run against that new HEAD.
+
+### Semantic Graph scope
+
+- 35 passed
+- 0 failed
+- runner exit code: 0
+- HEAD: `be1ffaf5fe`
+
+### Hermes plugin regressions
+
+- 68 passed
+- 0 failed
+- runner exit code: 0
+- HEAD: `be1ffaf5fe`
+
+### Static checks
+
+- `py -3 -m py_compile scripts/run_tests_parallel.py plugins/semantic_graph/*.py` — passed
+- `git diff --check` — passed
+
+### Environment
+
+- Python: 3.12.13
+- OS/shell: Windows 11 / Git Bash MSYS2 (`MINGW64_NT`, `MSYSTEM=MINGW64`)
+- Runner workers: `HERMES_TEST_WORKERS=1`
+- Verification date: 2026-08-09
+
+The runner still emits a non-fatal warning when it cannot persist `test_durations.json`. The warning now includes the normalized path, exception type, and exception text. This cache is optional scheduling metadata and no longer overrides the authoritative test result. Duration-cache persistence remains degraded but non-blocking and is a follow-up diagnostic item.
+
+The full repository test suite and live-provider integration tests were not run. Real-profile enablement, structured extraction against a live provider, three-parallel-subagent provenance, and restart/reload SQLite recall were not run. Production readiness is therefore not claimed.
+
+Remote reviewability remains unconfirmed; the branch was not pushed.
+
+## Final status
+
+```text
+Semantic Graph MVP: implemented
+P0 hardening: targeted verification passed
+Canonical runner: exit 0 for both scopes
+Plugin API regression: verified
+Runner fix: committed separately at be1ffaf5fe
+Full repository suite: not run
+Live integration: not run
+Production readiness: not reached
+```
