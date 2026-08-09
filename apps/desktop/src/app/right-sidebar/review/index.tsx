@@ -39,8 +39,8 @@ import {
   refreshReview,
   refreshReviewHistory,
   requestRevert,
-  stageReviewFile,
   setReviewView,
+  stageReviewFile,
   toggleReviewTreeMode,
   unstageReviewFile
 } from '@/store/review'
