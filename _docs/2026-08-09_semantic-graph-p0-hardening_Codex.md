@@ -120,7 +120,7 @@ The Semantic Graph evidence was initially collected on commit `41feb7f78b` plus 
 - Runner workers: `HERMES_TEST_WORKERS=1`
 - Verification date: 2026-08-09
 
-The runner still emits a non-fatal warning when it cannot persist `test_durations.json`. The warning now includes the normalized path, exception type, and exception text. This cache is optional scheduling metadata and no longer overrides the authoritative test result. Duration-cache persistence remains degraded but non-blocking and is a follow-up diagnostic item.
+The duration cache was saved successfully in the latest verification. Cache persistence remains best-effort and may emit a non-fatal warning if the destination becomes unavailable. This cache is optional scheduling metadata and cannot override the authoritative test result.
 
 The full repository test suite and live-provider integration tests were not run. Real-profile enablement, structured extraction against a live provider, three-parallel-subagent provenance, and restart/reload SQLite recall were not run. Production readiness is therefore not claimed.
 
