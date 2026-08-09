@@ -84,8 +84,8 @@ test('review history lists commits, opens a selected diff, and renders for visua
   const page = fixture!.page
 
   await page.keyboard.press('Control+g')
-  await expect(page.getByRole('button', { name: 'History' })).toBeVisible()
-  await page.getByRole('button', { name: 'History' }).click()
+  await expect(page.getByRole('button', { name: 'History', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'History', exact: true }).click()
   await expect(page.getByText('add second history line')).toBeVisible({ timeout: 15_000 })
 
   await page.getByRole('button', { name: /add second history line/i }).click()
