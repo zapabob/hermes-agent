@@ -721,8 +721,25 @@ def _save_durations(
     for f, t in file_times:
         key = _format_file(f, repo_root)
         data[key] = round(t, 3)
-    path = repo_root / _DURATIONS_FILE
-    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path = Path(os.path.normpath(str(repo_root))) / _DURATIONS_FILE
+    # Worktrees launched through Git Bash/MSYS can carry doubled native
+    # separators in ``__file__``. Normalize the destination and create the
+    # parent defensively so a successful test run is not reported as failed
+    # while updating the optional, ignored duration cache.
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(data, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        # Duration caching is an optimization, not test correctness. Keep the
+        # test result authoritative when the ignored cache is unavailable.
+        print(
+            "[WARN] Could not save test duration cache "
+            f"path={path} error={type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
 
 
 def _compute_lpt_slices(
