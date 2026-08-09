@@ -83,7 +83,9 @@ test.afterAll(async () => {
 test('review history lists commits, opens a selected diff, and renders for visual review', async () => {
   const page = fixture!.page
 
-  await page.keyboard.press('Control+g')
+  const git = page.getByRole('button', { name: 'Open Git source control' })
+  await expect(git).toBeVisible()
+  await git.click()
   await expect(page.getByRole('button', { name: 'History', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'History', exact: true }).click()
   await expect(page.getByText('add second history line')).toBeVisible({ timeout: 15_000 })

@@ -178,6 +178,7 @@ export const ar = defineLocale({
     swapSidebarSides: 'تبديل جانبي الأشرطة',
     hideRightSidebar: 'إخفاء الشريط الأيمن',
     showRightSidebar: 'إظهار الشريط الأيمن',
+    openGit: 'فتح إدارة مصدر Git',
     muteHaptics: 'كتم الاهتزازات',
     unmuteHaptics: 'تفعيل الاهتزازات',
     openSettings: 'فتح الإعدادات',

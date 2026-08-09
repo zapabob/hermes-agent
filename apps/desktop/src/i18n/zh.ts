@@ -203,6 +203,7 @@ export const zh: Translations = {
     swapSidebarSides: '交换侧边栏位置',
     hideRightSidebar: '隐藏右侧栏',
     showRightSidebar: '显示右侧栏',
+    openGit: '打开 Git 源代码管理',
     muteHaptics: '关闭触感反馈',
     unmuteHaptics: '开启触感反馈',
     openSettings: '打开设置',

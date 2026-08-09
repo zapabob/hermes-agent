@@ -209,6 +209,7 @@ export const ja = defineLocale({
     swapSidebarSides: 'サイドバーの向きを切り替え',
     hideRightSidebar: '右サイドバーを非表示',
     showRightSidebar: '右サイドバーを表示',
+    openGit: 'Git ソース管理を開く',
     muteHaptics: '触覚フィードバックをオフ',
     unmuteHaptics: '触覚フィードバックをオン',
     openSettings: '設定を開く',

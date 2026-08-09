@@ -208,6 +208,7 @@ export const en: Translations = {
     swapSidebarSides: 'Swap sidebar sides',
     hideRightSidebar: 'Hide right sidebar',
     showRightSidebar: 'Show right sidebar',
+    openGit: 'Open Git source control',
     muteHaptics: 'Mute haptics',
     unmuteHaptics: 'Unmute haptics',
     openSettings: 'Open settings',
