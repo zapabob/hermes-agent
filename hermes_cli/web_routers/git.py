@@ -114,6 +114,16 @@ async def git_review_diff_route(
     return {"diff": await _git_op(_web_git.review_diff, _git_path(path), file, scope, base, staged)}
 
 
+@router.get("/api/git/review/history")
+async def git_review_history_route(path: str, limit: Optional[int] = None):
+    return {"commits": await _git_op(_web_git.review_history, _git_path(path), limit)}
+
+
+@router.get("/api/git/review/history-diff")
+async def git_review_history_diff_route(path: str, sha: str):
+    return {"diff": await _git_op(_web_git.review_history_diff, _git_path(path), sha)}
+
+
 @router.get("/api/git/file-diff")
 async def git_file_diff_route(path: str, file: str):
     return {"diff": await _git_op(_web_git.file_diff_vs_head, _git_path(path), file)}

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { HermesReviewFile, HermesReviewShipInfo } from '@/global'
+import type { HermesGitCommit, HermesReviewFile, HermesReviewShipInfo } from '@/global'
 
 import {
   $reviewCommitDefault,
@@ -8,6 +8,10 @@ import {
   $reviewDiff,
   $reviewDiffLoading,
   $reviewFiles,
+  $reviewHistory,
+  $reviewHistoryDiff,
+  $reviewHistoryDiffLoading,
+  $reviewHistoryLoading,
   $reviewIsRepo,
   $reviewLoading,
   $reviewMaxChurn,
@@ -18,8 +22,10 @@ import {
   $reviewShipBusy,
   $reviewShipInfo,
   $reviewTreeMode,
+  $reviewView,
   cancelRevert,
   clearReviewSelection,
+  clearReviewCommitSelection,
   closeReview,
   commitChanges,
   confirmRevert,
@@ -28,10 +34,13 @@ import {
   openReview,
   pushChanges,
   refreshReview,
+  refreshReviewHistory,
   refreshShipInfo,
   requestRevert,
   revertReviewFile,
   selectReviewFile,
+  selectReviewCommit,
+  setReviewView,
   stageReviewFile,
   toggleReviewTreeMode,
   unstageReviewFile
@@ -61,6 +70,8 @@ function stubReview(over: ReviewStub = {}) {
   const review: ReviewStub = {
     list: vi.fn(async () => ({ files: [] })),
     diff: vi.fn(async () => ''),
+    history: vi.fn(async () => []),
+    historyDiff: vi.fn(async () => ''),
     stage: vi.fn(async () => undefined),
     unstage: vi.fn(async () => undefined),
     revert: vi.fn(async () => undefined),
@@ -90,6 +101,11 @@ beforeEach(() => {
   $reviewIsRepo.set(true)
   $reviewDiff.set(null)
   $reviewDiffLoading.set(false)
+  $reviewHistory.set([])
+  $reviewHistoryLoading.set(false)
+  $reviewHistoryDiff.set(null)
+  $reviewHistoryDiffLoading.set(false)
+  $reviewView.set('changes')
   $reviewSelectedPath.set(null)
   $reviewShipInfo.set({ ghReady: false, pr: null })
   $reviewShipBusy.set(false)
@@ -227,6 +243,66 @@ describe('selectReviewFile / clearReviewSelection', () => {
     expect($reviewSelectedPath.get()).toBeNull()
     expect($reviewDiff.get()).toBeNull()
     expect($reviewDiffLoading.get()).toBe(false)
+  })
+})
+
+const commit = (over: Partial<HermesGitCommit> = {}): HermesGitCommit => ({
+  author: 'Hermes Test',
+  authoredAt: '2026-08-10T12:00:00+00:00',
+  parents: ['0123456789abcdef0123456789abcdef01234567'],
+  sha: '1234567890abcdef1234567890abcdef12345678',
+  shortSha: '1234567',
+  subject: 'add history view',
+  ...over
+})
+
+describe('review history', () => {
+  it('loads bounded history only while the pane is open', async () => {
+    const review = stubReview({ history: vi.fn(async () => [commit()]) })
+    $reviewOpen.set(true)
+
+    await refreshReviewHistory()
+
+    expect(review.history).toHaveBeenCalledWith('/repo', 50)
+    expect($reviewHistory.get()).toEqual([commit()])
+    expect($reviewHistoryLoading.get()).toBe(false)
+  })
+
+  it('does not call history while closed and clears stale results', async () => {
+    const review = stubReview()
+    $reviewHistory.set([commit()])
+
+    await refreshReviewHistory()
+
+    expect(review.history).not.toHaveBeenCalled()
+    expect($reviewHistory.get()).toEqual([])
+  })
+
+  it('selects one commit and fetches only its diff', async () => {
+    const selected = commit()
+    const review = stubReview({ historyDiff: vi.fn(async () => 'commit diff') })
+
+    await selectReviewCommit(selected)
+
+    expect(review.historyDiff).toHaveBeenCalledWith('/repo', selected.sha)
+    expect($reviewHistoryDiff.get()).toBe('commit diff')
+    expect($reviewHistoryDiffLoading.get()).toBe(false)
+
+    clearReviewCommitSelection()
+    expect($reviewHistoryDiff.get()).toBeNull()
+  })
+
+  it('switching to history refreshes it without replacing the change list', async () => {
+    const review = stubReview({ history: vi.fn(async () => [commit()]) })
+    $reviewOpen.set(true)
+    $reviewFiles.set([file('unchanged.ts')])
+
+    setReviewView('history')
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(review.history).toHaveBeenCalledWith('/repo', 50)
+    expect($reviewFiles.get()).toEqual([file('unchanged.ts')])
   })
 })
 

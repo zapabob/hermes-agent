@@ -14,6 +14,8 @@ import { resolveRequestedPathForIpc } from './hardening'
 
 const COMMIT_CONTEXT_DIFF_MAX_CHARS = 120_000
 const COMMIT_CONTEXT_UNTRACKED_MAX = 80
+const HISTORY_LIMIT_DEFAULT = 50
+const HISTORY_LIMIT_MAX = 100
 const REVIEW_FILE_CAP = 2_000
 const UNTRACKED_LINE_COUNT_CONCURRENCY = 16
 const UNTRACKED_LINE_COUNT_MAX_BYTES = 1024 * 1024
@@ -368,6 +370,92 @@ async function reviewDiff(repoPath, filePath, scope, baseRef, staged, gitBin) {
       (_err, stdout) => resolve(String(stdout || ''))
     )
   })
+}
+
+// The history surface is deliberately read-only. Keep the renderer from
+// supplying an arbitrary revision expression: the UI obtains ids from
+// reviewHistory(), and accepting only hexadecimal object ids also prevents a
+// leading dash from ever being interpreted as a git option.
+function isCommitId(value) {
+  return /^[0-9a-f]{7,64}$/i.test(String(value || ''))
+}
+
+function historyLimit(value) {
+  const parsed = Number(value)
+
+  if (!Number.isFinite(parsed)) {
+    return HISTORY_LIMIT_DEFAULT
+  }
+
+  return Math.max(1, Math.min(HISTORY_LIMIT_MAX, Math.trunc(parsed)))
+}
+
+// Use ASCII control separators that cannot occur in normal one-line commit
+// subjects. This avoids locale-sensitive column parsing while keeping author
+// names and messages intact.
+function parseHistory(raw) {
+  return String(raw || '')
+    .split('\x1e')
+    .filter(Boolean)
+    .flatMap(record => {
+      const [sha, shortSha, parents, author, authoredAt, subject] = record.split('\x1f')
+
+      if (!isCommitId(sha) || !shortSha || !authoredAt) {
+        return []
+      }
+
+      return [
+        {
+          author: author || '',
+          authoredAt,
+          parents: (parents || '').split(' ').filter(isCommitId),
+          sha,
+          shortSha,
+          subject: subject || ''
+        }
+      ]
+    })
+}
+
+async function reviewHistory(repoPath, limit, gitBin) {
+  let cwd
+
+  try {
+    cwd = resolveRequestedPathForIpc(repoPath, { purpose: 'Review history' })
+  } catch {
+    return []
+  }
+
+  try {
+    const raw = await gitFor(cwd, gitBin).raw([
+      'log',
+      `--max-count=${historyLimit(limit)}`,
+      '--date=iso-strict',
+      '--format=%H%x1f%h%x1f%P%x1f%an%x1f%aI%x1f%s%x1e'
+    ])
+
+    return parseHistory(raw)
+  } catch {
+    return []
+  }
+}
+
+async function reviewHistoryDiff(repoPath, sha, gitBin) {
+  if (!isCommitId(sha)) {
+    return ''
+  }
+
+  let cwd
+
+  try {
+    cwd = resolveRequestedPathForIpc(repoPath, { purpose: 'Review history diff' })
+  } catch {
+    return ''
+  }
+
+  return gitFor(cwd, gitBin)
+    .raw(['show', '--format=', '--find-renames', '--find-copies', '--no-ext-diff', sha, '--'])
+    .catch(() => '')
 }
 
 // Working-tree-vs-HEAD diff for ONE file — the "what changed since the last
@@ -892,6 +980,8 @@ export {
   reviewCreatePr,
   reviewDiff,
   reviewFetchPrComment,
+  reviewHistory,
+  reviewHistoryDiff,
   reviewList,
   reviewPrList,
   reviewPush,

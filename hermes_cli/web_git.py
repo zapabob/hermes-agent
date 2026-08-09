@@ -28,6 +28,8 @@ _UNTRACKED_LINE_MAX_BYTES = 1024 * 1024
 _UNTRACKED_SCAN_CAP = 500
 _COMMIT_CONTEXT_DIFF_MAX_CHARS = 120_000
 _COMMIT_CONTEXT_UNTRACKED_MAX = 80
+_HISTORY_LIMIT_DEFAULT = 50
+_HISTORY_LIMIT_MAX = 100
 _TRUNK_BRANCHES = ("main", "master")
 
 
@@ -331,6 +333,65 @@ def review_diff(cwd: str, file_path: str, scope: str, base_ref: str | None, stag
     # Untracked: synthesize an all-add diff (exits non-zero by design).
     _, out, _ = _git(cwd, ["diff", "--no-index", "--", os.devnull, file_path])
     return out
+
+
+def _history_limit(value: int | None) -> int:
+    try:
+        return max(1, min(_HISTORY_LIMIT_MAX, int(value or _HISTORY_LIMIT_DEFAULT)))
+    except (TypeError, ValueError):
+        return _HISTORY_LIMIT_DEFAULT
+
+
+def _commit_id(value: str) -> bool:
+    """Only accept object ids returned by the history list, never arbitrary refs."""
+    return bool(re.fullmatch(r"[0-9a-fA-F]{7,64}", str(value or "")))
+
+
+def review_history(cwd: str, limit: int | None = None) -> list[dict]:
+    """Compact, bounded commit history for the Desktop review pane."""
+    if not _is_dir(cwd):
+        return []
+
+    code, raw, _ = _git(
+        cwd,
+        [
+            "log",
+            f"--max-count={_history_limit(limit)}",
+            "--date=iso-strict",
+            "--format=%H%x1f%h%x1f%P%x1f%an%x1f%aI%x1f%s%x1e",
+        ],
+    )
+    if code != 0:
+        return []
+
+    commits = []
+    for record in raw.split("\x1e"):
+        if not record:
+            continue
+        fields = record.split("\x1f")
+        if len(fields) != 6:
+            continue
+        sha, short_sha, parents, author, authored_at, subject = fields
+        if not _commit_id(sha) or not short_sha or not authored_at:
+            continue
+        commits.append(
+            {
+                "sha": sha,
+                "shortSha": short_sha,
+                "parents": [parent for parent in parents.split() if _commit_id(parent)],
+                "author": author,
+                "authoredAt": authored_at,
+                "subject": subject,
+            }
+        )
+    return commits
+
+
+def review_history_diff(cwd: str, sha: str) -> str:
+    """Read a selected commit's unified diff; reject arbitrary revision expressions."""
+    if not _is_dir(cwd) or not _commit_id(sha):
+        return ""
+    return _git_out(cwd, ["show", "--format=", "--find-renames", "--find-copies", "--no-ext-diff", sha, "--"])
 
 
 def file_diff_vs_head(cwd: str, file_path: str) -> str:

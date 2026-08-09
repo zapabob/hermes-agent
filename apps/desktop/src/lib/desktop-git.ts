@@ -1,6 +1,7 @@
 import type {
   HermesGitBaseBranch,
   HermesGitBranch,
+  HermesGitCommit,
   HermesGitWorktree,
   HermesRepoPullRequests,
   HermesRepoStatus,
@@ -30,7 +31,7 @@ function desktopApi<T>(path: string, body?: Record<string, unknown>): Promise<T>
   )
 }
 
-function gitGet<T>(route: string, params: Record<string, boolean | null | string | undefined>): Promise<T> {
+function gitGet<T>(route: string, params: Record<string, boolean | null | number | string | undefined>): Promise<T> {
   const query = new URLSearchParams()
 
   for (const [key, value] of Object.entries(params)) {
@@ -75,6 +76,12 @@ const remoteGit: GitBridge = {
     diff: async (repoPath, filePath, scope, baseRef, staged) =>
       (await gitGet<{ diff: string }>('review/diff', { base: baseRef, file: filePath, path: repoPath, scope, staged }))
         .diff,
+
+    history: async (repoPath, limit) =>
+      (await gitGet<{ commits: HermesGitCommit[] }>('review/history', { limit, path: repoPath })).commits,
+
+    historyDiff: async (repoPath, sha) =>
+      (await gitGet<{ diff: string }>('review/history-diff', { path: repoPath, sha })).diff,
 
     stage: (repoPath, filePath) => gitPost('review/stage', { file: filePath ?? null, path: repoPath }),
 

@@ -13,6 +13,7 @@ import {
   DialogTitle
 } from '@/components/ui/dialog'
 import { DiffCount } from '@/components/ui/diff-count'
+import { SegmentedControl } from '@/components/ui/segmented-control'
 import { Tip } from '@/components/ui/tooltip'
 import { useDelayedTrue } from '@/hooks/use-delayed-true'
 import { useI18n } from '@/i18n'
@@ -24,18 +25,22 @@ import {
   $reviewDiff,
   $reviewDiffLoading,
   $reviewFiles,
+  $reviewHistoryLoading,
   $reviewIsRepo,
   $reviewLoading,
   $reviewRevertTarget,
   $reviewSelectedPath,
   $reviewTreeMode,
+  $reviewView,
   cancelRevert,
   clearReviewSelection,
   closeReview,
   confirmRevert,
   refreshReview,
+  refreshReviewHistory,
   requestRevert,
   stageReviewFile,
+  setReviewView,
   toggleReviewTreeMode,
   unstageReviewFile
 } from '@/store/review'
@@ -44,6 +49,7 @@ import { SidebarPanelLabel } from '../../shell/sidebar-label'
 import { PaneEmptyState, RightSidebarSectionHeader } from '../index'
 
 import { ReviewFileTree } from './file-tree'
+import { ReviewHistory } from './history'
 import { ReviewShipBar } from './ship-bar'
 
 // Compact header/diff action buttons — micro hit targets packed tight, matching
@@ -56,12 +62,14 @@ export function ReviewPane() {
   const panesFlipped = useStore($panesFlipped)
   const files = useStore($reviewFiles)
   const loading = useStore($reviewLoading)
+  const historyLoading = useStore($reviewHistoryLoading)
   const isRepo = useStore($reviewIsRepo)
   const selectedPath = useStore($reviewSelectedPath)
   const diff = useStore($reviewDiff)
   const diffLoading = useStore($reviewDiffLoading)
   const revertTarget = useStore($reviewRevertTarget)
   const treeMode = useStore($reviewTreeMode)
+  const view = useStore($reviewView)
 
   const selectedFile = files.find(file => file.path === selectedPath)
   const hasFiles = files.length > 0
@@ -82,67 +90,95 @@ export function ReviewPane() {
           : 'border-l shadow-[inset_0.0625rem_0_0_color-mix(in_srgb,white_18%,transparent)]'
       )}
     >
-      {(loading || isRepo) && (
+      {(loading || historyLoading || isRepo) && (
         <RightSidebarSectionHeader data-suppress-pane-reveal-side="">
           <div className="flex min-w-0 flex-1">
             {/* Pure self-naming label — redundant under a zone tab that already
                 says "review", so the zone header hides it (styles.css). */}
             <SidebarPanelLabel data-pane-self-label="">{c.review}</SidebarPanelLabel>
           </div>
-          <Tip label={treeMode === 'tree' ? c.viewAsList : c.viewAsTree}>
-            <Button
-              aria-label={treeMode === 'tree' ? c.viewAsList : c.viewAsTree}
-              className={ACTION_BTN}
-              disabled={!hasFiles}
-              onClick={toggleReviewTreeMode}
-              size="icon-xs"
-              variant="ghost"
-            >
-              <Codicon name={treeMode === 'tree' ? 'list-flat' : 'list-tree'} size="0.8125rem" />
-            </Button>
-          </Tip>
-          <Tip label={c.stageAll}>
-            <Button
-              aria-label={c.stageAll}
-              className={ACTION_BTN}
-              disabled={!hasFiles}
-              onClick={() => void stageReviewFile(null).catch(err => notifyError(err, c.stageAll))}
-              size="icon-xs"
-              variant="ghost"
-            >
-              <Codicon name="add" size="0.8125rem" />
-            </Button>
-          </Tip>
-          <Tip label={c.revertAll}>
-            <Button
-              aria-label={c.revertAll}
-              className={ACTION_BTN}
-              disabled={!hasFiles}
-              onClick={() => requestRevert(null)}
-              size="icon-xs"
-              variant="ghost"
-            >
-              <Codicon name="discard" size="0.8125rem" />
-            </Button>
-          </Tip>
-          <Tip label={t.rightSidebar.refreshTree}>
-            <Button
-              aria-label={t.rightSidebar.refreshTree}
-              className={ACTION_BTN}
-              onClick={() => void refreshReview()}
-              size="icon-xs"
-              variant="ghost"
-            >
-              <Codicon name="refresh" size="0.8125rem" spinning={loading} />
-            </Button>
-          </Tip>
+          <SegmentedControl
+            className="mr-1"
+            onChange={setReviewView}
+            options={[
+              { id: 'changes', label: c.changes },
+              { id: 'history', label: c.history }
+            ]}
+            value={view}
+          />
+          {view === 'changes' && (
+            <>
+              <Tip label={treeMode === 'tree' ? c.viewAsList : c.viewAsTree}>
+                <Button
+                  aria-label={treeMode === 'tree' ? c.viewAsList : c.viewAsTree}
+                  className={ACTION_BTN}
+                  disabled={!hasFiles}
+                  onClick={toggleReviewTreeMode}
+                  size="icon-xs"
+                  variant="ghost"
+                >
+                  <Codicon name={treeMode === 'tree' ? 'list-flat' : 'list-tree'} size="0.8125rem" />
+                </Button>
+              </Tip>
+              <Tip label={c.stageAll}>
+                <Button
+                  aria-label={c.stageAll}
+                  className={ACTION_BTN}
+                  disabled={!hasFiles}
+                  onClick={() => void stageReviewFile(null).catch(err => notifyError(err, c.stageAll))}
+                  size="icon-xs"
+                  variant="ghost"
+                >
+                  <Codicon name="add" size="0.8125rem" />
+                </Button>
+              </Tip>
+              <Tip label={c.revertAll}>
+                <Button
+                  aria-label={c.revertAll}
+                  className={ACTION_BTN}
+                  disabled={!hasFiles}
+                  onClick={() => requestRevert(null)}
+                  size="icon-xs"
+                  variant="ghost"
+                >
+                  <Codicon name="discard" size="0.8125rem" />
+                </Button>
+              </Tip>
+              <Tip label={t.rightSidebar.refreshTree}>
+                <Button
+                  aria-label={t.rightSidebar.refreshTree}
+                  className={ACTION_BTN}
+                  onClick={() => void refreshReview()}
+                  size="icon-xs"
+                  variant="ghost"
+                >
+                  <Codicon name="refresh" size="0.8125rem" spinning={loading} />
+                </Button>
+              </Tip>
+            </>
+          )}
+          {view === 'history' && (
+            <Tip label={t.rightSidebar.refreshTree}>
+              <Button
+                aria-label={t.rightSidebar.refreshTree}
+                className={ACTION_BTN}
+                onClick={() => void refreshReviewHistory()}
+                size="icon-xs"
+                variant="ghost"
+              >
+                <Codicon name="refresh" size="0.8125rem" spinning={historyLoading} />
+              </Button>
+            </Tip>
+          )}
           <Button aria-label={c.close} className={ACTION_BTN} onClick={closeReview} size="icon-xs" variant="ghost">
             <Codicon name="close" size="0.8125rem" />
           </Button>
         </RightSidebarSectionHeader>
       )}
 
-      {loading || isRepo ? (
+      {view === 'history' ? (
+        <ReviewHistory />
+      ) : loading || isRepo ? (
         hasFiles ? (
           <ReviewFileTree />
         ) : showTreeSkeleton ? (
@@ -158,7 +194,7 @@ export function ReviewPane() {
       )}
 
       {/* Selected file's diff — reuses the shiki-highlighted FileDiffPanel. */}
-      {selectedFile && (
+      {view === 'changes' && selectedFile && (
         <div className="flex max-h-[55%] shrink-0 flex-col border-t border-(--ui-stroke-secondary)">
           <div className="flex items-center gap-1 px-2.5 py-1.5" data-suppress-pane-reveal-side="">
             <span
@@ -207,7 +243,7 @@ export function ReviewPane() {
         </div>
       )}
 
-      <ReviewShipBar />
+      {view === 'changes' && <ReviewShipBar />}
 
       <Dialog onOpenChange={open => !open && cancelRevert()} open={revertTarget !== undefined}>
         <DialogContent>

@@ -312,6 +312,11 @@ declare global {
             baseRef?: null | string,
             staged?: boolean
           ) => Promise<string>
+          // Read-only commit history plus the unified diff for one commit.
+          // The UI obtains `sha` from `history`; the native/backend boundary
+          // rejects arbitrary revision expressions.
+          history: (repoPath: string, limit?: number) => Promise<HermesGitCommit[]>
+          historyDiff: (repoPath: string, sha: string) => Promise<string>
           stage: (repoPath: string, filePath?: null | string) => Promise<{ ok: boolean }>
           unstage: (repoPath: string, filePath?: null | string) => Promise<{ ok: boolean }>
           revert: (repoPath: string, filePath?: null | string) => Promise<{ ok: boolean }>
@@ -1172,6 +1177,19 @@ export interface HermesReviewList {
   // The resolved base ref the scope diffed against (branch merge-base / turn
   // baseline), or null for the uncommitted scope.
   base: null | string
+}
+
+// A compact, stable commit record for the Desktop history surface. Full diffs
+// are fetched only after selection, so opening a long-lived repository remains
+// bounded.
+export interface HermesGitCommit {
+  sha: string
+  shortSha: string
+  parents: string[]
+  subject: string
+  author: string
+  // ISO-8601 author timestamp as returned by `git log --date=iso-strict`.
+  authoredAt: string
 }
 
 // The branch's PR (if any) as reported by `gh pr view`.

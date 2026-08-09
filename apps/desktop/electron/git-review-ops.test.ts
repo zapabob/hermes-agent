@@ -6,7 +6,15 @@ import path from 'node:path'
 
 import { afterEach, test } from 'vitest'
 
-import { gitFor, repoStatus, resolveRenamePath, REVIEW_FILE_CAP, reviewList } from './git-review-ops'
+import {
+  gitFor,
+  repoStatus,
+  resolveRenamePath,
+  REVIEW_FILE_CAP,
+  reviewHistory,
+  reviewHistoryDiff,
+  reviewList
+} from './git-review-ops'
 
 const tempDirs: string[] = []
 
@@ -116,4 +124,35 @@ test('reviewList caps the file payload returned to the renderer', async () => {
   const result = await reviewList(dir, 'uncommitted', null, 'git')
 
   assert.equal(result.files.length, REVIEW_FILE_CAP)
+})
+
+test('reviewHistory returns bounded, newest-first commit metadata', async () => {
+  const dir = makeRepo()
+
+  fs.writeFileSync(path.join(dir, 'history.txt'), 'second\n')
+  execFileSync('git', ['add', 'history.txt'], { cwd: dir })
+  execFileSync('git', ['commit', '-qm', 'add history fixture'], { cwd: dir })
+
+  const commits = await reviewHistory(dir, 1, 'git')
+
+  assert.equal(commits.length, 1)
+  assert.equal(commits[0].subject, 'add history fixture')
+  assert.match(commits[0].sha, /^[0-9a-f]{40}$/)
+  assert.match(commits[0].shortSha, /^[0-9a-f]{7,}$/)
+  assert.equal(commits[0].parents.length, 1)
+  assert.equal(Boolean(Date.parse(commits[0].authoredAt)), true)
+})
+
+test('reviewHistoryDiff returns one selected commit and rejects revision expressions', async () => {
+  const dir = makeRepo()
+
+  fs.writeFileSync(path.join(dir, 'history.txt'), 'second\n')
+  execFileSync('git', ['add', 'history.txt'], { cwd: dir })
+  execFileSync('git', ['commit', '-qm', 'add history fixture'], { cwd: dir })
+
+  const [commit] = await reviewHistory(dir, 1, 'git')
+  const diff = await reviewHistoryDiff(dir, commit.sha, 'git')
+
+  assert.match(diff, /\+second/)
+  await assert.doesNotMatch(await reviewHistoryDiff(dir, 'HEAD~1', 'git'), /./)
 })

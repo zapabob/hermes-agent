@@ -71,6 +71,31 @@ def test_stage_commit_roundtrip_clears_changes(client, repo):
     assert after["untracked"] == 1
 
 
+def test_git_history_routes_return_commit_metadata_and_selected_diff(client, repo):
+    _git(repo, "add", "a.txt")
+    _git(repo, "commit", "-qm", "add third line")
+
+    history = client.get("/api/git/review/history", params={"path": str(repo), "limit": 1})
+
+    assert history.status_code == 200
+    commits = history.json()["commits"]
+    assert len(commits) == 1
+    assert commits[0]["subject"] == "add third line"
+    assert len(commits[0]["sha"]) == 40
+    assert commits[0]["parents"]
+
+    diff = client.get(
+        "/api/git/review/history-diff", params={"path": str(repo), "sha": commits[0]["sha"]}
+    )
+
+    assert diff.status_code == 200
+    assert "+three" in diff.json()["diff"]
+
+    invalid = client.get("/api/git/review/history-diff", params={"path": str(repo), "sha": "HEAD~1"})
+    assert invalid.status_code == 200
+    assert invalid.json() == {"diff": ""}
+
+
 
 
 

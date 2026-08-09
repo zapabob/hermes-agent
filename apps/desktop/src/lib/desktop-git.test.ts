@@ -27,6 +27,25 @@ const api = vi.fn(async ({ path }: { path: string }) => {
     }
   }
 
+  if (path.startsWith('/api/git/review/history-diff')) {
+    return { diff: 'remote-history-diff' }
+  }
+
+  if (path.startsWith('/api/git/review/history')) {
+    return {
+      commits: [
+        {
+          author: 'Hermes',
+          authoredAt: '2026-08-10T12:00:00+00:00',
+          parents: [],
+          sha: '1234567890abcdef1234567890abcdef12345678',
+          shortSha: '1234567',
+          subject: 'remote history'
+        }
+      ]
+    }
+  }
+
   return { ok: true }
 })
 
@@ -71,6 +90,13 @@ describe('desktop git facade', () => {
     await expect(desktopGit()?.review.diff('/srv/work', 'a.txt', 'uncommitted', null, false)).resolves.toBe(
       'remote-diff'
     )
+
+    await expect(desktopGit()?.review.history('/srv/work', 1)).resolves.toMatchObject([
+      { shortSha: '1234567', subject: 'remote history' }
+    ])
+    await expect(desktopGit()?.review.historyDiff('/srv/work', '1234567')).resolves.toBe('remote-history-diff')
+    expect(api).toHaveBeenCalledWith({ path: '/api/git/review/history?limit=1&path=%2Fsrv%2Fwork' })
+    expect(api).toHaveBeenCalledWith({ path: '/api/git/review/history-diff?path=%2Fsrv%2Fwork&sha=1234567' })
 
     expect(repoStatus).not.toHaveBeenCalled()
   })
