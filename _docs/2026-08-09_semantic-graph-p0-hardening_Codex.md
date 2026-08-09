@@ -88,6 +88,34 @@ git diff --check
 
 A subsequent attempted patch against `plugins/semantic_graph/runtime.py` did not apply because the target hunk no longer matched. No `runtime.py` modification was included in that turn. The verified Semantic Graph hardening remained at commit `41feb7f78b`.
 
+## Live integration smoke
+
+Environment:
+- isolated `HERMES_HOME` under the workspace `_tmp` directory; no production profile or production database modified
+- direct Python runtime invocation with `PYTHONPATH` set to this worktree
+- Python 3.12.13, Windows/MSYS
+- tested commit before the live-smoke follow-up: `da86af120f`
+- the `hermes` executable on `PATH` resolves to the separate main worktree; it was not used as evidence for this p0 smoke
+
+Results:
+- plugin/runtime initialization: **PASS** — schema version 1, FTS enabled, empty isolated store
+- explicit structured extraction: **not live-provider extraction**; provider credentials were intentionally absent. Explicit fragment submission and persistence boundary: **PASS**
+- user and assistant artifacts: **PASS**
+- user authority and evidence span: **PASS**
+- Bearer/JSON-secret persistence check against stored SQLite records: **PASS**
+- hidden reasoning persistence check: **PASS** — no hidden reasoning was supplied or stored
+- restart recall: **PASS** — new runtime instance against the same isolated SQLite store recalled TypeScript in English and Japanese paraphrase; rendered context contained `data_only="true"`
+- three-child provenance: **PASS** — 3 `subagent_start` and 3 `subagent_stop` events, sanitized summaries, status and duration fields present
+- run-scoped export: **PASS** — run B content absent from run A export; artifacts stayed within the isolated export root
+- correction history: **PASS** — old node superseded, replacement asserted, `supersedes` edge present, default recall returned the replacement
+- live provider structured completion: **NOT RUN** — no provider key was placed in the isolated profile; this remains unverified
+
+Follow-up hardening included metadata-key redaction and conservative Japanese-to-English recall expansion. Verification after those changes:
+
+- targeted Semantic Graph tests: **36 passed**, canonical `scripts/run_tests.sh` exit 0
+- Hermes plugin regression tests: **68 passed**, canonical `scripts/run_tests.sh` exit 0
+- `py_compile` and `git diff --check`: **PASS**
+
 ## Final verification
 
 Verified on Windows/MSYS using the canonical `scripts/run_tests.sh` runner after making duration-cache persistence non-fatal.

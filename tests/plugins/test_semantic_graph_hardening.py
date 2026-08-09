@@ -9,7 +9,9 @@ from plugins.semantic_graph import graph
 from plugins.semantic_graph.exporter import export_graph
 from plugins.semantic_graph.retrieval import search_and_rank
 from plugins.semantic_graph.runtime import SemanticGraphRuntime
-from plugins.semantic_graph.sanitize import sanitize_text
+from plugins.semantic_graph.sanitize import sanitize_metadata, sanitize_text
+
+
 from plugins.semantic_graph.store import SemanticGraphStore
 
 
@@ -47,6 +49,22 @@ def test_secret_redaction_never_leaves_values():
         assert "shortsecret" not in cleaned
         assert "secret-value" not in cleaned
         assert "opaque-secret" not in cleaned
+
+
+def test_metadata_secret_keys_redact_values():
+    cleaned = sanitize_metadata(
+        {
+            "secret": "opaque-secret",
+            "authorization": "Bearer opaque-token",
+            "nested": {"access_token": "nested-secret"},
+            "safe": "visible",
+        }
+    )
+    encoded = json.dumps(cleaned, ensure_ascii=False)
+    assert "opaque-secret" not in encoded
+    assert "opaque-token" not in encoded
+    assert "nested-secret" not in encoded
+    assert cleaned["safe"] == "visible"
 
 
 def test_finalize_isolated_and_stable_evaluation_target(tmp_path):

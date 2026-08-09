@@ -22,6 +22,9 @@ JSON_SECRET_RE = re.compile(
 ASSIGN_SECRET_RE = re.compile(
     r"(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password|passwd|authorization|cookie|session)\s*[:=]\s*)(\"[^\"]*\"|'[^']*'|[^\s,;&]+)"
 )
+SENSITIVE_KEY_RE = re.compile(
+    r"(?i)^(?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password|passwd|authorization|cookie|session)$"
+)
 LONG_TOKEN_RE = re.compile(r"\b[A-Za-z0-9_\-]{32,}\b")
 EMAIL_RE = re.compile(r"\b[\w.%-]+@[\w.-]+\.[A-Za-z]{2,}\b")
 WIN_HOME_RE = re.compile(r"C:\\Users\\[^\\\s`\"]+", re.I)
@@ -133,13 +136,18 @@ def sanitize_metadata(value: Any, *, max_bytes: int = _MAX_METADATA_BYTES) -> di
                     out["__truncated__"] = True
                     break
                 key = normalize_text(str(k))[:128]
-                out[key] = _walk(v, depth + 1)
+                if SENSITIVE_KEY_RE.fullmatch(key):
+                    out[key] = "[REDACTED]"
+                else:
+                    out[key] = _walk(v, depth + 1)
             return out
         if isinstance(obj, (list, tuple)):
             items = [_walk(x, depth + 1) for x in list(obj)[:64]]
             if len(obj) > 64:
                 items.append("[TRUNCATED_LIST]")
             return items
+        if isinstance(obj, str):
+            return sanitize_text(obj, max_chars=2000).text
         if isinstance(obj, (int, float, bool)) or obj is None:
             return obj
         cleaned = sanitize_text(str(obj), max_chars=2000)

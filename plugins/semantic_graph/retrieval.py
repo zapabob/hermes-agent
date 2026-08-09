@@ -7,6 +7,26 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 
+_RECALL_SYNONYMS = {
+    "フロント": "frontend",
+    "フロント側": "frontend",
+    "フロントエンド": "frontend",
+    "言語": "language",
+    "方針": "preference",
+    "優先": "prefer",
+    "使う": "use",
+}
+
+
+def _expand_query(query: str) -> str:
+    """Add conservative bilingual recall terms without rewriting user text."""
+    expanded = [query]
+    for source, target in _RECALL_SYNONYMS.items():
+        if source in query:
+            expanded.append(target)
+    return " ".join(expanded)
+
+
 def _parse_ts(value: str) -> datetime:
     if not value:
         return datetime.now(timezone.utc)
@@ -67,7 +87,7 @@ def search_and_rank(
         return []
     statuses = statuses or ["asserted", "accepted"]
     rows = store.search_nodes(
-        q,
+        _expand_query(q),
         statuses=statuses,
         node_types=node_types,
         subtypes=subtypes,
