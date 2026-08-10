@@ -256,6 +256,7 @@ export interface Translations {
     openStarmap: string
     enterHud: string
     exitHud: string
+    openGit: string
     layoutEditor: string
     layoutEditorTitle: (modifier: string) => string
   }
