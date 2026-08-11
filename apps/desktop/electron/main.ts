@@ -143,11 +143,11 @@ import {
   resolveTimeoutMs,
   TEXT_PREVIEW_SOURCE_MAX_BYTES
 } from './hardening'
-import { createBoundedLinkTitleQueue, fetchPinnedLinkTitle } from './link-title-fetch'
 import { cursorPointInWindow } from './hud-cursor'
 import { snapHudBounds } from './hud-snap'
 import { createHudSnapShortcut } from './hud-snap-shortcut'
 import { buildHudWindowUrl } from './hud-url'
+import { createBoundedLinkTitleQueue, fetchPinnedLinkTitle } from './link-title-fetch'
 import { ensureMainWindow } from './main-window-lifecycle'
 import {
   oauthGuardMayHardFail,
