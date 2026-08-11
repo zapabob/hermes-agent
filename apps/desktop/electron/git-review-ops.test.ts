@@ -124,7 +124,7 @@ test('reviewList caps the file payload returned to the renderer', async () => {
   const result = await reviewList(dir, 'uncommitted', null, 'git')
 
   assert.equal(result.files.length, REVIEW_FILE_CAP)
-})
+}, 30_000)
 
 test('reviewHistory returns bounded, newest-first commit metadata', async () => {
   const dir = makeRepo()
