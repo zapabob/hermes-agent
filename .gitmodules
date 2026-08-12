@@ -38,3 +38,7 @@
 [submodule "vendor/oh-my-hermes"]
 	path = vendor/oh-my-hermes
 	url = https://github.com/zapabob/oh-my-hermes.git
+[submodule "vendor/OpenMausBot"]
+	path = vendor/OpenMausBot
+	url = https://github.com/zapabob/OpenMausBot.git
+	branch = main
