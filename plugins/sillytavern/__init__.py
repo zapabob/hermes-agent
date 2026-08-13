@@ -33,8 +33,9 @@ def _resolve_dir() -> str:
     )
     if os.path.isfile(os.path.join(sub, "server.js")):
         return sub
-    # Local install fallback
-    return r"C:\Users\downl\Documents\SillyTavern"
+    # Local install fallback.  Keep this portable and do not embed a user's
+    # Windows profile name in the bundled plugin.
+    return os.path.join(os.path.expanduser("~"), "Documents", "SillyTavern")
 
 
 def _get_dir() -> str:
@@ -890,6 +891,7 @@ def register(ctx):
     empty = {"type": "object", "properties": {}}
     ctx.register_tool(
         name="sillytavern_status",
+        toolset="sillytavern",
         description="Check whether the local SillyTavern server is installed and running.",
         schema=empty,
         handler=sillytavern_status,
@@ -897,6 +899,7 @@ def register(ctx):
     )
     ctx.register_tool(
         name="sillytavern_start",
+        toolset="sillytavern",
         description="Start SillyTavern (auto-configures secrets/settings from Hermes).",
         schema=empty,
         handler=sillytavern_start,
@@ -904,6 +907,7 @@ def register(ctx):
     )
     ctx.register_tool(
         name="sillytavern_stop",
+        toolset="sillytavern",
         description="Stop the local SillyTavern server.",
         schema=empty,
         handler=sillytavern_stop,
@@ -911,6 +915,7 @@ def register(ctx):
     )
     ctx.register_tool(
         name="sillytavern_version",
+        toolset="sillytavern",
         description="Report the installed SillyTavern version.",
         schema=empty,
         handler=sillytavern_version,
@@ -918,6 +923,7 @@ def register(ctx):
     )
     ctx.register_tool(
         name="sillytavern_configure",
+        toolset="sillytavern",
         description="(Re-)run auto-configuration: sync Hermes API keys and settings into SillyTavern.",
         schema=empty,
         handler=sillytavern_configure,
@@ -925,6 +931,7 @@ def register(ctx):
     )
     ctx.register_tool(
         name="sillytavern_scan",
+        toolset="sillytavern",
         description="List importable SillyTavern data (characters, chats, lorebooks).",
         schema=empty,
         handler=sillytavern_scan,
@@ -932,6 +939,7 @@ def register(ctx):
     )
     ctx.register_tool(
         name="sillytavern_import_memory",
+        toolset="sillytavern",
         description="Extract SillyTavern characters/chats/lorebooks as memory records for Hermes to ingest.",
         schema=empty,
         handler=sillytavern_import_memory,
@@ -939,18 +947,21 @@ def register(ctx):
     )
     ctx.register_tool(
         name="sillytavern_proxy_start",
+        toolset="sillytavern",
         description="Start local reverse-proxy so SillyTavern can use Codex OAuth and xAI Grok.",
         schema=empty,
         handler=sillytavern_proxy_start,
     )
     ctx.register_tool(
         name="sillytavern_proxy_stop",
+        toolset="sillytavern",
         description="Stop the Codex/xAI reverse-proxy.",
         schema=empty,
         handler=sillytavern_proxy_stop,
     )
     ctx.register_tool(
         name="sillytavern_proxy_status",
+        toolset="sillytavern",
         description="Report Codex/xAI proxy state and Codex OAuth token validity.",
         schema=empty,
         handler=sillytavern_proxy_status,
@@ -958,6 +969,7 @@ def register(ctx):
     # ── ST-native roleplay features (no ST server needed) ──
     ctx.register_tool(
         name="st_character_create",
+        toolset="sillytavern",
         description="Create a roleplay character (name/description/personality/scenario/first_mes).",
         schema={"type": "object", "properties": {
             "name": {"type": "string"}, "description": {"type": "string"},
@@ -968,12 +980,14 @@ def register(ctx):
     )
     ctx.register_tool(
         name="st_character_list",
+        toolset="sillytavern",
         description="List stored roleplay characters.",
         schema=empty,
         handler=st_character_list,
     )
     ctx.register_tool(
         name="st_persona_create",
+        toolset="sillytavern",
         description="Create a user persona (who the user is in roleplay).",
         schema={"type": "object", "properties": {
             "name": {"type": "string"}, "description": {"type": "string"},
@@ -983,6 +997,7 @@ def register(ctx):
     )
     ctx.register_tool(
         name="st_lore_add",
+        toolset="sillytavern",
         description="Add a lorebook/world-info entry with keyword triggers.",
         schema={"type": "object", "properties": {
             "book": {"type": "string"}, "keys": {"type": "array", "items": {"type": "string"}},
@@ -992,6 +1007,7 @@ def register(ctx):
     )
     ctx.register_tool(
         name="st_session_start",
+        toolset="sillytavern",
         description="Start a roleplay chat session for a character (seeds first_mes).",
         schema={"type": "object", "properties": {
             "character_id": {"type": "integer"}, "persona_id": {"type": "integer"},
@@ -1001,6 +1017,7 @@ def register(ctx):
     )
     ctx.register_tool(
         name="st_session_say",
+        toolset="sillytavern",
         description="Add a user turn and get the assembled ST-style prompt (system+lore+history).",
         schema={"type": "object", "properties": {
             "session_id": {"type": "integer"}, "message": {"type": "string"},
@@ -1011,6 +1028,7 @@ def register(ctx):
     )
     ctx.register_tool(
         name="st_session_reply",
+        toolset="sillytavern",
         description="Record the character's generated reply into the session.",
         schema={"type": "object", "properties": {
             "session_id": {"type": "integer"}, "content": {"type": "string"},
@@ -1020,6 +1038,7 @@ def register(ctx):
     )
     ctx.register_tool(
         name="st_session_summary",
+        toolset="sillytavern",
         description="Set/update the running summary for a roleplay session.",
         schema={"type": "object", "properties": {
             "session_id": {"type": "integer"}, "summary": {"type": "string"},
@@ -1028,6 +1047,7 @@ def register(ctx):
     )
     ctx.register_tool(
         name="st_session_to_memory",
+        toolset="sillytavern",
         description="Emit session summary/chat as memory records for Hermes ebbinghaus ingestion.",
         schema={"type": "object", "properties": {
             "session_id": {"type": "integer"},
@@ -1036,6 +1056,7 @@ def register(ctx):
     )
     ctx.register_tool(
         name="st_memory_to_lore",
+        toolset="sillytavern",
         description="Ingest Hermes memory records into a lorebook (tags become keyword triggers).",
         schema={"type": "object", "properties": {
             "book": {"type": "string"},
@@ -1046,6 +1067,7 @@ def register(ctx):
     # Voice Roleplay: STT -> ST-native -> TTS -> Memory
     ctx.register_tool(
         name="st_voice_roleplay",
+        toolset="sillytavern",
         description="Voice roleplay turn (phase 1): record audio -> STT -> ST-native prompt assembly. Returns prompt for LLM completion.",
         schema={"type": "object", "properties": {
             "session_id": {"type": "integer"},
@@ -1062,6 +1084,7 @@ def register(ctx):
     )
     ctx.register_tool(
         name="st_voice_roleplay_complete",
+        toolset="sillytavern",
         description="Voice roleplay turn (phase 2): record assistant reply -> TTS (irodori/hakua) -> play -> memory bridge.",
         schema={"type": "object", "properties": {
             "session_id": {"type": "integer"},
@@ -1076,6 +1099,7 @@ def register(ctx):
     # ── Audio landing: copy audio/zip from irodori buffer into ST uploads ──
     ctx.register_tool(
         name="st_audio_land",
+        toolset="sillytavern",
         description="Copy the latest audio file or zip from the irodori audio buffer into SillyTavern's data/_uploads/ directory.",
         schema={
             "type": "object",

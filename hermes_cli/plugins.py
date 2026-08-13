@@ -1621,7 +1621,7 @@ class PluginManager:
         bundled = self._scan_directory(
             repo_plugins,
             source="bundled",
-            skip_names={"memory", "context_engine", "platforms", "model-providers"},
+            skip_names={"memory", "context_engine", "platforms", "model-providers", "cron_providers"},
         )
         logger.debug("  bundled (top-level): %d manifest(s)", len(bundled))
         manifests.extend(bundled)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import sys
 from typing import Any
 from urllib.parse import urlparse
 
@@ -402,9 +403,20 @@ def synthesize_pdb_executive_summary(
     if spec is None or spec.loader is None:
         return {"success": False, "skipped": True, "reason": "shinka providers unavailable"}
     shinka_providers = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(shinka_providers)
+    # ``dataclass`` inspects ``sys.modules`` while the module is executed.
+    # Register the dynamically loaded module first; otherwise Python 3.12+
+    # raises ``AttributeError: 'NoneType' object has no attribute '__dict__'``.
+    sys.modules[spec.name] = shinka_providers
+    try:
+        spec.loader.exec_module(shinka_providers)
+    except Exception as exc:
+        sys.modules.pop(spec.name, None)
+        return {"success": False, "skipped": True, "reason": f"shinka providers unavailable: {exc}"}
 
-    resolved = shinka_providers.resolve_llm(require_auth=True)
+    try:
+        resolved = shinka_providers.resolve_llm(require_auth=True)
+    except Exception as exc:
+        return {"success": False, "skipped": True, "reason": f"LLM resolution failed: {exc}"}
     if resolved is None:
         return {
             "success": False,
@@ -417,13 +429,16 @@ def synthesize_pdb_executive_summary(
     except ImportError as exc:
         return {"success": False, "skipped": True, "reason": f"auxiliary_client unavailable: {exc}"}
 
-    client, model = resolve_provider_client(
-        resolved.provider_id,
-        model=resolved.model,
-        explicit_api_key=resolved.api_key,
-        explicit_base_url=resolved.base_url,
-        task="worldmonitor_pdb_summary",
-    )
+    try:
+        client, model = resolve_provider_client(
+            resolved.provider_id,
+            model=resolved.model,
+            explicit_api_key=resolved.api_key,
+            explicit_base_url=resolved.base_url,
+            task="worldmonitor_pdb_summary",
+        )
+    except Exception as exc:
+        return {"success": False, "skipped": True, "reason": f"LLM client unavailable: {exc}"}
     if client is None or not model:
         return {
             "success": False,

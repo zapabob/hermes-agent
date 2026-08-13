@@ -9,6 +9,7 @@ creates an MP4 video,
 and posts to X via Hermes LM Twitterer.
 """
 
+import asyncio
 import os
 import random
 import shutil
@@ -22,12 +23,12 @@ import urllib.parse
 import json
 
 # 設定
-VRCHAT_PHOTOS_DIR = Path(r"C:\Users\downl\Pictures\VRChat")
+HERMES_REPO_ROOT = Path(__file__).resolve().parents[1]
+VRCHAT_PHOTOS_DIR = Path.home() / "Pictures" / "VRChat"
 IRODORI_TTS_URL = "http://127.0.0.1:8088"
-IRODORI_VENV_PYTHON = r"C:\Users\downl\Documents\New project\irodori-tts-server\.venv\Scripts\python.exe"
-IRODORI_SERVER_DIR = r"C:\Users\downl\Documents\New project\irodori-tts-server"
-OUTPUT_DIR = Path(r"C:\Users\downl\Documents\New project\hermes-agent\output\daily_posts")
-HERMES_REPO_ROOT = Path(r"C:\Users\downl\Documents\New project\hermes-agent")
+IRODORI_SERVER_DIR = Path.home() / "Documents" / "New project" / "irodori-tts-server"
+IRODORI_VENV_PYTHON = IRODORI_SERVER_DIR / ".venv" / "Scripts" / "python.exe"
+OUTPUT_DIR = HERMES_REPO_ROOT / "output" / "daily_posts"
 HERMES_POST_PYTHON = HERMES_REPO_ROOT / ".venv-vrchat-post311" / "Scripts" / "python.exe"
 
 # Hakua morning greetings
@@ -82,21 +83,153 @@ def is_irodori_server_running() -> bool:
     except Exception:
         return False
 
+def irodori_server_is_compatible() -> bool:
+    """Check that the listener uses the cron-safe CUDA/bf16 configuration."""
+    try:
+        with urllib.request.urlopen(f"{IRODORI_TTS_URL}/health", timeout=5) as response:
+            model = json.loads(response.read().decode("utf-8")).get("model", {})
+        return (
+            model.get("model_device", "").startswith("cuda")
+            and model.get("codec_device", "").startswith("cuda")
+            and model.get("model_precision") == "bf16"
+            and model.get("codec_precision") == "fp32"
+            and model.get("compile_model") is False
+        )
+    except Exception:
+        return False
+
+def _listening_port_pids(port: int) -> set[int]:
+    """Return TCP listener PIDs for *port* without acting on them."""
+    output = subprocess.check_output(
+        ["netstat.exe", "-ano", "-p", "tcp"],
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    pids: set[int] = set()
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) < 5 or parts[-2].upper() != "LISTENING":
+            continue
+        if parts[1].rsplit(":", 1)[-1] != str(port):
+            continue
+        try:
+            pids.add(int(parts[-1]))
+        except ValueError:
+            continue
+    return pids
+
+
+def _process_command_line(pid: int) -> str:
+    """Read a Windows process command line for a validated numeric PID."""
+    command = (
+        f"$p = Get-CimInstance -ClassName Win32_Process -Filter 'ProcessId = {pid}'; "
+        "if ($null -ne $p) { [Console]::Out.Write($p.CommandLine) }"
+    )
+    result = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            command,
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=15,
+    )
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def _is_configured_irodori_process(pid: int) -> bool:
+    """Only accept the configured local Irodori command as restartable."""
+    command_line = _process_command_line(pid).casefold()
+    expected_python = str(IRODORI_VENV_PYTHON).casefold()
+    return "irodori_openai_tts" in command_line and expected_python in command_line
+
+
+def stop_irodori_server() -> bool:
+    """Stop only the configured Irodori listener; preserve unrelated services."""
+    try:
+        pids = _listening_port_pids(8088)
+    except Exception as exc:
+        print(f"Could not inspect Irodori listener: {exc}", file=sys.stderr)
+        return False
+
+    if not pids:
+        return True
+
+    refused: list[int] = []
+    failed: list[int] = []
+    stopped = False
+    for pid in sorted(pids):
+        if not _is_configured_irodori_process(pid):
+            refused.append(pid)
+            continue
+        result = subprocess.run(
+            ["taskkill.exe", "/PID", str(pid), "/F"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+        )
+        if result.returncode == 0:
+            stopped = True
+        else:
+            failed.append(pid)
+
+    if stopped:
+        time.sleep(2)
+    if refused or failed:
+        details = []
+        if refused:
+            details.append(f"unverified listener PID(s): {refused}")
+        if failed:
+            details.append(f"could not stop PID(s): {failed}")
+        print(
+            "Refusing Irodori restart because " + "; ".join(details),
+            file=sys.stderr,
+        )
+        return False
+    return True
+
 def start_irodori_server():
-    if is_irodori_server_running():
+    if is_irodori_server_running() and irodori_server_is_compatible():
         print("Irodori-TTS server is already running.")
         return
+    if is_irodori_server_running():
+        print("Restarting incompatible Irodori-TTS server...")
+        if not stop_irodori_server():
+            raise RuntimeError("refused to replace an unverified Irodori listener")
+    elif _listening_port_pids(8088):
+        raise RuntimeError("port 8088 is occupied by a listener without a healthy Irodori API")
     print("Starting Irodori-TTS server...")
     # Use the virtual environment's python
-    cmd = [IRODORI_VENV_PYTHON, "-m", "irodori_openai_tts", "--host", "127.0.0.1", "--port", "8088"]
-    # Prepare environment without HF_HUB_ENABLE_HF_TRANSFER
+    cmd = [str(IRODORI_VENV_PYTHON), "-m", "irodori_openai_tts", "--host", "127.0.0.1", "--port", "8088"]
+    # RTX 5060 Ti CUDA path: avoid the known Windows CPU safetensors crash.
+    # Keep lazy loading so startup health does not race model initialization.
     env = os.environ.copy()
-    env.pop("HF_HUB_ENABLE_HF_TRANSFER", None)  # Remove if present
+    env.pop("HF_HUB_ENABLE_HF_TRANSFER", None)
+    env["IRODORI_MODEL_DEVICE"] = "cuda"
+    env["IRODORI_CODEC_DEVICE"] = "cuda"
+    env["IRODORI_MODEL_PRECISION"] = "bf16"
+    env["IRODORI_CODEC_PRECISION"] = "fp32"
+    env["IRODORI_COMPILE_MODEL"] = "false"
+    env["IRODORI_PRELOAD"] = "false"
     # Start the process in the background
-    subprocess.Popen(cmd, cwd=IRODORI_SERVER_DIR, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+    subprocess.Popen(
+        cmd,
+        cwd=str(IRODORI_SERVER_DIR),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=env,
+    )
     # Wait for the server to be ready
-    for _ in range(30):
-        if is_irodori_server_running():
+    for _ in range(120):
+        if is_irodori_server_running() and irodori_server_is_compatible():
             print("Irodori-TTS server is ready.")
             return
         time.sleep(1)
@@ -129,6 +262,38 @@ def generate_tts_via_http(text: str, output_path: Path) -> bool:
     except Exception as e:
         print(f"TTS generation failed: {e}", file=sys.stderr)
         return False
+
+def generate_edge_tts(text: str, output_path: Path) -> bool:
+    """Free Japanese fallback when the local Irodori runtime crashes."""
+    try:
+        import edge_tts
+
+        edge_path = output_path.with_suffix(".edge.mp3")
+
+        async def _save() -> None:
+            communicate = edge_tts.Communicate(text, voice="ja-JP-NanamiNeural")
+            await communicate.save(str(edge_path))
+
+        asyncio.run(_save())
+        if not edge_path.exists() or edge_path.stat().st_size <= 0:
+            return False
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-i", str(edge_path), "-c:a", "pcm_s16le", str(output_path)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=120,
+        )
+        if result.returncode == 0 and output_path.exists() and output_path.stat().st_size > 0:
+            edge_path.unlink(missing_ok=True)
+            print(f"TTS generated via free Edge TTS fallback: {output_path}")
+            return True
+        print(f"Edge TTS conversion failed: {result.stderr}", file=sys.stderr)
+    except Exception as exc:
+        print(f"Edge TTS fallback failed: {exc}", file=sys.stderr)
+    return False
+
 
 def create_mp4(image_path: Path, audio_path: Path, output_path: Path) -> bool:
     cmd = [
@@ -205,13 +370,18 @@ def main():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     audio_path = OUTPUT_DIR / f"hakua_{timestamp}.wav"
     mp4_path = OUTPUT_DIR / f"hakua_{timestamp}.mp4"
+    irodori_ready = True
     try:
         start_irodori_server()
     except Exception as e:
-        print(f"Failed to start Irodori-TTS server: {e}", file=sys.stderr)
-        return 1
-    if not generate_tts_via_http(tweet_text, audio_path):
-        return 1
+        irodori_ready = False
+        print(f"Irodori-TTS unavailable; using free Edge TTS: {e}", file=sys.stderr)
+    # Irodori may crash inside the Windows safetensors loader; keep the
+    # zero-cost Edge Japanese voice as a production fallback for cron.
+    if not irodori_ready or not generate_tts_via_http(tweet_text, audio_path):
+        print("Falling back to free Edge TTS.", file=sys.stderr)
+        if not generate_edge_tts(tweet_text, audio_path):
+            return 1
     if not create_mp4(photo, audio_path, mp4_path):
         return 1
     if not post_via_hermes_lm_twitterer(mp4_path, tweet_text):

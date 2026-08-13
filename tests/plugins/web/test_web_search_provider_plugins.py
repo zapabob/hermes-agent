@@ -70,13 +70,26 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class TestBundledPluginsRegister:
-    """All nine bundled web plugins discover and register correctly."""
+    """All bundled web plugins discover and register correctly."""
 
-    def test_all_nine_plugins_present_in_registry(self) -> None:
+    def test_all_bundled_plugins_present_in_registry(self) -> None:
         _ensure_plugins_loaded()
         from agent.web_search_registry import list_providers
 
         names = sorted(p.name for p in list_providers())
+        # Scrapling は9個に含まれず、10個目として追加される
+        assert "scrapling" in names
+        assert "brave-free" in names
+        assert "cloakbrowser" in names
+        assert "ddgs" in names
+        assert "exa" in names
+        assert "firecrawl" in names
+        assert "parallel" in names
+        assert "searxng" in names
+        assert "tavily" in names
+        assert "xai" in names
+        # 想定される10個（Scrapling含む）
+        assert len(names) == 10
         assert names == [
             "brave-free",
             "cloakbrowser",
@@ -84,6 +97,7 @@ class TestBundledPluginsRegister:
             "exa",
             "firecrawl",
             "parallel",
+            "scrapling",
             "searxng",
             "tavily",
             "xai",
@@ -100,6 +114,7 @@ class TestBundledPluginsRegister:
             ("parallel", True, True),
             ("tavily", True, True),
             ("firecrawl", True, True),
+            ("scrapling", True, True),
             # xai: Grok-backed search plus best-effort URL extraction.
             ("xai", True, True),
         ],
@@ -129,6 +144,7 @@ class TestBundledPluginsRegister:
             "parallel",
             "tavily",
             "firecrawl",
+            "scrapling",
             "xai",
         ],
     )
