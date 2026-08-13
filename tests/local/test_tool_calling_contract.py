@@ -12,7 +12,7 @@ def test_tool_calling_contract_requires_structured_tool_calls():
     def fake_get(url: str, timeout: float = 15.0):
         if url.endswith("/v1/models"):
             return 200, models_payload
-        if url.endswith("/props"):
+        if "/props?model=" in url:
             return 200, props_payload
         raise AssertionError(url)
 

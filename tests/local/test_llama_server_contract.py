@@ -14,6 +14,7 @@ from agent.local_secretary.llama_contract import (
     extract_model_ids,
     looks_like_plaintext_tool_call,
     run_llama_contract_checks,
+    select_routable_model_id,
     validate_config_context_length,
 )
 
@@ -29,6 +30,17 @@ def test_extract_model_ids_accepts_dicts_and_strings():
         "qwen35-9b-secretary",
         "hermes3-8b-fallback",
     ]
+
+
+def test_select_routable_model_id_prefers_loaded_router_model():
+    payload = {
+        "data": [
+            {"id": "registered-but-unloaded", "status": {"value": "unloaded"}},
+            {"id": "loaded-model", "status": {"value": "loaded"}},
+            "legacy-fallback",
+        ]
+    }
+    assert select_routable_model_id(payload) == "loaded-model"
 
 
 def test_validate_config_context_length_minimum():
@@ -69,7 +81,7 @@ def test_run_llama_contract_checks_happy_path():
     def fake_get(url: str, timeout: float = 15.0):
         if url.endswith("/v1/models"):
             return 200, models_payload
-        if url.endswith("/props"):
+        if url.startswith("http://127.0.0.1:8080/props?"):
             return 200, props_payload
         raise AssertionError(url)
 
@@ -85,6 +97,39 @@ def test_run_llama_contract_checks_happy_path():
 
     assert result["ok"] is True
     assert result["checks"]["context_size"]["n_ctx"] == 65536
+
+
+def test_run_llama_contract_checks_uses_loaded_router_model_for_props_and_calls():
+    models_payload = {
+        "data": [
+            {"id": "registered-but-unloaded", "status": {"value": "unloaded"}},
+            {"id": "loaded-model", "status": {"value": "loaded"}},
+        ]
+    }
+    props_payload = {"default_generation_settings": {"n_ctx": 65536}}
+    posts: list[dict] = []
+
+    def fake_get(url: str, timeout: float = 15.0):
+        if url.endswith("/v1/models"):
+            return 200, models_payload
+        assert url.endswith("/props?model=loaded-model")
+        return 200, props_payload
+
+    def fake_post(url: str, payload: dict, timeout: float = 120.0):
+        posts.append(payload)
+        if "tools" in payload:
+            return 200, {"choices": [{"message": {"tool_calls": [{"id": "call_1"}]}}]}
+        return 200, {"choices": [{"message": {"content": "pong"}}]}
+
+    with patch("agent.local_secretary.llama_contract._get_json", side_effect=fake_get), patch(
+        "agent.local_secretary.llama_contract._post_json", side_effect=fake_post
+    ):
+        result = run_llama_contract_checks("http://127.0.0.1:8080")
+
+    assert result["ok"] is True
+    assert [payload["model"] for payload in posts] == ["loaded-model", "loaded-model"]
+    assert posts[0]["max_tokens"] == 512
+    assert posts[1]["tool_choice"] == "required"
 
 
 def test_run_llama_contract_checks_flags_low_context():

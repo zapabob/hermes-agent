@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 MIN_CONTEXT_SIZE = 64000
@@ -68,6 +69,36 @@ def extract_model_ids(models_payload: Any) -> list[str]:
     return ids
 
 
+def select_routable_model_id(models_payload: Any) -> str:
+    """Prefer a loaded llama.cpp router model over merely registered entries."""
+    if not isinstance(models_payload, dict):
+        return "unknown"
+    data = models_payload.get("data", [])
+    if not isinstance(data, list):
+        return "unknown"
+
+    fallback = ""
+    for item in data:
+        if isinstance(item, str):
+            model_id = item.strip()
+            status = ""
+        elif isinstance(item, dict):
+            model_id = str(item.get("id") or "").strip()
+            raw_status = item.get("status")
+            if isinstance(raw_status, dict):
+                raw_status = raw_status.get("value")
+            status = str(raw_status or "").strip().lower()
+        else:
+            continue
+        if not model_id:
+            continue
+        if not fallback:
+            fallback = model_id
+        if status == "loaded":
+            return model_id
+    return fallback or "unknown"
+
+
 def looks_like_plaintext_tool_call(content: str) -> bool:
     text = (content or "").strip()
     if not text:
@@ -118,14 +149,15 @@ def run_llama_contract_checks(
         else:
             ids = extract_model_ids(models)
             _pass("models", {"model_ids": ids})
-            model_id = ids[0] if ids else "unknown"
+            model_id = select_routable_model_id(models)
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
         _fail("models", str(exc))
         result["summary"] = "llama.cpp server unreachable"
         return result
 
     try:
-        status, props = _get_json(f"{base}/props")
+        props_url = f"{base}/props?model={quote(model_id, safe='')}"
+        status, props = _get_json(props_url)
         if status != 200:
             _fail("props", f"HTTP {status}")
         else:
@@ -145,7 +177,7 @@ def run_llama_contract_checks(
     chat_payload = {
         "model": model_id,
         "messages": [{"role": "user", "content": "Reply with the single word: pong"}],
-        "max_tokens": 16,
+        "max_tokens": 512,
         "temperature": 0,
     }
     try:
@@ -158,7 +190,10 @@ def run_llama_contract_checks(
                 .get("message", {})
                 .get("content", "")
             )
-            _pass("chat_completion", {"content_preview": str(content)[:120]})
+            if str(content).strip():
+                _pass("chat_completion", {"content_preview": str(content)[:120]})
+            else:
+                _fail("chat_completion", "empty response content")
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
         _fail("chat_completion", str(exc))
 
@@ -179,8 +214,8 @@ def run_llama_contract_checks(
                 },
             }
         ],
-        "tool_choice": "auto",
-        "max_tokens": 128,
+        "tool_choice": "required",
+        "max_tokens": 512,
         "temperature": 0,
     }
     try:
