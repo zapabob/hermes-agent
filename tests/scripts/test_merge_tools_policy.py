@@ -72,6 +72,25 @@ def test_removed_gateway_restart_test_follows_upstream(strategy):
     assert item.action == "upstream"
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "apps/desktop/electron/update-relaunch.ts",
+        "apps/desktop/electron/update-relaunch.test.ts",
+        "skills/creative/ascii-art/SKILL.md",
+        "skills/research/arxiv/SKILL.md",
+    ],
+)
+def test_superseded_upstream_paths_follow_upstream(path, strategy):
+    item = classify_path_with_context(
+        path,
+        strategy,
+        touched_upstream=True,
+        touched_custom=True,
+    )
+    assert item.action == "upstream"
+
+
 def test_strategy_json_valid():
     path = MERGE_TOOLS / "hermes-merge-conflict-strategies.json"
     payload = json.loads(path.read_text(encoding="utf-8"))

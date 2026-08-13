@@ -167,6 +167,26 @@
       "note": "Official behavior-focused Windows child-process coverage supersedes the legacy source-regex test while retaining the maintained child-process contract."
     },
     {
+      "pattern": "apps/desktop/electron/update-relaunch.ts",
+      "action": "upstream",
+      "note": "Official updater-process plus the repo-owned desktop-update handoff supersede this deleted legacy helper; retain the maintained handoff contract rather than replaying an obsolete relaunch implementation."
+    },
+    {
+      "pattern": "apps/desktop/electron/update-relaunch.test.ts",
+      "action": "upstream",
+      "note": "Official updater-process and desktop-update tests supersede the deleted legacy relaunch-helper tests."
+    },
+    {
+      "pattern": "skills/creative/ascii-art/SKILL.md",
+      "action": "upstream",
+      "note": "Restore the maintained upstream skill; its current cross-platform Python invocation supersedes the fork deletion."
+    },
+    {
+      "pattern": "skills/research/arxiv/SKILL.md",
+      "action": "upstream",
+      "note": "Restore the maintained upstream skill; its current cross-platform Python invocation supersedes the fork deletion."
+    },
+    {
       "pattern": "apps/desktop/electron/main.ts",
       "action": "official_with_overlay",
       "note": "Take the official Desktop main process and three-way reapply the fork-only watchdog prewarm integration; fail closed rather than silently dropping its import.",
