@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-Daily VRChat Photo Post with Hakua Voice (using Irodori-TTS server and Hermes LM Twitterer)
+Daily VRChat Photo Post with Fish Audio Hakua Voice and Hermes LM Twitterer.
 
 Picks a random VRChat photo from Pictures/VRChat,
-starts Irodori-TTS server (if not already running),
-generates Hakua's voice via Irodori-TTS HTTP API,
+generates Hakua's voice through the configured Fish Audio cloned voice,
 creates an MP4 video,
 and posts to X via Hermes LM Twitterer.
+
+Fish Audio is mandatory for this job: if Hakua synthesis fails, the post is aborted
+rather than silently substituting Irodori-TTS, Edge TTS, or another voice.
 """
 
 import asyncio
@@ -295,6 +297,38 @@ def generate_edge_tts(text: str, output_path: Path) -> bool:
     return False
 
 
+def generate_fishaudio_hakua(text: str, output_path: Path) -> bool:
+    """Generate audio with the configured Fish Audio cloned Hakua voice only."""
+    try:
+        from plugins.fish_audio_tts.core import settings, synthesize_text
+
+        cfg = settings()
+        if not cfg.api_key:
+            raise RuntimeError("FISH_AUDIO_API_KEY is not configured")
+        if not cfg.reference_id:
+            raise RuntimeError("tts.fishaudio.reference_id is not configured")
+        result = synthesize_text(
+            text=text,
+            output_path=output_path.with_suffix(".mp3"),
+            voice=cfg.reference_id,
+            model=cfg.model,
+            output_format="mp3",
+        )
+        generated = Path(result["file_path"])
+        if not generated.exists() or generated.stat().st_size <= 0:
+            raise RuntimeError("Fish Audio returned no audio file")
+        if generated != output_path:
+            output_path.unlink(missing_ok=True)
+        print(
+            "TTS generated via Fish Audio Hakua: "
+            f"{generated} (reference_id_configured=true, model={cfg.model})"
+        )
+        return True
+    except Exception as exc:
+        print(f"Fish Audio Hakua generation failed: {exc}", file=sys.stderr)
+        return False
+
+
 def create_mp4(image_path: Path, audio_path: Path, output_path: Path) -> bool:
     cmd = [
         "ffmpeg", "-y",
@@ -368,20 +402,14 @@ def main():
     tweet_text = generate_ai_script(photo) + " #hermesagent はくあ"
     print(f"AI-generated script: {tweet_text}")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    audio_path = OUTPUT_DIR / f"hakua_{timestamp}.wav"
+    # Fish Audio is the required Hakua voice for this job.  Do not silently
+    # substitute Irodori, Edge TTS, or any other voice when it fails.
+    audio_path = OUTPUT_DIR / f"hakua_{timestamp}.mp3"
     mp4_path = OUTPUT_DIR / f"hakua_{timestamp}.mp4"
-    irodori_ready = True
-    try:
-        start_irodori_server()
-    except Exception as e:
-        irodori_ready = False
-        print(f"Irodori-TTS unavailable; using free Edge TTS: {e}", file=sys.stderr)
-    # Irodori may crash inside the Windows safetensors loader; keep the
-    # zero-cost Edge Japanese voice as a production fallback for cron.
-    if not irodori_ready or not generate_tts_via_http(tweet_text, audio_path):
-        print("Falling back to free Edge TTS.", file=sys.stderr)
-        if not generate_edge_tts(tweet_text, audio_path):
-            return 1
+    if not generate_fishaudio_hakua(tweet_text, audio_path):
+        print("Daily post aborted: Fish Audio Hakua audio was not generated.", file=sys.stderr)
+        return 1
+    print("TTS provider: fishaudio; Hakua reference_id configured: true")
     if not create_mp4(photo, audio_path, mp4_path):
         return 1
     if not post_via_hermes_lm_twitterer(mp4_path, tweet_text):

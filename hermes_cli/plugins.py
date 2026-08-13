@@ -4389,6 +4389,11 @@ class PluginManager:
             loaded.module = module
 
             # Call register()
+            # Snapshot conversation plugins so registration bookkeeping can
+            # identify entries added by this plugin.  Keep this local to the
+            # load transaction; missing the snapshot makes every plugin with
+            # a register() function fail with NameError after registration.
+            _conversation_before = list(self._conversation_plugins)
             register_fn = getattr(module, "register", None)
             if register_fn is None:
                 loaded.error = "no register() function"
