@@ -20732,6 +20732,41 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 prompt, source, task_id, event_message_id, media_urls, media_types,
             )
 
+    def _resolve_enabled_toolsets_for_source(
+        self,
+        user_config: dict,
+        source: "SessionSource",
+        platform_key: str,
+    ) -> list:
+        """Resolve enabled toolsets for an agent run, honoring per-source overrides.
+
+        Asks the receiving adapter for a ``toolsets_for_source()`` override
+        (e.g. per-route webhook toolsets). When present, the override list is
+        validated through the SAME ``_get_platform_tools`` path as normal
+        platform config — by substituting it as the platform's toolset list —
+        so unknown names and platform-restricted toolsets are dropped rather
+        than trusted. When absent, falls back to standard
+        ``platform_toolsets.<platform>`` resolution.
+        """
+        from hermes_cli.tools_config import _get_platform_tools
+
+        override = None
+        try:
+            adapter = self._adapter_for_source(source)
+            if adapter is not None:
+                override = adapter.toolsets_for_source(source)
+        except Exception:
+            override = None
+
+        if override and isinstance(override, list):
+            cfg = dict(user_config)
+            pts = dict(cfg.get("platform_toolsets") or {})
+            pts[platform_key] = [str(t) for t in override]
+            cfg["platform_toolsets"] = pts
+            return sorted(_get_platform_tools(cfg, platform_key))
+
+        return sorted(_get_platform_tools(user_config, platform_key))
+
     async def _run_background_task_inner(
         self,
         prompt: str,
@@ -20770,8 +20805,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
             platform_key = _platform_config_key(source.platform)
 
-            from hermes_cli.tools_config import _get_platform_tools
-            enabled_toolsets = sorted(_get_platform_tools(user_config, platform_key))
+            enabled_toolsets = self._resolve_enabled_toolsets_for_source(
+                user_config, source, platform_key
+            )
             agent_cfg = user_config.get("agent") or {}
             disabled_toolsets = agent_cfg.get("disabled_toolsets") or None
 
@@ -25870,8 +25906,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         user_config = _load_gateway_config()
         platform_key = _platform_config_key(source.platform)
 
-        from hermes_cli.tools_config import _get_platform_tools
-        enabled_toolsets = sorted(_get_platform_tools(user_config, platform_key))
+        enabled_toolsets = self._resolve_enabled_toolsets_for_source(
+            user_config, source, platform_key
+        )
         agent_cfg_local = user_config.get("agent") or {}
         disabled_toolsets = agent_cfg_local.get("disabled_toolsets") or None
 
@@ -27863,6 +27900,19 @@ def _start_cron_ticker(stop_event: threading.Event, adapters=None, loop=None, in
     InProcessCronScheduler().start(stop_event, adapters=adapters, loop=loop, interval=interval)
 
 
+def _stop_cron_provider(provider) -> None:
+    """Stop a cron provider without letting it choose the gateway exit code."""
+    try:
+        provider.stop()
+    except SystemExit as exc:
+        logger.warning(
+            "Cron provider stop() attempted to exit the gateway with code %s; ignoring",
+            exc.code,
+        )
+    except Exception as exc:
+        logger.debug("Cron provider stop() error: %s", exc)
+
+
 # Upper bound for cooperatively draining the cron ticker on shutdown. The cron
 # thread delivers via ``safe_schedule_threadsafe`` and blocks on
 # ``future.result(timeout=60)`` (see cron/scheduler.py::_deliver_result), so a
@@ -28526,10 +28576,7 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     # silently dropped (#58818). Awaiting keeps the loop alive so the in-flight
     # delivery finishes before we tear down.
     cron_stop.set()
-    try:
-        cron_provider.stop()
-    except Exception as e:
-        logger.debug("Cron provider stop() error: %s", e)
+    _stop_cron_provider(cron_provider)
     if not await _await_thread_exit(cron_thread, timeout=_CRON_SHUTDOWN_DRAIN_TIMEOUT):
         logger.warning(
             "Cron ticker did not exit within %.0fs of shutdown — an in-flight "

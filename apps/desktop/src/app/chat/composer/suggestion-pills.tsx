@@ -7,7 +7,7 @@ import { triggerHaptic } from '@/lib/haptics'
 import { brandFor, brandGlyphStyle } from '@/lib/mcp-brands'
 import { useSessionSlice } from '@/lib/use-session-slice'
 import { cn } from '@/lib/utils'
-import { $composerSuggestionsBySession, suggestionKey } from '@/store/composer-suggestions'
+import { $composerSuggestionsBySession, markSuggestionInvoked, suggestionKey } from '@/store/composer-suggestions'
 
 /**
  * The composer suggestion strip — generic pills fed by the suggestion bus
@@ -47,12 +47,16 @@ export function SuggestionPills({ sessionId }: { sessionId: null | string }) {
 
     const label =
       phase === 'working' ? suggestion.workingLabel : phase === 'done' ? suggestion.doneLabel : suggestion.label
+
     const tip = phase === 'working' ? suggestion.workingTip : phase === 'done' ? suggestion.doneTip : suggestion.tip
 
     const invoke = async () => {
       cancels.set(key, false)
       setPhase(key, 'working')
       triggerHaptic('selection')
+      // Acting on a pill clears its ignored-count in the bus's declined
+      // ledger — its later withdrawal is success, not a strike.
+      markSuggestionInvoked(sessionId, key)
 
       try {
         await suggestion.invoke({ cancelled: () => cancels.get(key) === true, sessionId })

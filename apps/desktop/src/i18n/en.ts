@@ -1866,7 +1866,8 @@ export const en: Translations = {
       'new-session': 'New session',
       skills: 'Capabilities',
       messaging: 'Messaging',
-      artifacts: 'Artifacts'
+      artifacts: 'Artifacts',
+      cron: 'Scheduled jobs'
     },
     searchAria: 'Search sessions',
     searchPlaceholder: 'Search sessions…',
@@ -2142,6 +2143,28 @@ export const en: Translations = {
       added: server => `Added ${server}`,
       addedTip: 'Connected — its tools are ready in this chat',
       connectFailed: server => `Could not connect ${server}`
+    },
+    skillSuggestions: {
+      label: skill => `Use skill: ${skill}`,
+      tip: skill => `You mentioned “${skill}” — click to lead with that skill`,
+      done: skill => `Added /${skill}`,
+      doneTip: 'The skill loads when you send'
+    },
+    repairSuggestions: {
+      label: server => `Reconnect ${server}`,
+      tip: server => `A ${server} call just failed with a connection error`,
+      working: server => `Reconnecting ${server}…`,
+      workingTip: 'Click to cancel',
+      done: server => `Reconnected ${server}`,
+      doneTip: 'Fresh credentials are live in this chat',
+      failed: server => `Could not reconnect ${server}`
+    },
+    cronSuggestions: {
+      label: 'Schedule this',
+      tip: phrase => `“${phrase}” sounds recurring — run it on a schedule instead`,
+      prefix: 'Set this up as a scheduled job:',
+      done: 'Marked for scheduling',
+      doneTip: 'Send it and the agent creates the job'
     },
     snippets: {
       codeReview: {

@@ -2057,7 +2057,8 @@ export const zh: Translations = {
       'new-session': '新建会话',
       skills: '技能与工具',
       messaging: '消息平台',
-      artifacts: '产物'
+      artifacts: '产物',
+      cron: '定时任务'
     },
     searchAria: '搜索会话',
     searchPlaceholder: '搜索会话…',
@@ -2332,6 +2333,28 @@ export const zh: Translations = {
       added: server => `已添加 ${server}`,
       addedTip: '已连接 — 其工具已在此对话中可用',
       connectFailed: server => `无法连接 ${server}`
+    },
+    skillSuggestions: {
+      label: skill => `使用技能: ${skill}`,
+      tip: skill => `你提到了“${skill}” — 点击以该技能开头`,
+      done: skill => `已添加 /${skill}`,
+      doneTip: '发送时将加载该技能'
+    },
+    repairSuggestions: {
+      label: server => `重新连接 ${server}`,
+      tip: server => `${server} 调用刚因连接错误失败`,
+      working: server => `正在重新连接 ${server}…`,
+      workingTip: '点击取消',
+      done: server => `已重新连接 ${server}`,
+      doneTip: '新凭据已在此对话中生效',
+      failed: server => `无法重新连接 ${server}`
+    },
+    cronSuggestions: {
+      label: '定时执行',
+      tip: phrase => `“${phrase}”听起来是周期性任务 — 可以按计划运行`,
+      prefix: '将此设置为定时任务:',
+      done: '已标记为定时任务',
+      doneTip: '发送后由智能体创建任务'
     },
     snippets: {
       codeReview: {

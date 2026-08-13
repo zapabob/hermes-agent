@@ -2334,6 +2334,8 @@ class TestNewEndpoints:
             "name": "discord",
             "platform": "discord",
             "enabled": True,
+            # Install-on-enable: no provider post_setup pending for discord.
+            "post_setup_started": None,
         }
 
         config = load_config()

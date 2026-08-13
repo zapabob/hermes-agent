@@ -267,6 +267,46 @@ async def _wait_for_ready_or_bot_exit(
                 await ready_task
 
 
+def _needs_server_members_intent(
+    allowed_user_ids: set[str] | list[str] | None,
+    allowed_role_ids: set[str] | list[str] | None,
+) -> bool:
+    """Return True when Hermes must request Discord's Server Members intent.
+
+    Message Content is always requested. Server Members is only needed when the
+    allowlist contains usernames (not pure numeric IDs / ``*``) or when role
+    allowlists require member role lookups.
+    """
+    entries = allowed_user_ids or ()
+    if any(entry != "*" and not str(entry).isdigit() for entry in entries):
+        return True
+    return bool(allowed_role_ids)
+
+
+def _format_privileged_intents_guidance(*, needs_members: bool) -> str:
+    """Actionable fix text when Discord rejects privileged Gateway Intents."""
+    lines = [
+        "Discord rejected the connection because privileged Gateway Intents "
+        "are not enabled for this bot in the Developer Portal.",
+        "Hermes is requesting:",
+        "  - Message Content Intent (required to read message text)",
+    ]
+    if needs_members:
+        lines.append(
+            "  - Server Members Intent (required for username allowlists "
+            "and/or DISCORD_ALLOWED_ROLES)"
+        )
+    lines.extend(
+        [
+            "Fix: https://discord.com/developers/applications → your application "
+            "→ Bot → Privileged Gateway Intents → enable the intent(s) listed "
+            "above → Save Changes, then restart the gateway.",
+            "Docs: https://hermes-agent.nousresearch.com/docs/user-guide/messaging/discord",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def _find_discord_windows_bundled_opus(discord_module: Any = None) -> Optional[str]:
     """Return discord.py's bundled Windows opus DLL path when present."""
     if sys.platform != "win32":
@@ -1291,18 +1331,16 @@ class DiscordAdapter(BasePlatformAdapter):
             # that aren't enabled in the Discord Developer Portal can prevent the
             # bot from coming online at all, so avoid requesting members intent
             # unless it is actually necessary.
+            # ``"*"`` is the open-mode wildcard (honored in _is_allowed_user), not
+            # a username to resolve — requesting Members for it would silently
+            # fail bots that never enabled Members Intent in the Developer Portal.
             intents = Intents.default()
             intents.message_content = True
             intents.dm_messages = True
             intents.guild_messages = True
-            intents.members = (
-                # ``"*"`` is the open-mode wildcard (honored in _is_allowed_user),
-                # not a username to resolve, so it must not pull in the privileged
-                # Server Members intent — exactly the migrate-from-OpenClaw path
-                # the wildcard fix targets would otherwise silently fail to come
-                # online when Members Intent isn't enabled in the Developer Portal.
-                any(entry != "*" and not entry.isdigit() for entry in self._allowed_user_ids)
-                or bool(self._allowed_role_ids)  # Need members intent for role lookup
+            intents.members = _needs_server_members_intent(
+                self._allowed_user_ids,
+                self._allowed_role_ids,
             )
             intents.voice_states = True
 
@@ -1466,8 +1504,7 @@ class DiscordAdapter(BasePlatformAdapter):
             self._set_fatal_error(code, message, retryable=retryable)
             return False
 
-    @staticmethod
-    def _classify_connect_exception(error: Exception) -> tuple:
+    def _classify_connect_exception(self, error: Exception) -> tuple:
         """Map a Discord startup exception to ``(code, message, retryable)``.
 
         Type-based only — never match on message text. Unknown exception
@@ -1497,14 +1534,16 @@ class DiscordAdapter(BasePlatformAdapter):
                 False,
             )
         if _is("PrivilegedIntentsRequired"):
-            return (
-                "discord_intents_required",
-                "Discord privileged intents are not enabled for this bot: "
-                f"{error}. Enable 'Message Content Intent' (and any other "
-                "required privileged intents) for this application in the "
-                "Discord Developer Portal → Bot → Privileged Gateway Intents.",
-                False,
+            # Name the exact intents Hermes requested (#79430): Message
+            # Content always; Server Members only when username/role
+            # allowlists actually need member lookups.
+            guidance = _format_privileged_intents_guidance(
+                needs_members=_needs_server_members_intent(
+                    getattr(self, "_allowed_user_ids", None),
+                    getattr(self, "_allowed_role_ids", None),
+                )
             )
+            return ("discord_intents_required", guidance, False)
         return ("discord_connect_error", f"Discord startup failed: {error}", True)
 
     def _discord_message_admission(
@@ -10203,6 +10242,13 @@ def interactive_setup() -> None:
             return
 
     print_info("Create a bot at https://discord.com/developers/applications")
+    print_info("On Bot → Privileged Gateway Intents, enable:")
+    print_info("  - Message Content Intent (required — without it Discord rejects the connection)")
+    print_info("  - Server Members Intent (required if you use usernames or role allowlists)")
+    print_info("Save Changes in the Developer Portal before starting the gateway.")
+    print_info(
+        "Docs: https://hermes-agent.nousresearch.com/docs/user-guide/messaging/discord"
+    )
     token = prompt("Discord bot token", password=True)
     if not token:
         return

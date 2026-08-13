@@ -13,6 +13,7 @@ Regression tests for two bugs in WhatsAppAdapter.connect():
 """
 
 import asyncio
+import subprocess
 import signal
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -84,6 +85,27 @@ def _mock_aiohttp(status=200, json_data=None, json_side_effect=None):
     return MagicMock(return_value=_AsyncCM(mock_session))
 
 
+def _patch_whatsapp_subprocess_run(result):
+    """Stub bridge-management commands without breaking platform imports.
+
+    ``subprocess`` is a shared module object.  Replacing ``subprocess.run``
+    unconditionally makes CPython's Windows ``platform.system()`` probe return
+    a mock while aiohttp imports.  Keep the bridge commands isolated and let
+    unrelated subprocess consumers execute normally.
+    """
+    real_run = subprocess.run
+    bridge_commands = {"lsof", "netstat", "npm", "npm.cmd", "npm.exe", "pkill", "ss", "taskkill"}
+
+    def _run(command, *args, **kwargs):
+        if isinstance(command, (list, tuple)) and command:
+            executable = Path(str(command[0])).name.lower()
+            if executable in bridge_commands:
+                return result
+        return real_run(command, *args, **kwargs)
+
+    return patch("subprocess.run", side_effect=_run)
+
+
 def _connect_patches(mock_proc, mock_fh, mock_client_cls=None):
     """Return a dict of common patches needed to reach the health-check loop."""
     patches = {
@@ -94,7 +116,7 @@ def _connect_patches(mock_proc, mock_fh, mock_client_cls=None):
         patch("plugins.platforms.whatsapp.adapter.check_whatsapp_requirements", return_value=True),
         patch.object(Path, "exists", return_value=True),
         patch.object(Path, "mkdir", return_value=None),
-        patch("subprocess.run", return_value=MagicMock(returncode=0)),
+        _patch_whatsapp_subprocess_run(MagicMock(returncode=0)),
         patch("subprocess.Popen", return_value=mock_proc),
         patch("builtins.open", return_value=mock_fh),
         patch("plugins.platforms.whatsapp.adapter.asyncio.sleep", new_callable=AsyncMock),
@@ -210,12 +232,15 @@ class TestConnectCleanup:
 
         with patch("plugins.platforms.whatsapp.adapter.check_whatsapp_requirements", return_value=True), \
              patch.object(Path, "exists", autospec=True, side_effect=_path_exists), \
-             patch("subprocess.run", return_value=install_result), \
+             _patch_whatsapp_subprocess_run(install_result), \
              patch("gateway.status.acquire_scoped_lock", return_value=(True, None)), \
              patch("gateway.status.release_scoped_lock") as mock_release:
             result = await adapter.connect()
 
         assert result is False
+        assert adapter.fatal_error_code == "whatsapp_npm_install_failed"
+        assert adapter.fatal_error_retryable is False
+        assert "npm install failed" in (adapter.fatal_error_message or "")
         mock_release.assert_called_once_with("whatsapp-session", str(adapter._session_path))
         assert adapter._platform_lock_identity is None
 
