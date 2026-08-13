@@ -317,8 +317,11 @@ def generate_fishaudio_hakua(text: str, output_path: Path) -> bool:
         generated = Path(result["file_path"])
         if not generated.exists() or generated.stat().st_size <= 0:
             raise RuntimeError("Fish Audio returned no audio file")
-        if generated != output_path:
-            output_path.unlink(missing_ok=True)
+        if generated.resolve() != output_path.resolve():
+            raise RuntimeError(
+                "Fish Audio did not write to the requested output path; "
+                "refusing to create a video from an unknown artifact"
+            )
         print(
             "TTS generated via Fish Audio Hakua: "
             f"{generated} (reference_id_configured=true, model={cfg.model})"
@@ -402,7 +405,7 @@ def main():
     tweet_text = generate_ai_script(photo) + " #hermesagent はくあ"
     print(f"AI-generated script: {tweet_text}")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    # Fish Audio is the required Hakua voice for this job.  Do not silently
+    # Fish Audio is the required Hakua voice for this job. Do not silently
     # substitute Irodori, Edge TTS, or any other voice when it fails.
     audio_path = OUTPUT_DIR / f"hakua_{timestamp}.mp3"
     mp4_path = OUTPUT_DIR / f"hakua_{timestamp}.mp4"

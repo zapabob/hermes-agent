@@ -16,6 +16,24 @@ from hermes_cli.active_sessions import active_session_registry_snapshot
 from hermes_cli.browser_connect import ChromeDebugLaunch
 from tools import async_delegation as ad
 from tui_gateway import server
+from tui_gateway.transport import bind_transport, reset_transport
+
+
+def _dispatch_sync(req: dict, transport=None) -> dict | None:
+    """Run one RPC to completion synchronously, regardless of pool routing.
+
+    Voice RPCs (voice.toggle/record/tts) are in ``_LONG_HANDLERS`` so they run
+    on the RPC pool and ``server.dispatch`` returns None — the pool worker
+    writes the response via the bound transport. These tests exercise the
+    handler's business logic, not the routing, so they drive the handler
+    inline while preserving the transport-binding semantics ``dispatch``
+    applies around a real request.
+    """
+    token = bind_transport(transport)
+    try:
+        return server.handle_request(req)
+    finally:
+        reset_transport(token)
 
 
 @pytest.fixture(autouse=True)
@@ -1308,16 +1326,12 @@ def test_voice_toggle_returns_configured_record_key(monkeypatch):
     # review on #19835).
     monkeypatch.setenv("HERMES_VOICE", "0")
 
-    on_resp = server.dispatch({
-        "id": "voice-on",
-        "method": "voice.toggle",
-        "params": {"action": "on"},
-    })
-    status_resp = server.dispatch({
-        "id": "voice-status",
-        "method": "voice.toggle",
-        "params": {"action": "status"},
-    })
+    on_resp = _dispatch_sync(
+        {"id": "voice-on", "method": "voice.toggle", "params": {"action": "on"}}
+    )
+    status_resp = _dispatch_sync(
+        {"id": "voice-status", "method": "voice.toggle", "params": {"action": "status"}}
+    )
 
     assert on_resp["result"]["record_key"] == "ctrl+o"
     assert status_resp["result"]["record_key"] == "ctrl+o"
@@ -1338,7 +1352,7 @@ def test_voice_toggle_on_carries_stop_hint(monkeypatch):
     )
     monkeypatch.setenv("HERMES_VOICE", "0")
 
-    on_resp = server.dispatch(
+    on_resp = _dispatch_sync(
         {"id": "voice-on", "method": "voice.toggle", "params": {"action": "on"}}
     )
     assert on_resp["result"]["stop_hint"] == 'Say "halt" to end the voice chat.'
@@ -1352,13 +1366,13 @@ def test_voice_toggle_on_carries_stop_hint(monkeypatch):
             voice_stop_hint=lambda: "",
         ),
     )
-    on_resp = server.dispatch(
+    on_resp = _dispatch_sync(
         {"id": "voice-on2", "method": "voice.toggle", "params": {"action": "on"}}
     )
     assert on_resp["result"]["stop_hint"] == ""
 
     # off carries no hint text (mode is ending).
-    off_resp = server.dispatch(
+    off_resp = _dispatch_sync(
         {"id": "voice-off", "method": "voice.toggle", "params": {"action": "off"}}
     )
     assert off_resp["result"]["stop_hint"] == ""
@@ -1384,11 +1398,13 @@ def test_voice_toggle_handles_non_dict_voice_cfg(monkeypatch):
     for bad in (True, "cmd+b", None, 42, ["ctrl+b"]):
         monkeypatch.setattr(server, "_load_cfg", lambda b=bad: {"voice": b})
 
-        status_resp = server.dispatch({
-            "id": "voice-status",
-            "method": "voice.toggle",
-            "params": {"action": "status"},
-        })
+        status_resp = _dispatch_sync(
+            {
+                "id": "voice-status",
+                "method": "voice.toggle",
+                "params": {"action": "status"},
+            }
+        )
 
         assert status_resp["result"]["record_key"] == "ctrl+b", (
             f"voice.record_key fell back to default for voice={bad!r}"
@@ -1401,11 +1417,13 @@ def test_voice_toggle_handles_non_dict_voice_cfg(monkeypatch):
     for bad_root in (True, None, [], "ctrl+b", 42):
         monkeypatch.setattr(server, "_load_cfg", lambda r=bad_root: r)
 
-        status_resp = server.dispatch({
-            "id": "voice-status-root",
-            "method": "voice.toggle",
-            "params": {"action": "status"},
-        })
+        status_resp = _dispatch_sync(
+            {
+                "id": "voice-status-root",
+                "method": "voice.toggle",
+                "params": {"action": "status"},
+            }
+        )
 
         assert status_resp["result"]["record_key"] == "ctrl+b", (
             f"voice.record_key fell back to default for root={bad_root!r}"
@@ -1440,11 +1458,13 @@ def test_voice_record_start_handles_non_dict_voice_cfg(monkeypatch):
         captured.clear()
         monkeypatch.setattr(server, "_load_cfg", lambda b=bad: {"voice": b})
 
-        resp = server.dispatch({
-            "id": "voice-record",
-            "method": "voice.record",
-            "params": {"action": "start"},
-        })
+        resp = _dispatch_sync(
+            {
+                "id": "voice-record",
+                "method": "voice.record",
+                "params": {"action": "start"},
+            }
+        )
 
         assert "result" in resp, (
             f"voice.record raised for voice={bad!r}: {resp.get('error')}"
@@ -1467,11 +1487,13 @@ def test_voice_record_start_handles_non_dict_voice_cfg(monkeypatch):
         captured.clear()
         monkeypatch.setattr(server, "_load_cfg", lambda c=bad_bool_cfg: {"voice": c})
 
-        resp = server.dispatch({
-            "id": "voice-record-bool",
-            "method": "voice.record",
-            "params": {"action": "start"},
-        })
+        resp = _dispatch_sync(
+            {
+                "id": "voice-record-bool",
+                "method": "voice.record",
+                "params": {"action": "start"},
+            }
+        )
 
         assert "result" in resp, f"voice.record raised for bool cfg={bad_bool_cfg!r}"
         assert captured["silence_threshold"] == 200, (
@@ -1664,12 +1686,12 @@ def test_wake_owner_is_sticky_and_routes_detection_to_first_transport(monkeypatc
     server._wake_owner_transport = None
     server._wake_owner_surface = ""
     try:
-        started = server.dispatch({
+        started = _dispatch_sync({
             "id": "wake-1",
             "method": "wake.start",
             "params": {"surface": "gui", "session_id": "first-session"},
         }, transport=first)
-        denied = server.dispatch({
+        denied = _dispatch_sync({
             "id": "wake-2",
             "method": "wake.start",
             "params": {"surface": "tui", "session_id": "second-session"},
@@ -1679,7 +1701,7 @@ def test_wake_owner_is_sticky_and_routes_detection_to_first_transport(monkeypatc
             "method": "wake.stop",
             "params": {},
         }, transport=second)
-        denied_voice_stop = server.dispatch({
+        denied_voice_stop = _dispatch_sync({
             "id": "voice-stop-2",
             "method": "voice.record",
             "params": {"action": "stop"},
@@ -1710,7 +1732,7 @@ def test_wake_owner_is_sticky_and_routes_detection_to_first_transport(monkeypatc
         )]
         assert state["paused"] is True
 
-        voice_started = server.dispatch({
+        voice_started = _dispatch_sync({
             "id": "voice-start-1",
             "method": "voice.record",
             "params": {"action": "start", "session_id": "first-session"},
@@ -1730,7 +1752,7 @@ def test_wake_owner_is_sticky_and_routes_detection_to_first_transport(monkeypatc
             "disabled_persisted": False,
         }
 
-        reclaimed = server.dispatch({
+        reclaimed = _dispatch_sync({
             "id": "wake-reclaim-2",
             "method": "wake.start",
             "params": {"surface": "tui", "session_id": "second-session"},
@@ -1800,7 +1822,7 @@ def test_wake_toggle_persists_enabled_flag_only_on_explicit_gesture(monkeypatch)
     server._wake_owner_surface = ""
     try:
         # Passive auto-arm (no persist): refused, config untouched.
-        passive = server.dispatch({
+        passive = _dispatch_sync({
             "id": "wake-passive",
             "method": "wake.start",
             "params": {"surface": "gui"},
@@ -1809,7 +1831,7 @@ def test_wake_toggle_persists_enabled_flag_only_on_explicit_gesture(monkeypatch)
         assert persisted == []
 
         # Explicit gesture: enables in config AND arms.
-        clicked = server.dispatch({
+        clicked = _dispatch_sync({
             "id": "wake-click",
             "method": "wake.start",
             "params": {"surface": "gui", "persist": True},
@@ -1830,7 +1852,7 @@ def test_wake_toggle_persists_enabled_flag_only_on_explicit_gesture(monkeypatch)
 
         # persist does NOT override an explicit surface scoping.
         config.update(enabled=True, surface="tui")
-        scoped = server.dispatch({
+        scoped = _dispatch_sync({
             "id": "wake-scoped",
             "method": "wake.start",
             "params": {"surface": "gui", "persist": True},
@@ -1884,7 +1906,7 @@ def test_wake_status_reports_configured_input_device_and_windows_silence_hint(mo
     server._wake_owner_transport = transport
     server._wake_owner_surface = "gui"
     try:
-        response = server.dispatch(
+        response = _dispatch_sync(
             {"id": "wake-status", "method": "wake.status", "params": {}},
             transport=transport,
         )
@@ -1933,7 +1955,7 @@ def test_voice_record_start_forwards_max_recording_seconds(monkeypatch):
         captured.clear()
         monkeypatch.setattr(server, "_load_cfg", lambda c=cfg: {"voice": c})
 
-        resp = server.dispatch(
+        resp = _dispatch_sync(
             {
                 "id": "voice-record-cap",
                 "method": "voice.record",
@@ -1963,11 +1985,13 @@ def test_voice_record_stop_forces_transcription(monkeypatch):
         ),
     )
 
-    resp = server.dispatch({
-        "id": "voice-record-stop",
-        "method": "voice.record",
-        "params": {"action": "stop"},
-    })
+    resp = _dispatch_sync(
+        {
+            "id": "voice-record-stop",
+            "method": "voice.record",
+            "params": {"action": "stop"},
+        }
+    )
 
     assert resp["result"]["status"] == "stopped"
     assert captured["force_transcribe"] is True
@@ -1984,11 +2008,13 @@ def test_voice_record_stop_updates_event_session_id(monkeypatch):
     )
     monkeypatch.setattr(server, "_voice_event_sid", "old-session")
 
-    resp = server.dispatch({
-        "id": "voice-record-stop-session",
-        "method": "voice.record",
-        "params": {"action": "stop", "session_id": "new-session"},
-    })
+    resp = _dispatch_sync(
+        {
+            "id": "voice-record-stop-session",
+            "method": "voice.record",
+            "params": {"action": "stop", "session_id": "new-session"},
+        }
+    )
 
     assert resp["result"]["status"] == "stopped"
     assert server._voice_event_sid == "new-session"
@@ -2006,11 +2032,13 @@ def test_voice_record_start_reports_busy_when_stop_is_in_progress(monkeypatch):
     monkeypatch.setenv("HERMES_VOICE", "1")
     monkeypatch.setattr(server, "_load_cfg", lambda: {"voice": {}})
 
-    resp = server.dispatch({
-        "id": "voice-record-busy",
-        "method": "voice.record",
-        "params": {"action": "start"},
-    })
+    resp = _dispatch_sync(
+        {
+            "id": "voice-record-busy",
+            "method": "voice.record",
+            "params": {"action": "start"},
+        }
+    )
 
     assert resp["result"]["status"] == "busy"
 
@@ -2042,11 +2070,9 @@ def test_voice_toggle_tts_branch_also_carries_record_key(monkeypatch):
     # later test in the file (which now spins up the streaming TTS pipeline).
     monkeypatch.setenv("HERMES_VOICE_TTS", "0")
 
-    tts_resp = server.dispatch({
-        "id": "voice-tts",
-        "method": "voice.toggle",
-        "params": {"action": "tts"},
-    })
+    tts_resp = _dispatch_sync(
+        {"id": "voice-tts", "method": "voice.toggle", "params": {"action": "tts"}}
+    )
 
     assert tts_resp["result"]["record_key"] == "ctrl+space"
     assert tts_resp["result"]["tts"] is True
@@ -3177,10 +3203,11 @@ def test_session_cwd_set_profile_session_updates_profile_db(monkeypatch, tmp_pat
 
 
 def test_stored_session_runtime_overrides_skips_bare_billing_provider():
-    """A bare billing bucket ("custom"/"auto"/"openrouter") must not be restored as the
-    provider identity on resume. A custom endpoint that never used `/model` persists only
+    """A bare billing bucket ("custom"/"auto") must not be restored as the provider
+    identity on resume. A custom endpoint that never used `/model` persists only
     `billing_provider="custom"`; restoring that broke `session.resume` with "No LLM provider
-    configured" (agent_init treats it as non-routable). A real provider, or an explicit
+    configured" (agent_init treats it as non-routable). ``"openrouter"`` is NOT a bare bucket
+    — it is a fully routable provider; see #57588. A real provider, or an explicit
     `model_config.provider`, is still restored.
     """
     # Bare "custom" bucket, no explicit model_config.provider: no provider override restored.
@@ -3188,7 +3215,7 @@ def test_stored_session_runtime_overrides_skips_bare_billing_provider():
     assert "provider_override" not in ov
     assert ov["model_override"]["provider"] is None
 
-    for bare in ("auto", "openrouter", "custom"):
+    for bare in ("auto", "custom"):
         ov = server._stored_session_runtime_overrides({"model": "m", "billing_provider": bare})
         assert "provider_override" not in ov
 
@@ -3215,6 +3242,33 @@ def test_stored_session_runtime_overrides_restores_explicit_normal_tier():
 
     assert "service_tier_override" in overrides
     assert overrides["service_tier_override"] == ""
+
+
+def test_openrouter_session_resume_restores_provider():
+    """OpenRouter is a fully routable provider — sessions that used OpenRouter must
+    restore the "openrouter" provider override on resume, not fall through to whatever
+    the current global model is.  (#57588)
+    """
+    # OpenRouter session with no explicit model_config.provider (the common case
+    # for sessions that never used /model): billing_provider="openrouter" should
+    # be restored as the provider override.
+    ov = server._stored_session_runtime_overrides(
+        {"model": "anthropic/claude-opus-4.8", "billing_provider": "openrouter"}
+    )
+    assert ov["provider_override"] == "openrouter"
+    assert ov["model_override"]["provider"] == "openrouter"
+    assert ov["model_override"]["model"] == "anthropic/claude-opus-4.8"
+
+    # When an explicit model_config.provider exists, it takes precedence over
+    # billing_provider (this path was already correct).
+    ov = server._stored_session_runtime_overrides(
+        {
+            "model": "anthropic/claude-opus-4.8",
+            "billing_provider": "openrouter",
+            "model_config": {"provider": "openrouter", "base_url": "https://openrouter.ai/api/v1"},
+        }
+    )
+    assert ov["provider_override"] == "openrouter"
 
 
 def test_persist_live_session_runtime_preserves_resume_metadata(monkeypatch):
