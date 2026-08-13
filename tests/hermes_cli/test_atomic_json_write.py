@@ -75,7 +75,10 @@ class TestAtomicJsonWrite:
                 raise PermissionError("temporarily locked")
             real_replace(src, dst)
 
-        with patch.object(utils.os, "replace", side_effect=flaky_replace):
+        with (
+            patch.object(utils.os, "replace", side_effect=flaky_replace),
+            patch.object(utils, "_is_contended_windows_replace_error", return_value=True),
+        ):
             assert atomic_replace(tmp_file, target) == str(target)
 
         assert calls == 3

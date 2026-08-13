@@ -18,12 +18,14 @@ import {
   readFileDataUrlForIpc,
   resolveDirectoryForIpc,
   resolvePersistedRemoteToken,
+  resolvePublicHttpTarget,
   resolveReadableFileForIpc,
   resolveRequestedPathForIpc,
   resolveTimeoutMs,
   SAFE_STORAGE_ENCODING,
   SECRET_FILE_MODE,
   sensitiveFileBlockReason,
+  shouldRevealExternalFilePath,
   tightenSecretFileMode,
   writeSecretFileAtomic
 } from './hardening'

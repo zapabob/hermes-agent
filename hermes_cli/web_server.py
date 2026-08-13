@@ -6890,6 +6890,21 @@ async def set_model_assignment(body: ModelAssignment, profile: Optional[str] = N
                             "model": str(slot_cfg.get("model", "") or ""),
                         })
 
+            try:
+                with _profile_scope(target_profile):
+                    effective_config = load_config()
+                    effective_provider, effective_model = resolve_cron_model_drift_defaults(
+                        effective_config
+                    )
+                    cron_model_impact = build_cron_model_impact(
+                        current_provider=effective_provider or provider,
+                        current_model=effective_model or model,
+                        config=effective_config,
+                    )
+            except Exception:
+                _log.debug("cron model impact inspection failed", exc_info=True)
+                cron_model_impact = build_cron_model_impact(config=cfg, jobs={})
+
             return {
                 "ok": True,
                 "scope": "main",
@@ -6898,6 +6913,7 @@ async def set_model_assignment(body: ModelAssignment, profile: Optional[str] = N
                 "base_url": model_cfg.get("base_url", ""),
                 "gateway_tools": gateway_tools,
                 "stale_aux": stale_aux,
+                "cron_model_impact": cron_model_impact,
             }
 
         # scope == "auxiliary"

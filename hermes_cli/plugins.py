@@ -61,6 +61,7 @@ from hermes_constants import (
 )
 from registration_lifecycle import replacement_coordinator
 from utils import env_var_enabled, fast_safe_load
+from hermes_cli.cli_command_names import BUILTIN_SUBCOMMANDS
 from hermes_cli.config import cfg_get, load_config_readonly
 from hermes_cli.middleware import OBSERVER_SCHEMA_VERSION, VALID_MIDDLEWARE
 from hermes_cli.plugin_capabilities import (  # noqa: F401 — re-exported
@@ -1775,12 +1776,19 @@ class PluginContext:
         setup_fn: Callable,
         handler_fn: Callable | None = None,
         description: str = "",
-    ) -> PluginRegistration:
+    ) -> PluginRegistration | None:
         """Register a CLI subcommand (e.g. ``hermes honcho ...``).
 
         The *setup_fn* receives an argparse subparser and should add any
         arguments/sub-subparsers.  If *handler_fn* is provided it is set
         as the default dispatch function via ``set_defaults(func=...)``."""
+        if name in BUILTIN_SUBCOMMANDS:
+            logger.warning(
+                "Plugin %s attempted to register built-in CLI command %s; ignoring",
+                self.manifest.name,
+                name,
+            )
+            return None
         previous = self._manager._cli_commands.get(name)
         entry = {
             "name": name,

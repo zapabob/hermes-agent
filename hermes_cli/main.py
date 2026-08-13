@@ -82,6 +82,7 @@ _bootstrap_root = os.path.realpath(os.path.join(os.path.dirname(__file__), os.pa
 if _bootstrap_root not in sys.path:
     sys.path.insert(0, _bootstrap_root)
 from hermes_cli import _startup_fast  # noqa: E402
+from hermes_cli.cli_command_names import BUILTIN_SUBCOMMANDS
 
 # Early venv self-heal — MUST run before any third-party import below.  When
 # a prior ``hermes update`` left a recovery marker and a core package's import
@@ -10908,32 +10909,9 @@ def _build_provider_choices() -> list[str]:
 # 500ms+ pulling in google.cloud.pubsub_v1, aiohttp, grpc, etc.) when the
 # user's invocation clearly doesn't need any plugin-registered subcommand.
 #
-# Keep this in sync with the ``subparsers.add_parser("NAME", ...)`` calls
-# below in ``main()``. Missing an entry here only costs a one-time
-# discovery; extra entries here would let a plugin command silently fail
-# to parse.
-_BUILTIN_SUBCOMMANDS = frozenset(
-    {
-        "acp", "approvals", "auth", "backup", "bundles", "checkpoints", "claw", "completion",
-        "computer-use",
-        "config", "console", "cron", "curator", "dashboard", "serve", "debug", "doctor",
-        "dump", "egress", "fallback", "gateway", "hooks", "import", "import-agent", "insights",
-        "gui", "desktop", "harness", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate", "moa",
-        "journey", "memory-graph", "learning",
-        "model", "monitoring", "pairing", "pause", "pets", "plugins", "portal", "profile",
-        "project", "proxy",
-        "prompt-size",
-        "resume",
-        "send", "sessions", "setup",
-        "skin", "skills", "slack", "status", "sync", "tools", "uninstall", "update",
-        "version", "webhook", "whatsapp", "whatsapp-cloud", "chat", "secrets", "security",
-        "verify",
-        # Help-ish invocations — plugin commands not being listed in
-        # top-level --help is an acceptable trade-off for skipping an
-        # expensive eager import of every bundled plugin module.
-        "help",
-    }
-)
+# Keep this private alias for compatibility with callers and tests that
+# previously imported the fast-path list from this module.
+_BUILTIN_SUBCOMMANDS = BUILTIN_SUBCOMMANDS
 
 
 # Top-level flags that take a value. Needed by ``_first_positional_argv``

@@ -980,6 +980,8 @@ export {
   reviewCreatePr,
   reviewDiff,
   reviewFetchPrComment,
+  reviewHistory,
+  reviewHistoryDiff,
   reviewList,
   reviewPrList,
   reviewPush,
