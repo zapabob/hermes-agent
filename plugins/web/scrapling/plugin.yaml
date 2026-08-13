@@ -3,5 +3,14 @@ version: 1.0.0
 description: "Scrapling-based local web content extraction. HTTP-first fetcher with automatic markdown conversion; no API key required."
 author: NousResearch
 kind: backend
+manifest_version: 2
+api_version: 1
+python_dependencies:
+  - "scrapling>=0.4,<1"
+  - "markdownify>=1,<2"
+tags:
+  - web
+  - search
+  - extract
 provides_web_providers:
   - scrapling

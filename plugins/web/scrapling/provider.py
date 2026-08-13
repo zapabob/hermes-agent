@@ -15,6 +15,14 @@ from tools.website_policy import check_website_access
 logger = logging.getLogger(__name__)
 
 
+def _load_dependencies():
+    """Load optional runtime dependencies only when this provider is selected."""
+    from markdownify import markdownify
+    from scrapling.fetchers import Fetcher
+
+    return Fetcher, markdownify
+
+
 class ScraplingWebProvider(WebSearchProvider):
     """Local web extraction via Scrapling."""
 
@@ -28,7 +36,7 @@ class ScraplingWebProvider(WebSearchProvider):
 
     def is_available(self) -> bool:
         try:
-            import scrapling  # noqa: F401
+            _load_dependencies()
             return True
         except ImportError:
             return False
@@ -47,17 +55,22 @@ class ScraplingWebProvider(WebSearchProvider):
         if is_interrupted():
             return {"success": False, "error": "Interrupted"}
 
+        safe_limit = max(1, int(limit))
         encoded_query = urllib.parse.quote_plus(query)
         url = f"https://html.duckduckgo.com/html/?q={encoded_query}"
 
-        logger.info("Scrapling search: '%s' (limit=%d)", query, limit)
+        logger.info("Scrapling search: '%s' (limit=%d)", query, safe_limit)
 
-        from scrapling.fetchers import Fetcher
-
-        page = Fetcher.get(url, timeout=30)
+        Fetcher, _ = _load_dependencies()
+        page = Fetcher.get(
+            url,
+            timeout=30,
+            follow_redirects="safe",
+            max_redirects=10,
+        )
 
         results = []
-        for i, result_block in enumerate(list(page.css(".result"))[:limit]):
+        for result_block in list(page.css(".result"))[:safe_limit]:
             # title: .result__a の ::text
             title = ""
             title_link_sel = result_block.css(".result__a")
@@ -83,6 +96,9 @@ class ScraplingWebProvider(WebSearchProvider):
                     actual_url = url_elem.get_all_text().strip()
             if not actual_url:
                 actual_url = href
+            if not is_safe_url(actual_url):
+                logger.debug("Dropping unsafe Scrapling search result: %r", actual_url)
+                continue
 
             # description: .result__snippet
             snippet = ""
@@ -96,7 +112,7 @@ class ScraplingWebProvider(WebSearchProvider):
                     "title": title,
                     "url": actual_url,
                     "description": snippet,
-                    "position": i + 1,
+                    "position": len(results) + 1,
                 }
             )
 
@@ -109,9 +125,6 @@ class ScraplingWebProvider(WebSearchProvider):
             return [{"url": u, "error": "Interrupted", "title": ""} for u in urls]
 
         _format = kwargs.get("format", "markdown")
-
-        from scrapling.fetchers import Fetcher
-        from markdownify import markdownify
 
         results: List[Dict[str, Any]] = []
         for url in urls:
@@ -153,8 +166,37 @@ class ScraplingWebProvider(WebSearchProvider):
                 continue
 
             try:
+                Fetcher, markdownify = _load_dependencies()
+            except ImportError as exc:
+                results.append(
+                    {
+                        "url": url,
+                        "title": "",
+                        "content": "",
+                        "error": f"Scrapling dependencies unavailable: {exc}",
+                    }
+                )
+                continue
+
+            try:
                 logger.info("Scrapling extracting: %s", url)
-                page = Fetcher.get(url, timeout=30)
+                page = Fetcher.get(
+                    url,
+                    timeout=30,
+                    follow_redirects="safe",
+                    max_redirects=10,
+                )
+                final_url = str(getattr(page, "url", url))
+                if not is_safe_url(final_url):
+                    results.append(
+                        {
+                            "url": url,
+                            "title": "",
+                            "content": "",
+                            "error": "Redirect target blocked by safety policy",
+                        }
+                    )
+                    continue
                 raw_html = page.html_content
                 title = (
                     page.css("h1::text").get()
@@ -178,3 +220,15 @@ class ScraplingWebProvider(WebSearchProvider):
                 )
 
         return results
+
+    def get_setup_schema(self) -> Dict[str, Any]:
+        """Describe the optional local dependencies in the official picker shape."""
+        return {
+            "name": "Scrapling",
+            "badge": "local Python dependencies · search + extract",
+            "tag": (
+                "DuckDuckGo HTML search and page extraction via Scrapling. "
+                "Install the declared Python dependencies to enable it."
+            ),
+            "env_vars": [],
+        }

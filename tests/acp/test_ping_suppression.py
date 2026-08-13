@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from io import StringIO
 
 import pytest
@@ -118,36 +117,33 @@ async def test_bare_ping_request_produces_proper_response_and_no_stderr_noise(
     prior_level = root.level
     root.handlers = [handler]
     root.setLevel(logging.INFO)
+    server = None
+    client_output = None
+    agent_output = None
+    agent_task = None
     # Also suppress propagation of caplog's default handler interfering with
     # our stream (caplog still captures via its own propagation hook).
     try:
         loop = asyncio.get_running_loop()
 
-        # Pipe client -> agent
-        client_to_agent_r, client_to_agent_w = os.pipe()
-        # Pipe agent -> client
-        agent_to_client_r, agent_to_client_w = os.pipe()
+        # A loopback Stream pair gives the ACP runtime real StreamReader and
+        # StreamWriter objects on every host.  Raw os.pipe() descriptors are
+        # CRT file descriptors on Windows, while ProactorEventLoop requires
+        # native handles for connect_{read,write}_pipe().
+        agent_streams = loop.create_future()
 
-        in_read_file = os.fdopen(client_to_agent_r, "rb", buffering=0)
-        in_write_file = os.fdopen(client_to_agent_w, "wb", buffering=0)
-        out_read_file = os.fdopen(agent_to_client_r, "rb", buffering=0)
-        out_write_file = os.fdopen(agent_to_client_w, "wb", buffering=0)
+        async def capture_agent_streams(reader, writer):  # noqa: ANN001
+            if not agent_streams.done():
+                agent_streams.set_result((reader, writer))
+                return
+            writer.close()
+            await writer.wait_closed()
 
-        # Agent reads its input from this StreamReader:
-        agent_input = asyncio.StreamReader(limit=1024 * 1024, loop=loop)
-        agent_input_proto = asyncio.StreamReaderProtocol(agent_input, loop=loop)
-        await loop.connect_read_pipe(lambda: agent_input_proto, in_read_file)
-
-        # Agent writes its output via this StreamWriter:
-        out_transport, out_protocol = await loop.connect_write_pipe(
-            asyncio.streams.FlowControlMixin, out_write_file
-        )
-        agent_output = asyncio.StreamWriter(out_transport, out_protocol, None, loop)
-
-        # Test harness reads agent output via this StreamReader:
-        client_input = asyncio.StreamReader(limit=1024 * 1024, loop=loop)
-        client_input_proto = asyncio.StreamReaderProtocol(client_input, loop=loop)
-        await loop.connect_read_pipe(lambda: client_input_proto, out_read_file)
+        server = await asyncio.start_server(capture_agent_streams, "127.0.0.1", 0)
+        assert server.sockets
+        port = server.sockets[0].getsockname()[1]
+        client_input, client_output = await asyncio.open_connection("127.0.0.1", port)
+        agent_input, agent_output = await asyncio.wait_for(agent_streams, timeout=2.0)
 
         agent_task = asyncio.create_task(
             acp.run_agent(
@@ -160,8 +156,8 @@ async def test_bare_ping_request_produces_proper_response_and_no_stderr_noise(
 
         # Send a bare `ping`
         request = {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}}
-        in_write_file.write((json.dumps(request) + "\n").encode())
-        in_write_file.flush()
+        client_output.write((json.dumps(request) + "\n").encode())
+        await client_output.drain()
 
         response_line = await asyncio.wait_for(client_input.readline(), timeout=5.0)
         # Give the supervisor task a tick to fire (filter should eat it)
@@ -177,7 +173,8 @@ async def test_bare_ping_request_produces_proper_response_and_no_stderr_noise(
         )
 
         # Clean shutdown
-        in_write_file.close()
+        client_output.close()
+        await client_output.wait_closed()
         try:
             await asyncio.wait_for(agent_task, timeout=2.0)
         except (asyncio.TimeoutError, Exception):
@@ -187,5 +184,20 @@ async def test_bare_ping_request_produces_proper_response_and_no_stderr_noise(
             except BaseException:  # noqa: BLE001
                 pass
     finally:
+        if agent_task is not None and not agent_task.done():
+            agent_task.cancel()
+            try:
+                await agent_task
+            except BaseException:  # noqa: BLE001
+                pass
+        if client_output is not None and not client_output.is_closing():
+            client_output.close()
+            await client_output.wait_closed()
+        if agent_output is not None and not agent_output.is_closing():
+            agent_output.close()
+            await agent_output.wait_closed()
+        if server is not None:
+            server.close()
+            await server.wait_closed()
         root.handlers = prior_handlers
         root.setLevel(prior_level)

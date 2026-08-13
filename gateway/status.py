@@ -1018,6 +1018,8 @@ def write_runtime_status(
     platform_state: Any = _UNSET,
     error_code: Any = _UNSET,
     error_message: Any = _UNSET,
+    needs_attention: Any = _UNSET,
+    retrying_since: Any = _UNSET,
     served_profiles: Any = _UNSET,
 ) -> None:
     """Persist gateway runtime health information for diagnostics/status."""
@@ -1056,6 +1058,17 @@ def write_runtime_status(
             platform_payload["error_code"] = error_code
         if error_message is not _UNSET:
             platform_payload["error_message"] = error_message
+        if needs_attention is not _UNSET:
+            # Long-lived reconnect-loop escalation (OOF-156): True once a
+            # platform has been continuously failing/retrying past the
+            # attention threshold. Retry never stops — this is a signal for
+            # owners and fleet monitoring, not a circuit breaker. Cleared
+            # (False) on successful reconnect.
+            platform_payload["needs_attention"] = bool(needs_attention)
+        if retrying_since is not _UNSET:
+            # ISO timestamp of when the platform entered its current
+            # continuous retry episode; None clears it on reconnect.
+            platform_payload["retrying_since"] = retrying_since
         platform_payload["updated_at"] = _utc_now_iso()
         payload["platforms"][platform] = platform_payload
 

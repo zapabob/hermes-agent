@@ -1362,6 +1362,22 @@ class DiscordAdapter(BasePlatformAdapter):
                 await adapter_self._dispatch_discord_message(message)
 
             @self._client.event
+            async def on_message_edit(before: DiscordMessage, after: DiscordMessage):
+                await adapter_self._on_platform_message_edit(before, after)
+
+            @self._client.event
+            async def on_message_delete(message: DiscordMessage):
+                await adapter_self._on_platform_message_delete(message)
+
+            @self._client.event
+            async def on_thread_create(thread):
+                await adapter_self._on_platform_thread_create(thread)
+
+            @self._client.event
+            async def on_thread_update(before, after):
+                await adapter_self._on_platform_thread_update(before, after)
+
+            @self._client.event
             async def on_voice_state_update(member, before, after):
                 """Track voice channel join/leave events."""
                 # Only track channels where the bot is connected
@@ -1424,6 +1440,13 @@ class DiscordAdapter(BasePlatformAdapter):
             # each process every message, producing duplicate threads/responses.
             await self._cancel_bot_task()
             self._release_platform_lock()
+            # Always set an explicit fatal code (OOF-152): a code-less failure
+            # forces the gateway into its "no info = probably transient" guess.
+            self._set_fatal_error(
+                "discord_connect_timeout",
+                "Timed out waiting for the Discord gateway to become ready",
+                retryable=True,
+            )
             return False
         except Exception as e:  # pragma: no cover - defensive logging
             logger.error("[%s] Failed to connect to Discord: %s", self.name, e, exc_info=True)
@@ -1432,7 +1455,57 @@ class DiscordAdapter(BasePlatformAdapter):
             # step raises. Cancel it so the discarded adapter cannot connect.
             await self._cancel_bot_task()
             self._release_platform_lock()
+            # Classify by exception TYPE (OOF-152). Previously this branch set
+            # no fatal error at all, so the gateway treated every startup
+            # failure — including a revoked token or a privileged intent that
+            # was never enabled in the Developer Portal — as transient and
+            # retried it forever with zero owner signal. Auth/permission
+            # failures can never self-heal: mark them retryable=False so they
+            # drop out of the reconnect queue and surface as fatal.
+            code, message, retryable = self._classify_connect_exception(e)
+            self._set_fatal_error(code, message, retryable=retryable)
             return False
+
+    @staticmethod
+    def _classify_connect_exception(error: Exception) -> tuple:
+        """Map a Discord startup exception to ``(code, message, retryable)``.
+
+        Type-based only — never match on message text. Unknown exception
+        types stay ``retryable=True``: a false terminal on a transient error
+        would leave a recovered platform silently dead, which is the exact
+        failure mode the auto-pause removal fixed. The reconnect watcher's
+        NEEDS_ATTENTION escalation covers misclassified permanent failures.
+        """
+        def _is(type_name: str) -> bool:
+            # Class-name check covers mocked discord.py (tests) and failed
+            # imports; the isinstance check additionally covers subclasses.
+            if error.__class__.__name__ == type_name:
+                return True
+            try:
+                import discord as _discord
+                exc_type = getattr(_discord, type_name, None)
+                return isinstance(exc_type, type) and isinstance(error, exc_type)
+            except Exception:
+                return False
+
+        if _is("LoginFailure"):
+            return (
+                "discord_auth_error",
+                f"Discord bot token rejected: {error}. The token is invalid or "
+                "was revoked — regenerate it in the Discord Developer Portal "
+                "and update DISCORD_BOT_TOKEN.",
+                False,
+            )
+        if _is("PrivilegedIntentsRequired"):
+            return (
+                "discord_intents_required",
+                "Discord privileged intents are not enabled for this bot: "
+                f"{error}. Enable 'Message Content Intent' (and any other "
+                "required privileged intents) for this application in the "
+                "Discord Developer Portal → Bot → Privileged Gateway Intents.",
+                False,
+            )
+        return ("discord_connect_error", f"Discord startup failed: {error}", True)
 
     def _discord_message_admission(
         self,
@@ -1523,6 +1596,256 @@ class DiscordAdapter(BasePlatformAdapter):
         return await self._handle_message(
             message, role_authorized=role_authorized,
         )
+
+    # ------------------------------------------------------------------
+    # gateway_platform_event fire-sites (#64176)
+    # ------------------------------------------------------------------
+
+    def _thread_id_and_chat_for_channel(self, channel) -> tuple[Optional[str], Optional[str]]:
+        """Return ``(thread_id, chat_id)`` for a message channel.
+
+        For a thread, ``chat_id`` is the thread id itself (matching how
+        Discord message dispatch keys sessions) and ``thread_id`` is set;
+        for a plain channel, ``thread_id`` is None.
+        """
+        if channel is None:
+            return None, None
+        chan_id = getattr(channel, "id", None)
+        if chan_id is None:
+            return None, None
+        is_thread = isinstance(channel, getattr(discord, "Thread", ()))
+        return (str(chan_id) if is_thread else None), str(chan_id)
+
+    def _source_for_platform_event(
+        self,
+        *,
+        chat_id: str,
+        user_id: Optional[str],
+        user_name: Optional[str],
+        thread_id: Optional[str],
+        guild_id: Optional[str],
+        message_id: Optional[str] = None,
+    ):
+        """Build the internal SessionSource the gateway authorizes against.
+
+        Raises ``ValueError`` when the actor or chat identity is missing so the
+        post-auth boundary fails closed instead of authorizing an incomplete
+        source (mirrors the Telegram reaction extractor).
+        """
+        if not user_id or not chat_id:
+            raise ValueError(
+                "gateway_platform_event requires actor and chat identities"
+            )
+        return self.build_source(
+            chat_id=chat_id,
+            chat_type="thread" if thread_id else "group",
+            user_id=user_id,
+            user_name=user_name,
+            thread_id=thread_id,
+            guild_id=guild_id,
+            message_id=message_id,
+        )
+
+    async def _fire_platform_event(self, event: Dict[str, Any], source) -> None:
+        """Forward one normalized envelope to the gateway-owned boundary.
+
+        No installed callback means no trusted auth boundary — fail closed.
+        Dispatch errors never propagate into discord.py's event loop.
+        """
+        handler = getattr(self, "_platform_event_handler", None)
+        if handler is None:
+            return
+        try:
+            await handler(event, source)
+        except Exception:
+            logger.debug(
+                "[%s] gateway_platform_event dispatch error", self.name, exc_info=True,
+            )
+
+    @staticmethod
+    def _platform_events_subscribed() -> bool:
+        """has_hook fast-path shared by every Discord fire-site."""
+        try:
+            from hermes_cli.lifecycle import has_hook
+
+            return has_hook("gateway_platform_event")
+        except Exception:
+            return False
+
+    async def _on_platform_message_edit(self, before, after) -> None:
+        """Normalize ``on_message_edit`` into event_type ``message_edited``."""
+        if not self._platform_events_subscribed():
+            return
+        try:
+            message = after if after is not None else before
+            author = getattr(message, "author", None)
+            if author is not None and getattr(author, "bot", False):
+                return  # bot's own progressive edits are noise, not user events
+            thread_id, chat_id = self._thread_id_and_chat_for_channel(
+                getattr(message, "channel", None)
+            )
+            message_id = getattr(message, "id", None)
+            if chat_id is None or message_id is None:
+                return
+            text = getattr(message, "content", None)
+            edited_at = getattr(message, "edited_at", None)
+            guild = getattr(message, "guild", None)
+            event = {
+                "platform": "discord",
+                "event_type": "message_edited",
+                "payload": {
+                    "chat_id": str(chat_id)[:128],
+                    "message_id": str(message_id)[:128],
+                    "thread_id": thread_id[:128] if thread_id else None,
+                    "text": text[:8192] if isinstance(text, str) else None,
+                    "edited_at": (
+                        str(edited_at.isoformat())[:64]
+                        if edited_at is not None and hasattr(edited_at, "isoformat")
+                        else None
+                    ),
+                },
+            }
+            source = self._source_for_platform_event(
+                chat_id=str(chat_id),
+                user_id=str(getattr(author, "id", "") or "") or None,
+                user_name=getattr(author, "display_name", None),
+                thread_id=thread_id,
+                guild_id=str(getattr(guild, "id", "")) if guild else None,
+                message_id=str(message_id),
+            )
+        except Exception:
+            logger.debug(
+                "[%s] message_edited normalize error", self.name, exc_info=True,
+            )
+            return
+        await self._fire_platform_event(event, source)
+
+    async def _on_platform_message_delete(self, message) -> None:
+        """Normalize ``on_message_delete`` into event_type ``message_deleted``.
+
+        Discord does not identify the deleter in this event; the source
+        authorized is the deleted message's author (the only identity the
+        cached event carries). Uncached deletions never fire.
+        """
+        if not self._platform_events_subscribed():
+            return
+        try:
+            author = getattr(message, "author", None)
+            if author is not None and getattr(author, "bot", False):
+                return
+            thread_id, chat_id = self._thread_id_and_chat_for_channel(
+                getattr(message, "channel", None)
+            )
+            message_id = getattr(message, "id", None)
+            if chat_id is None or message_id is None:
+                return
+            guild = getattr(message, "guild", None)
+            event = {
+                "platform": "discord",
+                "event_type": "message_deleted",
+                "payload": {
+                    "chat_id": str(chat_id)[:128],
+                    "message_id": str(message_id)[:128],
+                    "thread_id": thread_id[:128] if thread_id else None,
+                    "author_id": str(getattr(author, "id", "") or "")[:128] or None,
+                },
+            }
+            source = self._source_for_platform_event(
+                chat_id=str(chat_id),
+                user_id=str(getattr(author, "id", "") or "") or None,
+                user_name=getattr(author, "display_name", None),
+                thread_id=thread_id,
+                guild_id=str(getattr(guild, "id", "")) if guild else None,
+                message_id=str(message_id),
+            )
+        except Exception:
+            logger.debug(
+                "[%s] message_deleted normalize error", self.name, exc_info=True,
+            )
+            return
+        await self._fire_platform_event(event, source)
+
+    async def _on_platform_thread_create(self, thread) -> None:
+        """Normalize ``on_thread_create`` into event_type ``thread_created``."""
+        if not self._platform_events_subscribed():
+            return
+        try:
+            thread_id = getattr(thread, "id", None)
+            owner_id = getattr(thread, "owner_id", None)
+            if thread_id is None:
+                return
+            parent_id = getattr(thread, "parent_id", None)
+            guild = getattr(thread, "guild", None)
+            name = getattr(thread, "name", None)
+            event = {
+                "platform": "discord",
+                "event_type": "thread_created",
+                "payload": {
+                    "thread_id": str(thread_id)[:128],
+                    "parent_chat_id": str(parent_id)[:128] if parent_id is not None else None,
+                    "name": name[:256] if isinstance(name, str) else None,
+                    "owner_id": str(owner_id)[:128] if owner_id is not None else None,
+                },
+            }
+            source = self._source_for_platform_event(
+                chat_id=str(thread_id),
+                user_id=str(owner_id) if owner_id is not None else None,
+                user_name=None,
+                thread_id=str(thread_id),
+                guild_id=str(getattr(guild, "id", "")) if guild else None,
+            )
+        except Exception:
+            logger.debug(
+                "[%s] thread_created normalize error", self.name, exc_info=True,
+            )
+            return
+        await self._fire_platform_event(event, source)
+
+    async def _on_platform_thread_update(self, before, after) -> None:
+        """Normalize a rename observed via ``on_thread_update`` into
+        event_type ``thread_renamed``. Non-rename updates (archive state,
+        slowmode, tags) are dropped.
+
+        Discord's thread-update event carries no actor; the thread owner is
+        the only stable identity available, so that is what the gateway
+        authorizes (same trade-off as ``message_deleted``'s author).
+        """
+        if not self._platform_events_subscribed():
+            return
+        try:
+            old_name = getattr(before, "name", None)
+            new_name = getattr(after, "name", None)
+            if old_name == new_name or not isinstance(new_name, str):
+                return
+            thread_id = getattr(after, "id", None)
+            owner_id = getattr(after, "owner_id", None)
+            if thread_id is None:
+                return
+            parent_id = getattr(after, "parent_id", None)
+            guild = getattr(after, "guild", None)
+            event = {
+                "platform": "discord",
+                "event_type": "thread_renamed",
+                "payload": {
+                    "thread_id": str(thread_id)[:128],
+                    "parent_chat_id": str(parent_id)[:128] if parent_id is not None else None,
+                    "old_name": old_name[:256] if isinstance(old_name, str) else None,
+                    "new_name": new_name[:256],
+                },
+            }
+            source = self._source_for_platform_event(
+                chat_id=str(thread_id),
+                user_id=str(owner_id) if owner_id is not None else None,
+                user_name=None,
+                thread_id=str(thread_id),
+                guild_id=str(getattr(guild, "id", "")) if guild else None,
+            )
+        except Exception:
+            logger.debug(
+                "[%s] thread_renamed normalize error", self.name, exc_info=True,
+            )
+            return
+        await self._fire_platform_event(event, source)
 
     async def _cancel_bot_task(self) -> None:
         """Cancel and await the background client.start() task, if running."""

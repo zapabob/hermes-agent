@@ -83,11 +83,17 @@ def expand_pattern(pattern: str, files: list[str]) -> list[str]:
     return [path for path in files if fnmatch.fnmatch(path, pattern)]
 
 
+def is_intentionally_missing(path: str, ignore_patterns: tuple[str, ...]) -> bool:
+    return any(fnmatch.fnmatch(path, pattern) for pattern in ignore_patterns)
+
+
 def main() -> int:
     strategy = json.loads(STRATEGY.read_text(encoding="utf-8"))
+    ignore_patterns = tuple(strategy.get("audit_ignore_missing", []))
     files = fork_files()
     differs: list[tuple[str, str]] = []
     missing: list[str] = []
+    intentionally_missing: list[str] = []
     identical: list[str] = []
 
     for rule in strategy.get("rules", []):
@@ -100,7 +106,10 @@ def main() -> int:
                 continue
             cur_text = current_text(path)
             if cur_text is None:
-                missing.append(path)
+                if is_intentionally_missing(path, ignore_patterns):
+                    intentionally_missing.append(path)
+                else:
+                    missing.append(path)
                 continue
             if fork_text == cur_text:
                 identical.append(path)
@@ -117,7 +126,10 @@ def main() -> int:
             continue
         cur_text = current_text(path)
         if cur_text is None:
-            missing.append(path)
+            if is_intentionally_missing(path, ignore_patterns):
+                intentionally_missing.append(path)
+            else:
+                missing.append(path)
         elif fork_text != cur_text:
             differs.append((path, "plugin_tree"))
         else:
@@ -130,12 +142,19 @@ def main() -> int:
             if needle not in text:
                 symbol_missing.append((path, needle))
 
-    print(f"identical={len(identical)} differs={len(differs)} missing={len(missing)}")
+    print(
+        "identical="
+        f"{len(identical)} differs={len(differs)} missing={len(missing)} "
+        f"intentionally_missing={len(intentionally_missing)}"
+    )
     print("\n-- differs (fork != current) --")
     for path, action in differs:
         print(f"{action:22} {path}")
     print("\n-- missing files --")
     for path in missing:
+        print(path)
+    print("\n-- intentionally missing files --")
+    for path in intentionally_missing:
         print(path)
     print("\n-- symbol missing --")
     for path, needle in symbol_missing:
@@ -144,6 +163,7 @@ def main() -> int:
     report = {
         "differs": [{"path": p, "action": a} for p, a in differs],
         "missing": missing,
+        "intentionally_missing": intentionally_missing,
         "symbol_missing": [{"path": p, "needle": n} for p, n in symbol_missing],
     }
     out = REPO_ROOT / "_docs" / "merge-reports" / "fork-feature-audit.json"

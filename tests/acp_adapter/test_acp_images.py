@@ -10,6 +10,7 @@ from acp.schema import (
     TextResourceContents,
 )
 
+from acp_adapter import server as acp_server
 from acp_adapter.server import HermesACPAgent, _content_blocks_to_openai_user_content
 
 
@@ -59,6 +60,23 @@ def test_acp_resource_link_file_is_inlined_as_text(tmp_path):
     )
 
 
+def test_native_windows_file_uri_keeps_its_drive_path(monkeypatch):
+    monkeypatch.setattr(acp_server, "_is_native_windows", lambda: True)
+
+    path = acp_server._path_from_file_uri("file:///C:/workspace/notes.md")
+
+    assert path is not None
+    assert str(path).replace("\\", "/") == "C:/workspace/notes.md"
+
+
+def test_wsl_file_uri_translates_windows_drive_path(monkeypatch):
+    monkeypatch.setattr(acp_server, "_is_native_windows", lambda: False)
+
+    path = acp_server._path_from_file_uri("file:///C:/workspace/notes.md")
+
+    assert path == acp_server.Path("/mnt/c/workspace/notes.md")
+
+
 
 
 @pytest.mark.asyncio
@@ -75,8 +93,6 @@ _ONE_PX_PNG = bytes.fromhex(
     "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
     "890000000a49444154789c6300010000000500010d0a2db40000000049454e44ae426082"
 )
-
-
 
 
 

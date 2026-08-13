@@ -15,6 +15,7 @@ Covers:
 from __future__ import annotations
 
 import io
+import subprocess
 from contextlib import redirect_stdout
 from unittest.mock import MagicMock, patch
 
@@ -38,9 +39,13 @@ def test_install_npm_works_without_extras(tmp_path, monkeypatch):
 
     captured = {}
 
+    real_run = subprocess.run
+
     def fake_run(cmd, **kwargs):
-        captured["cmd"] = cmd
-        return MagicMock(returncode=0, stderr="")
+        if isinstance(cmd, list) and "install" in cmd:
+            captured["cmd"] = cmd
+            return MagicMock(returncode=0, stderr="")
+        return real_run(cmd, **kwargs)
 
     from agent.lsp import install as install_mod
 
@@ -54,7 +59,7 @@ def test_install_npm_works_without_extras(tmp_path, monkeypatch):
     # Should not blow up when extra_pkgs is omitted/None
     install_targets = [c for c in cmd if not c.startswith("-") and c not in {
         "install", "--prefix", str(install_mod.hermes_lsp_bin_dir().parent),
-        "/usr/bin/npm",
+        cmd[0],
     }]
     assert install_targets == ["pyright"]
 
@@ -74,13 +79,17 @@ def test_install_pip_finds_windows_scripts_launcher(tmp_path, monkeypatch):
 
     from agent.lsp import install as install_mod
 
+    real_run = subprocess.run
+
     def fake_run(cmd, **kwargs):
-        scripts_dir = install_mod.hermes_lsp_bin_dir().parent / "python-packages" / "Scripts"
-        scripts_dir.mkdir(parents=True, exist_ok=True)
-        launcher = scripts_dir / "fake-language-server.exe"
-        launcher.write_text("launcher\n")
-        launcher.chmod(0o755)
-        return MagicMock(returncode=0, stderr="")
+        if isinstance(cmd, list) and "install" in cmd:
+            scripts_dir = install_mod.hermes_lsp_bin_dir().parent / "python-packages" / "Scripts"
+            scripts_dir.mkdir(parents=True, exist_ok=True)
+            launcher = scripts_dir / "fake-language-server.exe"
+            launcher.write_text("launcher\n")
+            launcher.chmod(0o755)
+            return MagicMock(returncode=0, stderr="")
+        return real_run(cmd, **kwargs)
 
     monkeypatch.setattr(install_mod.subprocess, "run", fake_run)
 

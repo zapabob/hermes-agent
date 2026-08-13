@@ -34,6 +34,7 @@ import {
   type PetChangeMeta,
   setChangeEventsAvailable
 } from '@/store/live-sync'
+import { setMcpSetupRequest } from '@/store/mcp-setup'
 import { dispatchNativeNotification } from '@/store/native-notifications'
 import { isDiskFullErrorMessage, notify, notifyError } from '@/store/notifications'
 import { requestDesktopOnboarding, requestDesktopOnboardingForCredentialWarning } from '@/store/onboarding'
@@ -966,6 +967,37 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
             title: translateNow('notifications.native.inputTitle')
           })
         }
+      } else if (event.type === 'mcp.setup.request') {
+        // setup_mcp tool (desktop GUI): the agent proposed an MCP server and
+        // the Python side is blocked on mcp.setup.respond. Park the request
+        // per-session (like clarify) and upsert a stable pending tool row so
+        // the inline consent card has somewhere to render even when the
+        // tool.start event was missed (stream reconnect / hydration race).
+        const requestId = typeof payload?.request_id === 'string' ? payload.request_id : ''
+        const server = typeof payload?.server === 'string' ? payload.server : ''
+        const rawAction = typeof payload?.action === 'string' ? payload.action : 'install'
+        const action = rawAction === 'enable' || rawAction === 'authorize' ? rawAction : 'install'
+        const reason = typeof payload?.reason === 'string' ? payload.reason : ''
+
+        if (requestId && server) {
+          setMcpSetupRequest({ action, reason, requestId, server, sessionId: sessionId ?? null })
+
+          if (sessionId) {
+            upsertToolCall(
+              sessionId,
+              { args: { action, reason, server }, name: 'setup_mcp', tool_id: requestId },
+              'running'
+            )
+            updateSessionState(sessionId, state => ({ ...state, needsInput: true }))
+          }
+
+          dispatchNativeNotification({
+            body: reason || server,
+            kind: 'input',
+            sessionId,
+            title: translateNow('notifications.native.inputTitle')
+          })
+        }
       } else if (event.type === 'approval.request') {
         // Dangerous-command / execute_code approval. The Python side is blocked
         // in _await_gateway_decision() until approval.respond lands; without
@@ -1184,7 +1216,14 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
         // change happens silently. Surface it as a persistent system message
         // in the transcript so the user is always informed — it must not be a
         // transient toast that can be missed.
-        const text = coerceGatewayText(payload?.text).trim()
+        //
+        // Typed here with the `review:` marker (same convention as `steer:` /
+        // `slash:`) so SystemMessage can paint it as the memory-write row it
+        // is instead of sniffing the backend's prose. The leading 💾 goes with
+        // it — the row draws its own glyph.
+        const text = coerceGatewayText(payload?.text)
+          .trim()
+          .replace(/^[^\p{L}\p{N}]+/u, '')
 
         if (text && sessionId) {
           flushQueuedDeltas(sessionId)
@@ -1195,7 +1234,7 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
               {
                 id: `review-summary-${Date.now()}`,
                 role: 'system',
-                parts: [textPart(text)],
+                parts: [textPart(`review:${text}`)],
                 timestamp: Math.floor(Date.now() / 1000)
               }
             ]

@@ -59,3 +59,24 @@ def test_missing_preserved_file_fails_audit(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "git_show", lambda ref, path: "baseline\n")
 
     assert audit.main() == 1
+
+
+def test_intentionally_missing_file_does_not_fail_audit(monkeypatch, tmp_path):
+    strategy = tmp_path / "strategy.json"
+    strategy.write_text(
+        json.dumps(
+            {
+                "rules": [{"pattern": "retired.md", "action": "preserve_custom"}],
+                "audit_ignore_missing": ["retired.md"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(audit, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(audit, "STRATEGY", strategy)
+    monkeypatch.setattr(audit, "SYMBOL_CHECKS", {})
+    monkeypatch.setattr(audit, "fork_files", lambda: ["retired.md"])
+    monkeypatch.setattr(audit, "git_show", lambda ref, path: "baseline\n")
+
+    assert audit.main() == 0

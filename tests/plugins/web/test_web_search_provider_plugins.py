@@ -76,21 +76,8 @@ class TestBundledPluginsRegister:
         _ensure_plugins_loaded()
         from agent.web_search_registry import list_providers
 
-        names = sorted(p.name for p in list_providers())
-        # Scrapling は9個に含まれず、10個目として追加される
-        assert "scrapling" in names
-        assert "brave-free" in names
-        assert "cloakbrowser" in names
-        assert "ddgs" in names
-        assert "exa" in names
-        assert "firecrawl" in names
-        assert "parallel" in names
-        assert "searxng" in names
-        assert "tavily" in names
-        assert "xai" in names
-        # 想定される10個（Scrapling含む）
-        assert len(names) == 10
-        assert names == [
+        names = {p.name for p in list_providers()}
+        expected = {
             "brave-free",
             "cloakbrowser",
             "ddgs",
@@ -101,7 +88,11 @@ class TestBundledPluginsRegister:
             "searxng",
             "tavily",
             "xai",
-        ]
+        }
+
+        # Bundled providers are independently extensible.  Assert the required
+        # contracts without freezing the registry's total size or order.
+        assert expected <= names
 
     @pytest.mark.parametrize(
         "plugin_name,expected_search,expected_extract",
@@ -369,5 +360,4 @@ class TestAsyncExtractDispatch:
 
 class TestErrorResponseShapes:
     """When credentials are missing, plugins return typed errors, not raises."""
-
 

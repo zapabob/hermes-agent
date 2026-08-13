@@ -1,6 +1,10 @@
 {
   "pinned_upstream_sha": "auto",
   "default_action": "manual_api_followup",
+  "audit_ignore_missing": [
+    "plugins/hermes-achievements/docs/achievements-performance-implementation-*.md",
+    "plugins/hermes-achievements/docs/achievements-performance-spec.md"
+  ],
   "overlay_sanitizers": {
     "toolsets.py": {
       "replace_fork_region_with_upstream": {
