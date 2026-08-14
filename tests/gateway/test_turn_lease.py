@@ -182,6 +182,12 @@ async def test_full_dispatch_rejects_lease_timeout_without_running_goal_hook(
     from tests.gateway.test_42039_duplicate_user_message import _bootstrap, _event
 
     runner = _bootstrap(monkeypatch, tmp_path)
+    # Group traffic cannot participate in Telegram DM topic recovery. Keeping
+    # this path off the executor is necessary for the lease timeout to remain
+    # bounded even when the shared executor is busy.
+    runner._recover_telegram_topic_thread_id = lambda _source: pytest.fail(
+        "group turn must not enter Telegram DM topic recovery"
+    )
     runner._turn_leases = SessionTurnLeaseRegistry()
     holder = await runner._turn_leases.acquire(
         "sess-dedup", owner_key="holder-key", generation=1, timeout=1
