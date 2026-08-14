@@ -16227,7 +16227,16 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             return await self._handle_pause_command(event)
 
         if canonical == "new":
-            if await asyncio.to_thread(self._is_telegram_topic_root_lobby, source):
+            # Topic-mode root lobbies only exist in Telegram DMs.  Keeping
+            # unrelated traffic out of the shared executor avoids introducing
+            # a no-op scheduling boundary before its command can proceed.
+            if (
+                source.platform == Platform.TELEGRAM
+                and source.chat_type == "dm"
+                and await asyncio.to_thread(
+                    self._is_telegram_topic_root_lobby, source
+                )
+            ):
                 return self._telegram_topic_root_new_message()
             async def _do_reset():
                 return await self._handle_reset_command(event)
@@ -16800,8 +16809,16 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # No bare text matching — "yes" in normal conversation must not trigger
         # execution of a dangerous command.
 
-        if not is_internal and await asyncio.to_thread(
-            self._is_telegram_topic_root_lobby, source
+        # This check reads Telegram DM topic state.  Group and non-Telegram
+        # traffic cannot be root lobbies, so do not queue their no-op checks on
+        # the shared executor before the turn lease is acquired.
+        if (
+            not is_internal
+            and source.platform == Platform.TELEGRAM
+            and source.chat_type == "dm"
+            and await asyncio.to_thread(
+                self._is_telegram_topic_root_lobby, source
+            )
         ):
             # Debounce the lobby reminder so a user who forgets about
             # topic mode and fires ten prompts doesn't get ten copies.

@@ -188,6 +188,9 @@ async def test_full_dispatch_rejects_lease_timeout_without_running_goal_hook(
     runner._recover_telegram_topic_thread_id = lambda _source: pytest.fail(
         "group turn must not enter Telegram DM topic recovery"
     )
+    runner._is_telegram_topic_root_lobby = lambda _source: pytest.fail(
+        "group turn must not query the Telegram DM root lobby"
+    )
     runner._turn_leases = SessionTurnLeaseRegistry()
     holder = await runner._turn_leases.acquire(
         "sess-dedup", owner_key="holder-key", generation=1, timeout=1
