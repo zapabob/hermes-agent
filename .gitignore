@@ -251,3 +251,11 @@ native/fts5_cjk/*.so
 /nul
 /*.wav
 /*.mp4
+
+# Local operational caches and raw dependency reports. These can contain
+# machine-specific paths, credentials, or contributor contact data and must
+# remain outside version control.
+/.cache/
+/.runtime/
+/_runtime/
+/dependabot_raw.json

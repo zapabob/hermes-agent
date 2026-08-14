@@ -42,3 +42,9 @@
 	path = vendor/OpenMausBot
 	url = https://github.com/zapabob/OpenMausBot.git
 	branch = main
+[submodule "plugins/hermes-bot-mode/desktop"]
+	path = plugins/hermes-bot-mode/desktop
+	url = https://github.com/zapabob/Hermes-Bot-Mode.git
+[submodule "vendor/heygen-cli"]
+	path = vendor/heygen-cli
+	url = https://github.com/heygen-com/heygen-cli.git

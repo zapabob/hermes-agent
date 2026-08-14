@@ -1,0 +1,11 @@
+name: heygen
+version: 0.1.0
+description: HeyGen CLI binary wrapper — create AI videos from the command line.
+kind: standalone
+config:
+  binary_path:
+    type: string
+    default: ""
+  api_key_env:
+    type: string
+    default: HEYGEN_API_KEY

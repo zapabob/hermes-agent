@@ -1,0 +1,9 @@
+name: hermes-bot-mode
+version: 1.0.0
+description: "Hermes Desktop bot roster and profile-based agent collaboration UI."
+author: "zapabob / Hermes Bot Mode contributors"
+kind: standalone
+platforms:
+  - windows
+  - linux
+  - macos
