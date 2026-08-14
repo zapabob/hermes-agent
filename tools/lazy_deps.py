@@ -309,11 +309,12 @@ LAZY_DEPS: dict[str, tuple[str, ...]] = {
     # Sakana AI-Scientist: official Google Gen AI import surface (aider via
     # ai_scientist_deps).  ``google-generativeai`` is end-of-life and caps
     # protobuf below the security-fixed runtime pin, so never reintroduce it
-    # through the lazy installer.
+    # through the lazy installer.  2.12.1 is the newest release compatible
+    # with the project's exact google-auth==2.55.1 pin.
     "tool.ai_scientist": (
         "backoff==2.2.1",
         "anthropic==0.87.0",
-        "google-genai==2.13.0",
+        "google-genai==2.12.1",
     ),
     # HF Agent Trace Viewer upload (hermes trace upload / /upload-trace).
     #

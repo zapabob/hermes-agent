@@ -213,7 +213,7 @@ def test_lazy_deps_ai_scientist_feature_registered() -> None:
 
     specs = LAZY_DEPS["tool.ai_scientist"]
     assert "backoff==2.2.1" in specs
-    assert "google-genai==2.13.0" in specs
+    assert "google-genai==2.12.1" in specs
     assert not any(s.startswith("google-generativeai") for s in specs)
     assert not any(s.startswith("aider-chat==") for s in specs)
     assert AIDER_SPEC.startswith("aider-chat==")
