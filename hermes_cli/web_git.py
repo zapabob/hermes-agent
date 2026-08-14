@@ -365,7 +365,10 @@ def review_history(cwd: str, limit: int | None = None) -> list[dict]:
         return []
 
     commits = []
-    for record in raw.split("\x1e"):
+    for raw_record in raw.split("\x1e"):
+        # `git log` appends a physical line ending after each format record.
+        # Remove only that delimiter before validating the following SHA.
+        record = raw_record.lstrip("\r\n")
         if not record:
             continue
         fields = record.split("\x1f")

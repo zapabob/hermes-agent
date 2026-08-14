@@ -397,7 +397,11 @@ function parseHistory(raw) {
   return String(raw || '')
     .split('\x1e')
     .filter(Boolean)
-    .flatMap(record => {
+    .flatMap(rawRecord => {
+      // Git appends a physical line ending after each format record. Strip only
+      // that separator so the next SHA remains valid without changing commit
+      // subject whitespace.
+      const record = rawRecord.replace(/^[\r\n]+/, '')
       const [sha, shortSha, parents, author, authoredAt, subject] = record.split('\x1f')
 
       if (!isCommitId(sha) || !shortSha || !authoredAt) {
