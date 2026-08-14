@@ -133,10 +133,11 @@ test('reviewHistory returns bounded, newest-first commit metadata', async () => 
   execFileSync('git', ['add', 'history.txt'], { cwd: dir })
   execFileSync('git', ['commit', '-qm', 'add history fixture'], { cwd: dir })
 
-  const commits = await reviewHistory(dir, 1, 'git')
+  const commits = await reviewHistory(dir, 2, 'git')
 
-  assert.equal(commits.length, 1)
+  assert.equal(commits.length, 2)
   assert.equal(commits[0].subject, 'add history fixture')
+  assert.equal(commits[1].subject, 'initial')
   assert.match(commits[0].sha, /^[0-9a-f]{40}$/)
   assert.match(commits[0].shortSha, /^[0-9a-f]{7,}$/)
   assert.equal(commits[0].parents.length, 1)

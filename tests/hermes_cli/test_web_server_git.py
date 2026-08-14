@@ -75,12 +75,13 @@ def test_git_history_routes_return_commit_metadata_and_selected_diff(client, rep
     _git(repo, "add", "a.txt")
     _git(repo, "commit", "-qm", "add third line")
 
-    history = client.get("/api/git/review/history", params={"path": str(repo), "limit": 1})
+    history = client.get("/api/git/review/history", params={"path": str(repo), "limit": 2})
 
     assert history.status_code == 200
     commits = history.json()["commits"]
-    assert len(commits) == 1
+    assert len(commits) == 2
     assert commits[0]["subject"] == "add third line"
+    assert commits[1]["subject"] == "init"
     assert len(commits[0]["sha"]) == 40
     assert commits[0]["parents"]
 
