@@ -124,4 +124,5 @@ def test_provider_status_milspec_no_gemini_required():
     providers = load_providers()
     status = providers.provider_status()
     assert status["milspec_requires_gemini"] is False
+    assert status["google_genai_installed"] == status["google_generativeai_installed"]
     assert "blocked_provider_ids" in status["policy"]

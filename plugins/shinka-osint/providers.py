@@ -366,17 +366,21 @@ def build_env_overlay() -> dict[str, str]:
 
 def provider_status() -> dict[str, Any]:
     resolved = resolve_llm()
-    gemini_installed = False
+    google_genai_installed = False
     try:
         import importlib.util
 
-        gemini_installed = importlib.util.find_spec("google.generativeai") is not None
+        google_genai_installed = importlib.util.find_spec("google.genai") is not None
     except Exception:
-        gemini_installed = False
+        google_genai_installed = False
 
     return {
         "milspec_requires_gemini": False,
-        "google_generativeai_installed": gemini_installed,
+        "google_genai_installed": google_genai_installed,
+        # Compatibility alias for status consumers that predate the official
+        # SDK migration.  It now means Gemini SDK availability, not the
+        # presence of the retired google-generativeai distribution.
+        "google_generativeai_installed": google_genai_installed,
         "gemini_optional": True,
         "policy": {
             "blocked_provider_ids": sorted(BLOCKED_PROVIDER_IDS),
