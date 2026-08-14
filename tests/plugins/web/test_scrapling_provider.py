@@ -16,7 +16,7 @@ def test_manifest_declares_current_plugin_api_and_runtime_dependencies() -> None
     assert manifest["manifest_version"] == 2
     assert manifest["api_version"] == 1
     assert set(manifest["python_dependencies"]) >= {
-        "scrapling>=0.4,<1",
+        "scrapling[fetchers]>=0.4,<1",
         "markdownify>=1,<2",
     }
 

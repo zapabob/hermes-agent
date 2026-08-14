@@ -6,7 +6,7 @@ kind: backend
 manifest_version: 2
 api_version: 1
 python_dependencies:
-  - "scrapling>=0.4,<1"
+  - "scrapling[fetchers]>=0.4,<1"
   - "markdownify>=1,<2"
 tags:
   - web
