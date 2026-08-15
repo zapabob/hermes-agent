@@ -355,7 +355,13 @@ declare global {
       onWindowStateChanged?: (callback: (payload: HermesWindowState) => void) => () => void
       onFocusSession?: (callback: (sessionId: string) => void) => () => void
       onNotificationAction?: (
-        callback: (payload: { actionId: string; sessionId?: string; connectionId?: string; profile?: string; requestId?: string }) => void
+        callback: (payload: {
+          actionId: string
+          sessionId?: string
+          connectionId?: string
+          profile?: string
+          requestId?: string
+        }) => void
       ) => () => void
       onPreviewFileChanged: (callback: (payload: HermesPreviewFileChanged) => void) => () => void
       onBackendExit: (callback: (payload: BackendExit) => void) => () => void

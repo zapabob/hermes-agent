@@ -1921,14 +1921,18 @@ export function listMcpServers(): Promise<{ servers: McpServerSummary[] }> {
 
 /** Add one server to `mcp_servers` (validated + name-collision-checked
  *  server-side — the same endpoint the dashboard's add form uses). */
-export function addMcpServer(body: {
-  name: string
-  url?: string
-  command?: string
-  args?: string[]
-  env?: Record<string, string>
-  auth?: string
-}, profile?: null | string, connectionId?: null | string): Promise<McpServerSummary> {
+export function addMcpServer(
+  body: {
+    name: string
+    url?: string
+    command?: string
+    args?: string[]
+    env?: Record<string, string>
+    auth?: string
+  },
+  profile?: null | string,
+  connectionId?: null | string
+): Promise<McpServerSummary> {
   return window.hermesDesktop.api<McpServerSummary>({
     ...profileAndConnectionScoped(profile, connectionId),
     path: '/api/mcp/servers',

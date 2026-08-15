@@ -16,7 +16,6 @@ import { setConnection, setGatewayState } from '@/store/session'
 // handleGatewayEvent, so background sessions keep painting. Single-profile users
 // only ever have the primary, so their path is byte-for-byte unchanged.
 
-
 const normKey = (profile: string | null | undefined): string => (profile ?? '').trim() || 'default'
 
 const normConnectionId = (connectionId: null | string | undefined): null | string => {
@@ -31,7 +30,10 @@ export interface GatewayScope {
   readonly profile: string
 }
 
-export function gatewayScope(connectionId: null | string | undefined, profile: string | null | undefined): GatewayScope {
+export function gatewayScope(
+  connectionId: null | string | undefined,
+  profile: string | null | undefined
+): GatewayScope {
   return Object.freeze({ connectionId: normConnectionId(connectionId), profile: normKey(profile) })
 }
 
