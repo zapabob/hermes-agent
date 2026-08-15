@@ -175,7 +175,10 @@ json.dump(payload, sys.stdout, ensure_ascii=False)
     $configExitCode = 1
     Push-Location -LiteralPath $Root
     try {
-        $raw = & $pythonExe -c $configCode 2>$null
+        # Windows PowerShell's legacy native argument marshalling corrupts
+        # quotes in multi-line ``python -c`` source. Feed this local snippet
+        # over stdin so both Windows PowerShell and pwsh preserve it exactly.
+        $raw = $configCode | & $pythonExe - 2>$null
         $configExitCode = $LASTEXITCODE
     } finally {
         Pop-Location
