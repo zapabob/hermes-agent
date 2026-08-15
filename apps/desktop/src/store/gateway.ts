@@ -16,7 +16,24 @@ import { setConnection, setGatewayState } from '@/store/session'
 // handleGatewayEvent, so background sessions keep painting. Single-profile users
 // only ever have the primary, so their path is byte-for-byte unchanged.
 
+
 const normKey = (profile: string | null | undefined): string => (profile ?? '').trim() || 'default'
+
+const normConnectionId = (connectionId: null | string | undefined): null | string => {
+  const normalized = typeof connectionId === 'string' ? connectionId.trim() : ''
+
+  return normalized || null
+}
+
+/** Immutable backend identity carried with a blocking request. */
+export interface GatewayScope {
+  readonly connectionId: null | string
+  readonly profile: string
+}
+
+export function gatewayScope(connectionId: null | string | undefined, profile: string | null | undefined): GatewayScope {
+  return Object.freeze({ connectionId: normConnectionId(connectionId), profile: normKey(profile) })
+}
 
 // Read connection state through a call so TS control-flow analysis doesn't
 // narrow the getter to a constant across guards (it genuinely changes).
@@ -58,6 +75,7 @@ interface Secondary {
 interface GatewayRegistryState {
   config: RegistryConfig | null
   primaryGateway: HermesGateway | null
+  primaryConnectionId: null | string
   primaryProfile: string
   activeKey: string
   secondaries: Map<string, Secondary>
@@ -70,6 +88,7 @@ function createRegistryState(): GatewayRegistryState {
   return {
     config: null,
     primaryGateway: null,
+    primaryConnectionId: null,
     primaryProfile: 'default',
     activeKey: 'default',
     secondaries: new Map<string, Secondary>(),
@@ -120,9 +139,42 @@ export function emitLocalGatewayEvent(event: GatewayEvent): void {
   g.config?.onEvent(event)
 }
 
-export function setPrimaryGateway(gateway: HermesGateway | null, profile = 'default'): void {
+export function setPrimaryGateway(
+  gateway: HermesGateway | null,
+  profile = 'default',
+  connectionId: null | string | undefined = null
+): void {
   g.primaryGateway = gateway
+  g.primaryConnectionId = gateway ? normConnectionId(connectionId) : null
   g.primaryProfile = normKey(profile)
+}
+
+/** Exact source identity of the primary websocket. */
+export function primaryGatewayScope(): GatewayScope {
+  return gatewayScope(g.primaryConnectionId, g.primaryProfile)
+}
+
+/**
+ * Resolve only the gateway that owns a stored request scope. This intentionally
+ * never falls back to the primary or active gateway: a stale/unknown scope must
+ * leave the prompt pending instead of delivering its privileged response to a
+ * different backend.
+ */
+export function gatewayForScope(scope: GatewayScope): HermesGateway | null {
+  const normalized = gatewayScope(scope.connectionId, scope.profile)
+  const primary = primaryGatewayScope()
+
+  if (
+    normalized.connectionId === primary.connectionId &&
+    normalized.profile === primary.profile &&
+    isOpen(g.primaryGateway)
+  ) {
+    return g.primaryGateway
+  }
+
+  const secondary = g.secondaries.get(backendScopeKey(normalized.connectionId, normalized.profile))?.gateway ?? null
+
+  return isOpen(secondary) ? secondary : null
 }
 
 export function isActivePrimary(): boolean {

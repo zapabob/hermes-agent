@@ -20,6 +20,25 @@ from gateway.config import PlatformConfig
 from gateway.platforms.api_server import APIServerAdapter, cors_middleware
 
 _MOD = "gateway.platforms.api_server"
+FIRE_AT = "2026-08-16T12:00:00+00:00"
+
+
+def _bound_claims(job_id: str) -> dict[str, str]:
+    return {
+        "purpose": "cron_fire",
+        "cron_job_id": job_id,
+        "cron_fire_at": FIRE_AT,
+    }
+
+
+def _bound_verifier(**kwargs):
+    """Test token carries its bound job id; ``good`` is the common fixture."""
+    token = str(kwargs.get("token") or "")
+    return _bound_claims("abc123" if token == "good" else token)
+
+
+def _fire_payload(job_id: str) -> dict[str, str]:
+    return {"job_id": job_id, "fire_at": FIRE_AT}
 
 
 def _make_adapter() -> APIServerAdapter:
@@ -45,8 +64,9 @@ class _SpyProvider:
         self.claimed = []
         self.fired = []
 
-    def claim_fire(self, job_id):
+    def claim_fire(self, job_id, *, expected_fire_at=None):
         self.claimed.append(job_id)
+        assert expected_fire_at == FIRE_AT
         return {"id": job_id, "execution_id": f"exec-{job_id}"}
 
     def fire_claimed(self, job, *, adapters=None, loop=None):
@@ -63,7 +83,8 @@ async def test_valid_fire_reservation_blocks_drain_before_body_and_task(adapter,
     release_fire = threading.Event()
 
     class BlockingProvider:
-        def claim_fire(self, job_id):
+        def claim_fire(self, job_id, *, expected_fire_at=None):
+            assert expected_fire_at == FIRE_AT
             return {"id": job_id, "execution_id": "exec-1"}
 
         def fire_claimed(self, job, *, adapters=None, loop=None):
@@ -81,7 +102,7 @@ async def test_valid_fire_reservation_blocks_drain_before_body_and_task(adapter,
     monkeypatch.setattr("cron.scheduler_provider.resolve_cron_scheduler", BlockingProvider)
     monkeypatch.setattr(
         "plugins.cron_providers.chronos.verify.get_fire_verifier",
-        lambda: (lambda **kw: {"purpose": "cron_fire"}),
+        lambda: _bound_verifier,
     )
     app = _create_app(adapter)
     with patch("gateway.run._gateway_runner_ref", lambda: runner), patch.object(
@@ -92,7 +113,7 @@ async def test_valid_fire_reservation_blocks_drain_before_body_and_task(adapter,
                 cli.post(
                     "/api/cron/fire",
                     headers={"Authorization": "Bearer good"},
-                    json={"job_id": "abc123"},
+                    json=_fire_payload("abc123"),
                 )
             )
             await body_started.wait()
@@ -115,14 +136,14 @@ async def test_valid_fire_reservation_blocks_drain_before_body_and_task(adapter,
 @pytest.mark.asyncio
 async def test_admission_failure_is_retryable_and_never_dispatches(adapter, monkeypatch):
     class FailingProvider(_SpyProvider):
-        def claim_fire(self, job_id):
+        def claim_fire(self, job_id, *, expected_fire_at=None):
             raise OSError("ledger unavailable")
 
     provider = FailingProvider()
     monkeypatch.setattr("cron.scheduler_provider.resolve_cron_scheduler", lambda: provider)
     monkeypatch.setattr(
         "plugins.cron_providers.chronos.verify.get_fire_verifier",
-        lambda: (lambda **kw: {"purpose": "cron_fire"}),
+        lambda: _bound_verifier,
     )
 
     app = _create_app(adapter)
@@ -130,7 +151,7 @@ async def test_admission_failure_is_retryable_and_never_dispatches(adapter, monk
         response = await cli.post(
             "/api/cron/fire",
             headers={"Authorization": "Bearer good"},
-            json={"job_id": "abc123"},
+            json=_fire_payload("abc123"),
         )
 
     assert response.status == 503
@@ -144,16 +165,16 @@ async def test_accepted_response_waits_for_durable_admission(adapter, monkeypatc
     release_claim = threading.Event()
 
     class BlockingAdmissionProvider(_SpyProvider):
-        def claim_fire(self, job_id):
+        def claim_fire(self, job_id, *, expected_fire_at=None):
             claim_started.set()
             release_claim.wait(timeout=2)
-            return super().claim_fire(job_id)
+            return super().claim_fire(job_id, expected_fire_at=expected_fire_at)
 
     provider = BlockingAdmissionProvider()
     monkeypatch.setattr("cron.scheduler_provider.resolve_cron_scheduler", lambda: provider)
     monkeypatch.setattr(
         "plugins.cron_providers.chronos.verify.get_fire_verifier",
-        lambda: (lambda **kw: {"purpose": "cron_fire"}),
+        lambda: _bound_verifier,
     )
 
     app = _create_app(adapter)
@@ -162,7 +183,7 @@ async def test_accepted_response_waits_for_durable_admission(adapter, monkeypatc
             cli.post(
                 "/api/cron/fire",
                 headers={"Authorization": "Bearer good"},
-                json={"job_id": "abc123"},
+                json=_fire_payload("abc123"),
             )
         )
         assert await asyncio.to_thread(claim_started.wait, 2)
@@ -191,7 +212,7 @@ async def test_missing_job_id_400(adapter, monkeypatch):
     monkeypatch.setattr("cron.scheduler_provider.resolve_cron_scheduler", lambda: spy)
     monkeypatch.setattr(
         "plugins.cron_providers.chronos.verify.get_fire_verifier",
-        lambda: (lambda **kw: {"purpose": "cron_fire"}),
+        lambda: _bound_verifier,
     )
 
     app = _create_app(adapter)
@@ -204,6 +225,26 @@ async def test_missing_job_id_400(adapter, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_missing_fire_at_400(adapter, monkeypatch):
+    spy = _SpyProvider()
+    monkeypatch.setattr("cron.scheduler_provider.resolve_cron_scheduler", lambda: spy)
+    monkeypatch.setattr(
+        "plugins.cron_providers.chronos.verify.get_fire_verifier",
+        lambda: _bound_verifier,
+    )
+
+    app = _create_app(adapter)
+    async with TestClient(TestServer(app)) as cli:
+        response = await cli.post(
+            "/api/cron/fire",
+            headers={"Authorization": "Bearer good"},
+            json={"job_id": "abc123"},
+        )
+        assert response.status == 400
+    assert spy.claimed == []
+
+
+@pytest.mark.asyncio
 async def test_fire_does_not_require_api_server_key(adapter, monkeypatch):
     """The fire endpoint must NOT gate on API_SERVER_KEY — auth is the NAS-JWT.
     A request with NO API key header but a valid fire token still succeeds."""
@@ -211,15 +252,15 @@ async def test_fire_does_not_require_api_server_key(adapter, monkeypatch):
     monkeypatch.setattr("cron.scheduler_provider.resolve_cron_scheduler", lambda: spy)
     monkeypatch.setattr(
         "plugins.cron_providers.chronos.verify.get_fire_verifier",
-        lambda: (lambda **kw: {"purpose": "cron_fire"}),
+        lambda: _bound_verifier,
     )
 
     app = _create_app(adapter)
     async with TestClient(TestServer(app)) as cli:
         # Bearer is the FIRE token, not the API_SERVER_KEY "sk-secret".
         resp = await cli.post("/api/cron/fire",
-                              headers={"Authorization": "Bearer nas-jwt"},
-                              json={"job_id": "j9"})
+                               headers={"Authorization": "Bearer j9"},
+                               json=_fire_payload("j9"))
         assert resp.status == 202
     for _ in range(50):
         if spy.fired:
@@ -241,7 +282,7 @@ async def test_sync_verifier_runs_off_the_event_loop(adapter, monkeypatch):
 
     def blocking_verifier(**kw):
         seen["thread_id"] = threading.get_ident()
-        return {"purpose": "cron_fire"}
+        return _bound_verifier(**kw)
 
     spy = _SpyProvider()
     monkeypatch.setattr("cron.scheduler_provider.resolve_cron_scheduler", lambda: spy)
@@ -253,8 +294,8 @@ async def test_sync_verifier_runs_off_the_event_loop(adapter, monkeypatch):
     app = _create_app(adapter)
     async with TestClient(TestServer(app)) as cli:
         resp = await cli.post("/api/cron/fire",
-                              headers={"Authorization": "Bearer good"},
-                              json={"job_id": "off-loop"})
+                               headers={"Authorization": "Bearer off-loop"},
+                               json=_fire_payload("off-loop"))
         assert resp.status == 202
 
     # If the verifier had run inline on the loop, its thread id would equal the
@@ -299,7 +340,7 @@ async def test_async_verifier_is_awaited(adapter, monkeypatch):
     monkeypatch.setattr("cron.scheduler_provider.resolve_cron_scheduler", lambda: spy)
 
     async def async_verifier(**kw):
-        return {"purpose": "cron_fire", "aud": "agent:x"}
+        return _bound_verifier(**kw)
 
     monkeypatch.setattr(
         "plugins.cron_providers.chronos.verify.get_fire_verifier",
@@ -309,8 +350,8 @@ async def test_async_verifier_is_awaited(adapter, monkeypatch):
     app = _create_app(adapter)
     async with TestClient(TestServer(app)) as cli:
         resp = await cli.post("/api/cron/fire",
-                              headers={"Authorization": "Bearer good"},
-                              json={"job_id": "async-ok"})
+                               headers={"Authorization": "Bearer async-ok"},
+                               json=_fire_payload("async-ok"))
         assert resp.status == 202
 
     for _ in range(50):
@@ -321,8 +362,61 @@ async def test_async_verifier_is_awaited(adapter, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_signed_job_or_time_substitution_is_rejected_before_claim(adapter, monkeypatch):
+    spy = _SpyProvider()
+    monkeypatch.setattr("cron.scheduler_provider.resolve_cron_scheduler", lambda: spy)
+    monkeypatch.setattr(
+        "plugins.cron_providers.chronos.verify.get_fire_verifier",
+        lambda: (lambda **kw: _bound_claims("signed-job")),
+    )
+
+    app = _create_app(adapter)
+    async with TestClient(TestServer(app)) as cli:
+        response = await cli.post(
+            "/api/cron/fire",
+            headers={"Authorization": "Bearer signed-job"},
+            json=_fire_payload("other-job"),
+        )
+        assert response.status == 401
+
+    assert spy.claimed == []
+    assert spy.fired == []
+
+
+@pytest.mark.asyncio
+async def test_legacy_provider_cannot_discard_signed_fire_time(adapter, monkeypatch):
+    """The public webhook fails closed instead of calling unbound fire_due."""
+    fired = []
+
+    class LegacyProvider:
+        def fire_due(self, job_id, *, adapters=None, loop=None):
+            fired.append(job_id)
+            return True
+
+    monkeypatch.setattr(
+        "cron.scheduler_provider.resolve_cron_scheduler",
+        lambda: LegacyProvider(),
+    )
+    monkeypatch.setattr(
+        "plugins.cron_providers.chronos.verify.get_fire_verifier",
+        lambda: _bound_verifier,
+    )
+
+    app = _create_app(adapter)
+    async with TestClient(TestServer(app)) as cli:
+        response = await cli.post(
+            "/api/cron/fire",
+            headers={"Authorization": "Bearer legacy-job"},
+            json=_fire_payload("legacy-job"),
+        )
+        assert response.status == 503
+
+    assert fired == []
+
+
+@pytest.mark.asyncio
 async def test_fire_passes_live_adapters_to_provider(adapter, monkeypatch):
-    """The fire webhook must hand the gateway's live adapters to fire_due —
+    """The fire webhook must hand the gateway's live adapters to fire_claimed —
     delivery parity with the built-in ticker (gateway/run.py passes
     runner.adapters). Without them, relay-fronted logical platforms (whose
     ONLY send path is the live relay adapter — no native credential exists on
@@ -331,9 +425,9 @@ async def test_fire_passes_live_adapters_to_provider(adapter, monkeypatch):
     under the in-process ticker."""
     seen = {}
 
-    class _AdapterSpyProvider:
-        def fire_due(self, job_id, *, adapters=None, loop=None):
-            seen["job_id"] = job_id
+    class _AdapterSpyProvider(_SpyProvider):
+        def fire_claimed(self, job, *, adapters=None, loop=None):
+            seen["job_id"] = job["id"]
             seen["adapters"] = adapters
             seen["loop"] = loop
             return True
@@ -351,15 +445,15 @@ async def test_fire_passes_live_adapters_to_provider(adapter, monkeypatch):
     )
     monkeypatch.setattr(
         "plugins.cron_providers.chronos.verify.get_fire_verifier",
-        lambda: (lambda **kw: {"purpose": "cron_fire"}),
+        lambda: _bound_verifier,
     )
 
     with patch("gateway.run._gateway_runner_ref", lambda: runner):
         app = _create_app(adapter)
         async with TestClient(TestServer(app)) as cli:
             resp = await cli.post("/api/cron/fire",
-                                  headers={"Authorization": "Bearer good"},
-                                  json={"job_id": "with-adapters"})
+                                   headers={"Authorization": "Bearer with-adapters"},
+                                   json=_fire_payload("with-adapters"))
             assert resp.status == 202
 
         for _ in range(50):
@@ -378,9 +472,9 @@ async def test_fire_without_runner_passes_none_adapters(adapter, monkeypatch):
     adapters=None, preserving the historical standalone delivery path."""
     seen = {}
 
-    class _AdapterSpyProvider:
-        def fire_due(self, job_id, *, adapters=None, loop=None):
-            seen["job_id"] = job_id
+    class _AdapterSpyProvider(_SpyProvider):
+        def fire_claimed(self, job, *, adapters=None, loop=None):
+            seen["job_id"] = job["id"]
             seen["adapters"] = adapters
             return True
 
@@ -390,15 +484,15 @@ async def test_fire_without_runner_passes_none_adapters(adapter, monkeypatch):
     )
     monkeypatch.setattr(
         "plugins.cron_providers.chronos.verify.get_fire_verifier",
-        lambda: (lambda **kw: {"purpose": "cron_fire"}),
+        lambda: _bound_verifier,
     )
 
     with patch("gateway.run._gateway_runner_ref", lambda: None):
         app = _create_app(adapter)
         async with TestClient(TestServer(app)) as cli:
             resp = await cli.post("/api/cron/fire",
-                                  headers={"Authorization": "Bearer good"},
-                                  json={"job_id": "no-runner"})
+                                   headers={"Authorization": "Bearer no-runner"},
+                                   json=_fire_payload("no-runner"))
             assert resp.status == 202
 
         for _ in range(50):

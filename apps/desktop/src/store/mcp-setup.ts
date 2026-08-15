@@ -1,6 +1,6 @@
 import { atom, computed } from 'nanostores'
 
-import { $gateway } from './gateway'
+import { gatewayForScope, type GatewayScope } from './gateway'
 
 /**
  * Pending `mcp.setup.request`s — the desktop half of the `setup_mcp` tool's
@@ -17,6 +17,8 @@ export interface McpSetupRequest {
   /** Agent-supplied one-liner: why this server helps right now. */
   reason: string
   sessionId: string | null
+  /** Exact backend identity that emitted this blocking request. */
+  scope?: GatewayScope
 }
 
 /** The card's answer, serialized back through `mcp.setup.respond`. */
@@ -105,7 +107,9 @@ export async function skipMcpSetupRequest(sessionId: string | null | undefined):
   clearMcpSetupRequest(request.requestId, request.sessionId)
 
   try {
-    await $gateway.get()?.request('mcp.setup.respond', {
+    const gateway = request.scope ? gatewayForScope(request.scope) : null
+
+    await gateway?.request('mcp.setup.respond', {
       request_id: request.requestId,
       result: JSON.stringify({ server: request.server, status: 'declined' })
     })

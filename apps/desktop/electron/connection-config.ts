@@ -391,6 +391,8 @@ export interface ProfileRouteOptions {
   globalRemote?: boolean
   primaryProfile?: null | string
   profileRemoteOverride?: boolean
+  /** Registry remote/cloud descriptor: one selected host serves many profiles. */
+  sharedRemote?: boolean
 }
 
 export interface ProfileBackendRoute {
@@ -448,7 +450,7 @@ function resolveProfileBackendRoute(profile, opts: ProfileRouteOptions = {}): Pr
 function pathWithGlobalRemoteProfile(path, profile, opts: ProfileRouteOptions = {}) {
   const scopedProfile = connectionScopeKey(profile)
 
-  if (!resolveProfileBackendRoute(profile, opts).scopePath) {
+  if (!scopedProfile || (!opts.sharedRemote && !resolveProfileBackendRoute(profile, opts).scopePath)) {
     return path
   }
 

@@ -354,7 +354,9 @@ declare global {
       signalDeepLinkReady?: () => Promise<{ ok: boolean }>
       onWindowStateChanged?: (callback: (payload: HermesWindowState) => void) => () => void
       onFocusSession?: (callback: (sessionId: string) => void) => () => void
-      onNotificationAction?: (callback: (payload: { actionId: string; sessionId?: string }) => void) => () => void
+      onNotificationAction?: (
+        callback: (payload: { actionId: string; sessionId?: string; connectionId?: string; profile?: string; requestId?: string }) => void
+      ) => () => void
       onPreviewFileChanged: (callback: (payload: HermesPreviewFileChanged) => void) => () => void
       onBackendExit: (callback: (payload: BackendExit) => void) => () => void
       // Soft gateway-mode apply: primary backend was torn down without a window
@@ -977,6 +979,8 @@ export interface HermesApiRequest {
   // (window) backend. Read-only cross-profile data is served by the primary, so
   // this is only needed for profile-scoped live/settings calls.
   profile?: string | null
+  /** Exact desktop connection owning a request that originated from a gateway event. */
+  connectionId?: string | null
 }
 
 export interface HermesNotification {
@@ -985,6 +989,10 @@ export interface HermesNotification {
   silent?: boolean
   kind?: string
   sessionId?: string
+  /** Source identity for an approval action; forwarded back to the renderer unchanged. */
+  connectionId?: string
+  profile?: string
+  requestId?: string
   /** Dedupe discriminator for session-less notifications (e.g. plugin id). */
   tag?: string
   actions?: { id: string; text: string }[]

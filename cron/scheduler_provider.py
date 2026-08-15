@@ -22,7 +22,7 @@ from __future__ import annotations
 import inspect
 import threading
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Optional
 
 
 class CronScheduler(ABC):
@@ -115,6 +115,7 @@ class CronScheduler(ABC):
         adapters: Any = None,
         loop: Any = None,
         force: bool = False,
+        expected_fire_at: Optional[str] = None,
     ) -> bool:
         """Run a single job NOW via the shared orchestrator. Called by the
         inbound fire webhook when an external scheduler signals a job is due.
@@ -128,12 +129,22 @@ class CronScheduler(ABC):
         the job itself failed. Returns False only if the claim was lost
         (another machine/retry won it) or the job no longer exists.
         """
-        claimed_job = self.claim_fire(job_id, force=force)
+        claimed_job = self.claim_fire(
+            job_id,
+            force=force,
+            expected_fire_at=expected_fire_at,
+        )
         if claimed_job is None:
             return False
         return self.fire_claimed(claimed_job, adapters=adapters, loop=loop)
 
-    def claim_fire(self, job_id: str, *, force: bool = False) -> dict | None:
+    def claim_fire(
+        self,
+        job_id: str,
+        *,
+        force: bool = False,
+        expected_fire_at: Optional[str] = None,
+    ) -> dict | None:
         """Durably claim one fire and create its audit attempt before dispatch.
 
         Webhook transports call this synchronously before acknowledging the
@@ -147,6 +158,8 @@ class CronScheduler(ABC):
         claim_kwargs = {"return_job": True}
         if force:
             claim_kwargs["force"] = True
+        if expected_fire_at is not None:
+            claim_kwargs["expected_fire_at"] = expected_fire_at
         try:
             claimed_job = claim_job_for_fire(job_id, **claim_kwargs)
         except BaseException as exc:
@@ -241,6 +254,32 @@ def provider_supports_split_fire(provider: Any) -> bool:
     if fire_due_impl is None or fire_due_impl is CronScheduler.fire_due:
         return True
     return False
+
+
+def provider_supports_bound_fire(provider: Any) -> bool:
+    """Return whether a provider can honor a signed fire-time capability.
+
+    Remote cron fire must never fall back to a provider that only accepts a job
+    id: that would discard the signed schedule identity and make an old token
+    replayable after the job has been re-armed.  Older providers remain usable
+    for their local/manual hooks, but the public webhook fails closed until they
+    adopt the additive ``expected_fire_at`` keyword.
+    """
+    if not provider_supports_split_fire(provider):
+        return False
+    try:
+        parameters = inspect.signature(provider.claim_fire).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        or (
+            parameter.name == "expected_fire_at"
+            and parameter.kind
+            in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        )
+        for parameter in parameters
+    )
 
 
 def provider_supports_fire_cancel(provider: Any) -> bool:

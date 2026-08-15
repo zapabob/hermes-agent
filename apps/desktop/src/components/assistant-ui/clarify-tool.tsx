@@ -33,7 +33,7 @@ import {
   sessionClarifyRequest,
   warnDroppedChoices
 } from '@/store/clarify'
-import { $gateway } from '@/store/gateway'
+import { gatewayForScope } from '@/store/gateway'
 import { notifyError } from '@/store/notifications'
 
 import { selectMessageRunning } from './tool/fallback-model'
@@ -311,7 +311,6 @@ function ClarifyToolPending({ args }: ToolCallMessagePartProps) {
   const sessionId = useStore(useSessionView().$runtimeId)
   const $request = useMemo(() => sessionClarifyRequest(sessionId), [sessionId])
   const request = useStore($request)
-  const gateway = useStore($gateway)
   const fromArgs = useMemo(() => readClarifyArgs(args), [args])
 
   const matchingRequest = useMemo(() => {
@@ -364,6 +363,8 @@ function ClarifyToolPending({ args }: ToolCallMessagePartProps) {
         return
       }
 
+      const gateway = matchingRequest.scope ? gatewayForScope(matchingRequest.scope) : null
+
       if (!gateway) {
         notifyError(new Error(copy.gatewayDisconnected), copy.sendFailed)
 
@@ -385,7 +386,7 @@ function ClarifyToolPending({ args }: ToolCallMessagePartProps) {
         setSubmitting(false)
       }
     },
-    [copy.gatewayDisconnected, copy.notReady, copy.sendFailed, gateway, matchingRequest, ready]
+    [copy.gatewayDisconnected, copy.notReady, copy.sendFailed, matchingRequest, ready]
   )
 
   const trimmedDraft = draft.trim()

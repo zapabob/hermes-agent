@@ -1,6 +1,7 @@
 import { atom, computed, type ReadableAtom } from 'nanostores'
 
 import { $clarifyRequest, $clarifyRequests } from './clarify'
+import type { GatewayScope } from './gateway'
 import { $activeSessionId } from './session'
 
 // Blocking interactive prompts the gateway raises mid-turn. Each maps to a
@@ -19,6 +20,8 @@ const keyFor = (sessionId: string | null | undefined): string => sessionId ?? ''
 
 interface KeyedPrompt {
   sessionId: string | null
+  /** Exact backend identity that emitted this privileged prompt. */
+  scope?: GatewayScope
 }
 
 interface PromptStore<T extends KeyedPrompt> {
@@ -115,6 +118,9 @@ export const $approvalRequest = approval.$active
 export const setApprovalRequest = approval.set
 export const clearApprovalRequest = approval.clear
 
+/** Imperative lookup for native-notification actions. */
+export const approvalRequestForSession = (sessionId: string | null) => approval.$all.get()[keyFor(sessionId)] ?? null
+
 export async function receiveApprovalRequest(gateway: ApprovalGateway | null, request: ApprovalRequest): Promise<void> {
   setApprovalRequest(request)
 
@@ -126,7 +132,11 @@ export async function receiveApprovalRequest(gateway: ApprovalGateway | null, re
   }
 }
 
-export async function replayPendingApproval(gateway: ApprovalGateway | null, sessionId: string | null): Promise<void> {
+export async function replayPendingApproval(
+  gateway: ApprovalGateway | null,
+  sessionId: string | null,
+  scope?: GatewayScope
+): Promise<void> {
   if (!gateway || !sessionId) {
     return
   }
@@ -151,6 +161,7 @@ export async function replayPendingApproval(gateway: ApprovalGateway | null, ses
     description: typeof pending.description === 'string' ? pending.description : 'dangerous command',
     requestId: pending.request_id,
     sessionId,
+    scope,
     smartDenied: pending.smart_denied === true
   })
 }

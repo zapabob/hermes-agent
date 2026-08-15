@@ -1,6 +1,6 @@
 import { atom, computed } from 'nanostores'
 
-import { $gateway } from './gateway'
+import { gatewayForScope, type GatewayScope } from './gateway'
 import { $activeSessionId } from './session'
 
 export interface ClarifyRequest {
@@ -9,6 +9,8 @@ export interface ClarifyRequest {
   choices: string[] | null
   multiSelect: boolean
   sessionId: string | null
+  /** Exact backend identity that emitted this blocking request. */
+  scope?: GatewayScope
 }
 
 /**
@@ -146,7 +148,9 @@ export async function skipClarifyRequest(sessionId: string | null | undefined): 
   clearClarifyRequest(request.requestId, request.sessionId)
 
   try {
-    await $gateway.get()?.request('clarify.respond', { request_id: request.requestId, answer: '' })
+    const gateway = request.scope ? gatewayForScope(request.scope) : null
+
+    await gateway?.request('clarify.respond', { request_id: request.requestId, answer: '' })
   } catch {
     // The tool times out on its own; a failed skip must never swallow the
     // message the user is actually sending.

@@ -322,6 +322,19 @@ ${payload}
     expect(readFileDataUrl).toHaveBeenCalledWith(path)
   })
 
+  it('does not resolve transcript-derived UNC image artifacts through the desktop fs bridge', async () => {
+    const readFileDataUrl = vi.fn(async () => 'data:image/png;base64,TE9DQUw=')
+    vi.stubGlobal('window', { hermesDesktop: { readFileDataUrl } })
+
+    await expect(artifactImageSrc('\\\\untrusted-host\\share\\thumbnail.png')).rejects.toThrow(
+      'Network-share artifact previews are not allowed'
+    )
+    await expect(artifactImageSrc('file://untrusted-host/share/thumbnail.png')).rejects.toThrow(
+      'Network-share artifact previews are not allowed'
+    )
+    expect(readFileDataUrl).not.toHaveBeenCalled()
+  })
+
   it('resolves remote image artifact thumbnails through the desktop fs bridge', async () => {
     const api = vi.fn(async ({ path }: { path: string }) => {
       if (path.startsWith('/api/fs/read-data-url?')) {

@@ -149,7 +149,10 @@ async def cron_fire_webhook(request: Request):
     fire. Deliberately NO local-execution fallback: delivering from the wrong
     process is worse than a delayed retry.
     """
-    from plugins.cron_providers.chronos.verify import get_fire_verifier
+    from plugins.cron_providers.chronos.verify import (
+        fire_token_matches,
+        get_fire_verifier,
+    )
 
     auth = request.headers.get("Authorization", "")
     token = auth[7:].strip() if auth.startswith("Bearer ") else ""
@@ -169,8 +172,13 @@ async def cron_fire_webhook(request: Request):
     except Exception:
         body = {}
     job_id = (body or {}).get("job_id") if isinstance(body, dict) else None
-    if not job_id:
+    fire_at = (body or {}).get("fire_at") if isinstance(body, dict) else None
+    if not isinstance(job_id, str) or not job_id.strip():
         return JSONResponse({"error": "missing job_id"}, status_code=400)
+    if not isinstance(fire_at, str) or not fire_at.strip():
+        return JSONResponse({"error": "missing fire_at"}, status_code=400)
+    if not fire_token_matches(claims, job_id=job_id, fire_at=fire_at):
+        return JSONResponse({"error": "invalid fire token"}, status_code=401)
 
     # _find_cron_job_profile walks every profile and lists its jobs (file
     # I/O per profile) — run it off the event loop like the other cron
@@ -181,7 +189,7 @@ async def cron_fire_webhook(request: Request):
         # does not retry a fire that is intentionally absent.
         return JSONResponse({"status": "gone", "job_id": job_id}, status_code=200)
 
-    forwarded = await _forward_cron_fire_to_gateway(profile, job_id, auth)
+    forwarded = await _forward_cron_fire_to_gateway(profile, job_id, fire_at, auth)
     if forwarded is None:
         return JSONResponse(
             {

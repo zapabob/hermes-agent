@@ -4,6 +4,7 @@ import { test } from 'vitest'
 
 import {
   buildTerminalScript,
+  containsTerminalControlCharacters,
   posixQuote,
   resolveTerminalLaunch,
   terminalScriptEnv,
@@ -21,6 +22,13 @@ test('tuiResumeArgs resumes the session in the TUI', () => {
 
 test('tuiResumeArgs pins the profile ahead of the mode flag', () => {
   assert.deepEqual(tuiResumeArgs('sess', 'work'), ['--profile', 'work', '--tui', '--resume', 'sess'])
+})
+
+test('terminal launch arguments reject control characters', () => {
+  assert.equal(containsTerminalControlCharacters('ordinary-session'), false)
+  assert.equal(containsTerminalControlCharacters('session\r\nnext'), true)
+  assert.throws(() => tuiResumeArgs('session\r\nnext'), /Session ID cannot contain control characters/)
+  assert.throws(() => tuiResumeArgs('session', 'work\u007f'), /Profile cannot contain control characters/)
 })
 
 test('posixQuote survives embedded single quotes', () => {
@@ -81,6 +89,25 @@ test('buildTerminalScript emits a cmd script on Windows', () => {
     '"C:\\hermes\\venv\\Scripts\\hermes.exe" "--tui" "--resume" "sess"',
     ''
   ])
+})
+
+test('buildTerminalScript rejects control characters in every Windows batch field', () => {
+  const base = {
+    args: ['--tui', '--resume', 'sess'],
+    command: 'C:\\hermes\\venv\\Scripts\\hermes.exe',
+    cwd: 'C:\\Users\\b',
+    env: { PYTHONUTF8: '1' },
+    platform: 'win32' as const
+  }
+
+  assert.throws(
+    () => buildTerminalScript({ ...base, args: ['--tui', '--resume', 'sess\r\nwhoami'] }),
+    /Windows terminal script value cannot contain control characters/
+  )
+  assert.throws(
+    () => buildTerminalScript({ ...base, env: { PYTHONUTF8: '1\nset injected=1' } }),
+    /Windows terminal script value cannot contain control characters/
+  )
 })
 
 test('terminalScriptExtension matches what the platform binds to a terminal', () => {

@@ -23,6 +23,18 @@ describe('delivery command detection', () => {
     expect(deliveryTargetFromCommand('hermes -p turqoise chat -q "plain question"')).toBeNull()
     expect(deliveryTargetFromCommand('hermes sessions list')).toBeNull()
   })
+
+  it.each([
+    'printf harmless; hermes -p turqoise chat -q "Message from Hermes: hi"',
+    'hermes -p turqoise chat -q "Message from Hermes: hi"; cat secret.txt',
+    'hermes -p turqoise chat -q "Message from Hermes: hi" && another-command',
+    'hermes -p turqoise chat -q "Message from Hermes: hi" | tee delivery.log',
+    'hermes -p turqoise chat -q "Message from Hermes: hi" > delivery.log',
+    'hermes -p turqoise chat -q "Message from Hermes: hi" trailing-token',
+    'hermes -p turqoise chat -q "plain Message from Hermes: hi"'
+  ])('does not hide compound or non-canonical terminal commands: %s', command => {
+    expect(deliveryTargetFromCommand(command)).toBeNull()
+  })
 })
 
 describe('reply extraction', () => {

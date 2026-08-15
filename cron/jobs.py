@@ -31,7 +31,7 @@ try:
     import msvcrt
 except ImportError:  # pragma: no cover - non-Windows
     msvcrt = None
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from hermes_constants import get_hermes_home
 from typing import Optional, Dict, List, Any, Set, Tuple, Union, Collection
@@ -808,6 +808,25 @@ def _ensure_aware(dt: datetime) -> datetime:
         local_tz = datetime.now().astimezone().tzinfo
         return dt.replace(tzinfo=local_tz).astimezone(target_tz)
     return dt.astimezone(target_tz)
+
+
+def canonical_fire_at(value: Any) -> Optional[str]:
+    """Canonicalize an external scheduler's signed fire identity.
+
+    The public webhook accepts a NAS-signed ISO timestamp.  Jobs persist their
+    next run in the configured Hermes timezone, so compare instants in UTC
+    rather than comparing presentation offsets.  Invalid/missing values return
+    ``None`` and are rejected by the caller before a claim can be recorded.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return None
+        return parsed.astimezone(timezone.utc).isoformat()
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
 def _timezone_offset_mismatch(stored: datetime, current: datetime) -> bool:
@@ -2605,6 +2624,7 @@ def claim_job_for_fire(
     claim_ttl_seconds: int = 300,
     force: bool = False,
     return_job: bool = False,
+    expected_fire_at: Optional[str] = None,
 ) -> Union[bool, Dict[str, Any]]:
     with _fire_job_lock(job_id) as acquired:
         if not acquired:
@@ -2614,6 +2634,7 @@ def claim_job_for_fire(
             claim_ttl_seconds=claim_ttl_seconds,
             force=force,
             return_job=return_job,
+            expected_fire_at=expected_fire_at,
         )
 
 
@@ -2623,6 +2644,7 @@ def _claim_job_for_fire_locked(
     claim_ttl_seconds: int = 300,
     force: bool = False,
     return_job: bool = False,
+    expected_fire_at: Optional[str] = None,
 ) -> Union[bool, Dict[str, Any]]:
     """Atomically claim a job for a single external 'fire' (multi-machine
     at-most-once). Returns True iff THIS caller won the claim.
@@ -2647,6 +2669,12 @@ def _claim_job_for_fire_locked(
     completing doesn't wedge the job forever — after the TTL another fire can
     reclaim it.
     """
+    expected_fire = (
+        canonical_fire_at(expected_fire_at) if expected_fire_at is not None else None
+    )
+    if expected_fire_at is not None and expected_fire is None:
+        return False
+
     with _jobs_lock():
         jobs = load_jobs()
         for job in jobs:
@@ -2658,6 +2686,17 @@ def _claim_job_for_fire_locked(
             # gate and atomically resumes the job below.
             if not force and not is_job_runnable(job):
                 return False
+            if expected_fire is not None:
+                schedule = job.get("schedule")
+                scheduled_fire_at = job.get("next_run_at")
+                if (
+                    not scheduled_fire_at
+                    and isinstance(schedule, dict)
+                    and schedule.get("kind") == "once"
+                ):
+                    scheduled_fire_at = schedule.get("run_at")
+                if canonical_fire_at(scheduled_fire_at) != expected_fire:
+                    return False
             now = _hermes_now()
             existing = job.get("fire_claim")
             if existing:

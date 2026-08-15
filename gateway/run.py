@@ -18295,6 +18295,30 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 pass
 
         event_metadata = getattr(event, "metadata", None) or {}
+
+        async def _clear_stale_loop_from_metadata(reason: str) -> None:
+            """Retire an awaiting /loop when its fenced wakeup is dropped."""
+            loop_session_id = str(
+                event_metadata.get("gateway_loop_session_id") or ""
+            ).strip()
+            if not loop_session_id:
+                return
+            try:
+                from hermes_cli.loops import LoopManager
+
+                await asyncio.to_thread(LoopManager(session_id=loop_session_id).clear)
+                logger.info(
+                    "Cleared stale /loop session %s after internal wake rejection: %s",
+                    loop_session_id,
+                    reason,
+                )
+            except Exception:
+                logger.debug(
+                    "Failed to clear stale /loop session %s",
+                    loop_session_id,
+                    exc_info=True,
+                )
+
         expected_session_key = str(
             event_metadata.get("gateway_session_key") or ""
         ).strip()
@@ -18326,7 +18350,26 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     pinned_session_id or "missing",
                     expected_session_key or "missing",
                 )
+                await _clear_stale_loop_from_metadata("session no longer current")
                 return
+            if event_metadata.get("gateway_loop_session_id"):
+                try:
+                    loop_sender_authorized = self._is_user_authorized(
+                        source,
+                        allow_adapter_delegation=False,
+                    )
+                except Exception:
+                    loop_sender_authorized = False
+                    logger.debug(
+                        "Failed to revalidate /loop sender authorization",
+                        exc_info=True,
+                    )
+                if not loop_sender_authorized:
+                    logger.warning(
+                        "Dropping /loop wakeup for no-longer-authorized sender"
+                    )
+                    await _clear_stale_loop_from_metadata("sender no longer authorized")
+                    return
         else:
             # Internal wakes must observe reset policy without becoming user
             # activity themselves. Otherwise periodic Kanban/process
@@ -21165,12 +21208,58 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         session_key = self._session_key_for_source(source)
                     except Exception:
                         session_key = None
+                    mgr = LoopManager(session_id=sid)
+                    if not session_key:
+                        logger.warning(
+                            "loop wakeup: cannot resolve session key for stale loop %s; clearing",
+                            sid,
+                        )
+                        mgr.clear()
+                        continue
+                    try:
+                        session_entry = await self.async_session_store.lookup_by_session_key(
+                            session_key
+                        )
+                    except Exception:
+                        logger.warning(
+                            "loop wakeup: session lookup failed for %s; clearing stale loop",
+                            sid,
+                            exc_info=True,
+                        )
+                        mgr.clear()
+                        continue
+                    if session_entry is None or session_entry.session_id != sid:
+                        logger.info(
+                            "loop wakeup: session %s is no longer current for %s; clearing",
+                            sid,
+                            session_key,
+                        )
+                        mgr.clear()
+                        continue
+                    try:
+                        loop_sender_authorized = self._is_user_authorized(
+                            source,
+                            allow_adapter_delegation=False,
+                        )
+                    except Exception:
+                        loop_sender_authorized = False
+                        logger.debug(
+                            "loop wakeup authorization check failed for %s",
+                            sid,
+                            exc_info=True,
+                        )
+                    if not loop_sender_authorized:
+                        logger.info(
+                            "loop wakeup: sender is no longer authorized for %s; clearing",
+                            sid,
+                        )
+                        mgr.clear()
+                        continue
                     if session_key and session_key in self._running_agents:
                         continue  # busy — stays due, next scan retries
                     if goal_blocks_loop_tick(sid):
                         continue
 
-                    mgr = LoopManager(session_id=sid)
                     if not mgr.is_due(now):
                         continue
                     wakeup = mgr.fire_tick()
@@ -21182,6 +21271,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                             message_type=MessageType.TEXT,
                             source=source,
                             internal=True,
+                            metadata={
+                                "gateway_session_key": session_key,
+                                "gateway_session_id": sid,
+                                "gateway_session_strict": True,
+                                "gateway_loop_session_id": sid,
+                            },
                         )
                         logger.info(
                             "loop wakeup #%s — injecting for %s chat=%s thread=%s",

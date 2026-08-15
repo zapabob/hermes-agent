@@ -42,6 +42,8 @@ const {
   configureGatewayRegistry,
   ensureActiveGatewayOpen,
   ensureGatewayForProfile,
+  gatewayForScope,
+  gatewayScope,
   setPrimaryGateway
 } = await import('./gateway')
 
@@ -70,6 +72,15 @@ afterEach(() => {
 })
 
 describe('ensureGatewayForProfile under a shared global remote', () => {
+  it('never falls back to the primary socket for an unknown request scope', () => {
+    const primary = makePrimary()
+    setPrimaryGateway(primary as never, 'default', 'connection-a')
+
+    expect(gatewayForScope(gatewayScope('connection-a', 'default'))).toBe(primary)
+    expect(gatewayForScope(gatewayScope('connection-b', 'default'))).toBeNull()
+    expect(gatewayForScope(gatewayScope('connection-a', 'other-profile'))).toBeNull()
+  })
+
   it('activates the primary socket for an explicitly shared-primary descriptor', async () => {
     const primary = makePrimary()
     setPrimaryGateway(primary as never, 'default')

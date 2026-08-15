@@ -13114,7 +13114,7 @@ def _gateway_fire_endpoint(profile: str, home: Path) -> str:
 
 
 async def _forward_cron_fire_to_gateway(
-    profile: str, job_id: str, authorization: str
+    profile: str, job_id: str, fire_at: str, authorization: str
 ) -> Optional[Tuple[int, Dict[str, Any]]]:
     """Forward a Chronos fire callback to the gateway api_server on loopback.
 
@@ -13140,7 +13140,7 @@ async def _forward_cron_fire_to_gateway(
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
                 url,
-                json={"job_id": job_id},
+                json={"job_id": job_id, "fire_at": fire_at},
                 headers={"Authorization": authorization},
             )
     except Exception as exc:

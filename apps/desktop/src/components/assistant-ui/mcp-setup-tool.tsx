@@ -30,7 +30,7 @@ import { completeMcpDesktopOAuth, McpOAuthCancelled } from '@/lib/mcp-dashboard-
 import { directoryEntry } from '@/lib/mcp-directory'
 import { prettyName } from '@/lib/text'
 import { cn } from '@/lib/utils'
-import { $gateway } from '@/store/gateway'
+import { gatewayForScope } from '@/store/gateway'
 import { clearMcpSetupRequest, type McpSetupOutcome, sessionMcpSetupRequest } from '@/store/mcp-setup'
 import { notifyError } from '@/store/notifications'
 import { invalidateMcpSuggestionIndex } from '@/store/suggestion-providers/mcp'
@@ -171,7 +171,6 @@ function McpSetupPending({ args }: ToolCallMessagePartProps) {
   const sessionId = useStore(useSessionView().$runtimeId)
   const $request = useMemo(() => sessionMcpSetupRequest(sessionId), [sessionId])
   const request = useStore($request)
-  const gateway = useStore($gateway)
   const fromArgs = useMemo(() => readSetupArgs(args), [args])
 
   const server = fromArgs.server || request?.server || ''
@@ -199,6 +198,8 @@ function McpSetupPending({ args }: ToolCallMessagePartProps) {
       if (!request || sessionMcpSetupRequest(request.sessionId).get()?.requestId !== request.requestId) {
         return
       }
+
+      const gateway = request.scope ? gatewayForScope(request.scope) : null
 
       if (!gateway) {
         notifyError(new Error(copy.gatewayDisconnected), copy.sendFailed)
@@ -237,7 +238,7 @@ function McpSetupPending({ args }: ToolCallMessagePartProps) {
         notifyError(error, copy.sendFailed)
       }
     },
-    [copy.gatewayDisconnected, copy.reloadFailed, copy.sendFailed, gateway, request]
+    [copy.gatewayDisconnected, copy.reloadFailed, copy.sendFailed, request]
   )
 
   const decline = useCallback(() => {
@@ -252,6 +253,15 @@ function McpSetupPending({ args }: ToolCallMessagePartProps) {
     cancelRef.current = false
     setWorking(true)
 
+    const scope = request?.scope
+
+    if (!scope) {
+      notifyError(new Error(copy.gatewayDisconnected), copy.sendFailed)
+      setWorking(false)
+
+      return
+    }
+
     // Poll-boundary abort for the background-install loop; the OAuth flows
     // carry their own cancel via completeMcpDesktopOAuth's `cancelled`.
     const throwIfCancelled = <T,>(value: T): T => {
@@ -264,7 +274,7 @@ function McpSetupPending({ args }: ToolCallMessagePartProps) {
 
     try {
       if (action === 'enable') {
-        await setMcpServerEnabled(server, true)
+        await setMcpServerEnabled(server, true, scope.profile, scope.connectionId)
         triggerHaptic('submit')
         await respond({ server, status: 'enabled' })
 
@@ -274,10 +284,10 @@ function McpSetupPending({ args }: ToolCallMessagePartProps) {
       if (action === 'authorize') {
         const flow = await completeMcpDesktopOAuth({
           serverName: server,
-          start: authMcpServer,
-          status: getMcpOAuthFlow,
+          start: name => authMcpServer(name, scope.profile, scope.connectionId),
+          status: flowId => getMcpOAuthFlow(flowId, scope.profile, scope.connectionId),
           cancelled: () => cancelRef.current,
-          cancel: cancelMcpOAuthFlow,
+          cancel: flowId => cancelMcpOAuthFlow(flowId, scope.profile, scope.connectionId),
           openExternal: url => window.hermesDesktop.openExternal(url)
         })
 
@@ -295,7 +305,7 @@ function McpSetupPending({ args }: ToolCallMessagePartProps) {
       let resolved = entry
 
       if (resolved === undefined) {
-        const catalog = await getMcpCatalog()
+        const catalog = await getMcpCatalog(scope.profile, scope.connectionId)
         resolved = catalog.entries.find(candidate => candidate.name === server) ?? null
         setEntry(resolved)
       }
@@ -314,21 +324,21 @@ function McpSetupPending({ args }: ToolCallMessagePartProps) {
         // flow dies after the config write (cancel, closed OAuth tab), roll
         // the write back — decline means "no server", not an unauthorized
         // entry squatting in mcp_servers (authoritative-write rule).
-        await addMcpServer({ name: known.name, url: known.url })
+        await addMcpServer({ name: known.name, url: known.url }, scope.profile, scope.connectionId)
 
         let flow
 
         try {
           flow = await completeMcpDesktopOAuth({
             serverName: known.name,
-            start: authMcpServer,
-            status: getMcpOAuthFlow,
+            start: name => authMcpServer(name, scope.profile, scope.connectionId),
+            status: flowId => getMcpOAuthFlow(flowId, scope.profile, scope.connectionId),
             cancelled: () => cancelRef.current,
-            cancel: cancelMcpOAuthFlow,
+            cancel: flowId => cancelMcpOAuthFlow(flowId, scope.profile, scope.connectionId),
             openExternal: url => window.hermesDesktop.openExternal(url)
           })
         } catch (error) {
-          await removeMcpServer(known.name).catch(() => {
+          await removeMcpServer(known.name, scope.profile, scope.connectionId).catch(() => {
             // Rollback is best-effort; the primary error/cancel wins.
           })
           throw error
@@ -349,13 +359,13 @@ function McpSetupPending({ args }: ToolCallMessagePartProps) {
         return
       }
 
-      const res = await installMcpCatalogEntry(server, envDraft)
+      const res = await installMcpCatalogEntry(server, envDraft, scope.profile, scope.connectionId)
 
       // Git-backed entries clone in the background — poll to completion so a
       // non-zero exit surfaces as a real failure instead of a false success.
       if (res.background && res.action) {
         for (;;) {
-          const status = throwIfCancelled(await getActionStatus(res.action, 1))
+          const status = throwIfCancelled(await getActionStatus(res.action, 1, scope.profile, scope.connectionId))
 
           if (!status.running) {
             if (status.exit_code !== 0) {
@@ -387,7 +397,7 @@ function McpSetupPending({ args }: ToolCallMessagePartProps) {
     } finally {
       setWorking(false)
     }
-  }, [action, copy, entry, envDraft, respond, server])
+  }, [action, copy, entry, envDraft, request?.scope, respond, server])
 
   const title =
     action === 'enable'

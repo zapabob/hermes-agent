@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { onComposerInsertRequest } from '@/app/chat/composer/focus'
 import { I18nProvider } from '@/i18n'
 import { clearClarifyRequest, setClarifyRequest } from '@/store/clarify'
-import { $gateway } from '@/store/gateway'
+import { $gateway, gatewayScope, setPrimaryGateway } from '@/store/gateway'
 import { $activeSessionId } from '@/store/session'
 
 import { ClarifyTool, readClarifyResult } from './clarify-tool'
@@ -22,6 +22,7 @@ afterEach(() => {
   clearClarifyRequest()
   $activeSessionId.set(null)
   $gateway.set(null)
+  setPrimaryGateway(null)
   vi.clearAllMocks()
 })
 
@@ -73,14 +74,17 @@ function liveClarifyProps(choices = ['staging', 'production']): ToolCallMessageP
 
 function renderLiveClarify({ multiSelect = false }: { multiSelect?: boolean } = {}) {
   const request = vi.fn().mockResolvedValue({ ok: true })
+  const gateway = { connectionState: 'open', request }
 
   $activeSessionId.set('session-1')
-  $gateway.set({ request } as never)
+  $gateway.set(gateway as never)
+  setPrimaryGateway(gateway as never, 'default')
   setClarifyRequest({
     choices: ['staging', 'production'],
     multiSelect,
     question: 'Which deployment target?',
     requestId: 'request-1',
+    scope: gatewayScope(null, 'default'),
     sessionId: 'session-1'
   })
   renderClarify(<ClarifyTool {...liveClarifyProps()} />)
@@ -372,14 +376,17 @@ describe('ClarifyTool keyboard navigation', () => {
 describe('ClarifyTool recommended option', () => {
   it('dims the (Recommended) label and answers with the choice the backend sent', async () => {
     const request = vi.fn().mockResolvedValue({ ok: true })
+    const gateway = { connectionState: 'open', request }
 
     $activeSessionId.set('session-1')
-    $gateway.set({ request } as never)
+    $gateway.set(gateway as never)
+    setPrimaryGateway(gateway as never, 'default')
     setClarifyRequest({
       choices: ['staging (Recommended)', 'production'],
       multiSelect: false,
       question: 'Which deployment target?',
       requestId: 'request-1',
+      scope: gatewayScope(null, 'default'),
       sessionId: 'session-1'
     })
     renderClarify(<ClarifyTool {...liveClarifyProps(['staging (Recommended)', 'production'])} />)
@@ -417,13 +424,17 @@ describe('ClarifyTool pending marker', () => {
   })
 
   it('does not mark a free-text (no-choice) pending card', () => {
+    const gateway = { connectionState: 'open', request: vi.fn().mockResolvedValue({ ok: true }) }
+
     $activeSessionId.set('session-1')
-    $gateway.set({ request: vi.fn().mockResolvedValue({ ok: true }) } as never)
+    $gateway.set(gateway as never)
+    setPrimaryGateway(gateway as never, 'default')
     setClarifyRequest({
       choices: null,
       multiSelect: false,
       question: 'Anything else?',
       requestId: 'request-1',
+      scope: gatewayScope(null, 'default'),
       sessionId: 'session-1'
     })
 

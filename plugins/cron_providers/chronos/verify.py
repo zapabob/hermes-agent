@@ -18,6 +18,7 @@ hand-roll JWT verification.
 
 from __future__ import annotations
 
+import hmac
 import logging
 import threading
 from typing import Any, Callable, Dict, Optional
@@ -27,6 +28,7 @@ logger = logging.getLogger("cron.chronos.verify")
 # The purpose claim that scopes a token to the fire endpoint. A general agent
 # JWT (without this claim) must NOT be replayable against /api/cron/fire.
 _FIRE_PURPOSE = "cron_fire"
+_FIRE_BINDING_CLAIMS = ("cron_job_id", "cron_fire_at")
 
 # Process-wide cache of PyJWKClient instances, keyed by JWKS URL.
 #
@@ -140,8 +142,37 @@ def verify_nas_fire_token(
     if claims.get("purpose") != _FIRE_PURPOSE:
         logger.warning("cron fire: token missing/!=%s purpose claim", _FIRE_PURPOSE)
         return None
+    for claim_name in _FIRE_BINDING_CLAIMS:
+        claim_value = claims.get(claim_name)
+        if not isinstance(claim_value, str) or not claim_value.strip():
+            logger.warning("cron fire: token missing/invalid %s claim", claim_name)
+            return None
 
     return claims
+
+
+def fire_token_matches(
+    claims: Dict[str, Any], *, job_id: Any, fire_at: Any
+) -> bool:
+    """Return whether a verified fire token binds this exact callback body.
+
+    ``cron_job_id`` and ``cron_fire_at`` are signed, single-fire capabilities.
+    Checking both fields at every public hop prevents a valid, short-lived
+    bearer issued for one job/time from being substituted onto another job or
+    replayed with a different scheduling identity.
+    """
+    if not isinstance(claims, dict):
+        return False
+    expected_job_id = claims.get("cron_job_id")
+    expected_fire_at = claims.get("cron_fire_at")
+    if not all(
+        isinstance(value, str) and value.strip()
+        for value in (expected_job_id, expected_fire_at, job_id, fire_at)
+    ):
+        return False
+    return hmac.compare_digest(expected_job_id, job_id) and hmac.compare_digest(
+        expected_fire_at, fire_at
+    )
 
 
 def get_fire_verifier() -> Callable[..., Optional[Dict[str, Any]]]:

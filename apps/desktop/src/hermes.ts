@@ -262,6 +262,22 @@ function profileScoped(profile?: null | string): { profile?: string } {
   return selected ? { profile: selected } : {}
 }
 
+// A request created from a blocking gateway event must retain the backend that
+// raised it. `connectionId` is deliberately optional for the legacy/local
+// primary path; Electron main resolves an explicit id strictly through the
+// registry and never substitutes the currently active connection.
+function profileAndConnectionScoped(
+  profile?: null | string,
+  connectionId?: null | string
+): { connectionId?: string; profile?: string } {
+  const normalizedConnectionId = typeof connectionId === 'string' ? connectionId.trim() : ''
+
+  return {
+    ...profileScoped(profile),
+    ...(normalizedConnectionId ? { connectionId: normalizedConnectionId } : {})
+  }
+}
+
 /** Profile that profile-scoped REST/WS calls should target (null → primary).
  *  Read-only twin of setApiRequestProfile for modules (e.g. voice playback)
  *  that build their own connection URLs and must stay on the same backend. */
@@ -1168,27 +1184,39 @@ export function saveMcpServers(
 }
 
 /** Start an MCP OAuth flow and return the authorization URL. */
-export function authMcpServer(name: string, profile?: null | string): Promise<McpOAuthFlow> {
+export function authMcpServer(
+  name: string,
+  profile?: null | string,
+  connectionId?: null | string
+): Promise<McpOAuthFlow> {
   return window.hermesDesktop.api<McpOAuthFlow>({
-    ...profileScoped(profile),
+    ...profileAndConnectionScoped(profile, connectionId),
     path: `/api/mcp/servers/${encodeURIComponent(name)}/auth`,
     method: 'POST',
     timeoutMs: 60_000
   })
 }
 
-export function getMcpOAuthFlow(flowId: string, profile?: null | string): Promise<McpOAuthFlow> {
+export function getMcpOAuthFlow(
+  flowId: string,
+  profile?: null | string,
+  connectionId?: null | string
+): Promise<McpOAuthFlow> {
   return window.hermesDesktop.api<McpOAuthFlow>({
-    ...profileScoped(profile),
+    ...profileAndConnectionScoped(profile, connectionId),
     path: `/api/mcp/oauth/flows/${encodeURIComponent(flowId)}`
   })
 }
 
 /** Cancel an in-flight MCP OAuth flow server-side, freeing the per-server
  *  "already in progress" slot so a retry doesn't 409. */
-export function cancelMcpOAuthFlow(flowId: string, profile?: null | string): Promise<{ ok: boolean; status: string }> {
+export function cancelMcpOAuthFlow(
+  flowId: string,
+  profile?: null | string,
+  connectionId?: null | string
+): Promise<{ ok: boolean; status: string }> {
   return window.hermesDesktop.api<{ ok: boolean; status: string }>({
-    ...profileScoped(profile),
+    ...profileAndConnectionScoped(profile, connectionId),
     path: `/api/mcp/oauth/flows/${encodeURIComponent(flowId)}`,
     method: 'DELETE'
   })
@@ -1761,9 +1789,14 @@ export function checkHermesUpdate(force = false): Promise<BackendUpdateCheckResp
   })
 }
 
-export function getActionStatus(name: string, lines = 200, profile?: null | string): Promise<ActionStatusResponse> {
+export function getActionStatus(
+  name: string,
+  lines = 200,
+  profile?: null | string,
+  connectionId?: null | string
+): Promise<ActionStatusResponse> {
   return window.hermesDesktop.api<ActionStatusResponse>({
-    ...profileScoped(profile),
+    ...profileAndConnectionScoped(profile, connectionId),
     path: `/api/actions/${encodeURIComponent(name)}/status?lines=${Math.max(1, lines)}`
   })
 }
@@ -1895,9 +1928,9 @@ export function addMcpServer(body: {
   args?: string[]
   env?: Record<string, string>
   auth?: string
-}): Promise<McpServerSummary> {
+}, profile?: null | string, connectionId?: null | string): Promise<McpServerSummary> {
   return window.hermesDesktop.api<McpServerSummary>({
-    ...profileScoped(),
+    ...profileAndConnectionScoped(profile, connectionId),
     path: '/api/mcp/servers',
     method: 'POST',
     body
@@ -1906,26 +1939,35 @@ export function addMcpServer(body: {
 
 /** Remove one server from `mcp_servers` (the inline setup card's rollback
  *  when a directory install is cancelled after the config write). */
-export function removeMcpServer(name: string): Promise<{ ok: boolean }> {
+export function removeMcpServer(
+  name: string,
+  profile?: null | string,
+  connectionId?: null | string
+): Promise<{ ok: boolean }> {
   return window.hermesDesktop.api<{ ok: boolean }>({
-    ...profileScoped(),
+    ...profileAndConnectionScoped(profile, connectionId),
     path: `/api/mcp/servers/${encodeURIComponent(name)}`,
     method: 'DELETE'
   })
 }
 
-export function setMcpServerEnabled(name: string, enabled: boolean): Promise<{ ok: boolean }> {
+export function setMcpServerEnabled(
+  name: string,
+  enabled: boolean,
+  profile?: null | string,
+  connectionId?: null | string
+): Promise<{ ok: boolean }> {
   return window.hermesDesktop.api<{ ok: boolean }>({
-    ...profileScoped(),
+    ...profileAndConnectionScoped(profile, connectionId),
     path: `/api/mcp/servers/${encodeURIComponent(name)}/enabled`,
     method: 'PUT',
     body: { enabled }
   })
 }
 
-export function getMcpCatalog(profile?: null | string): Promise<McpCatalogResponse> {
+export function getMcpCatalog(profile?: null | string, connectionId?: null | string): Promise<McpCatalogResponse> {
   return window.hermesDesktop.api<McpCatalogResponse>({
-    ...profileScoped(profile),
+    ...profileAndConnectionScoped(profile, connectionId),
     path: '/api/mcp/catalog'
   })
 }
@@ -1943,10 +1985,11 @@ export function getGhAuthStatus(refresh = false): Promise<{ available: boolean; 
 export function installMcpCatalogEntry(
   name: string,
   env: Record<string, string> = {},
-  profile?: null | string
+  profile?: null | string,
+  connectionId?: null | string
 ): Promise<{ ok: boolean; name?: string; pid?: number; action?: string; background?: boolean }> {
   return window.hermesDesktop.api<{ ok: boolean; name?: string; pid?: number; action?: string; background?: boolean }>({
-    ...profileScoped(profile),
+    ...profileAndConnectionScoped(profile, connectionId),
     path: '/api/mcp/catalog/install',
     method: 'POST',
     body: { name, env, enable: true },

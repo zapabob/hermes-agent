@@ -115,6 +115,7 @@ import { installEmbedReferer } from './embed-referer'
 import { createEventDeduper } from './event-dedupe'
 import {
   buildTerminalScript,
+  containsTerminalControlCharacters,
   resolveTerminalLaunch,
   terminalScriptEnv,
   terminalScriptExtension,
@@ -194,7 +195,7 @@ import { snapHudBounds } from './hud-snap'
 import { createHudSnapShortcut } from './hud-snap-shortcut'
 import { buildHudWindowUrl } from './hud-url'
 import { imageContextMenuItems } from './image-context-menu'
-import { createLinkTitleWindow, guardLinkTitleSession, readLinkTitleWindowTitle } from './link-title-window'
+import { createBoundedLinkTitleQueue, fetchPinnedLinkTitle } from './link-title-fetch'
 import { ensureMainWindow } from './main-window-lifecycle'
 import { createMediaProtocolHandler, MEDIA_PROTOCOL } from './media-protocol'
 import {
@@ -11410,13 +11411,20 @@ ipcMain.handle('hermes:window:openInstance', async () => {
 // never ensureRuntime(), which would kick off a first-run install from a menu
 // click; an unresolved runtime is reported instead.
 ipcMain.handle('hermes:window:openInTerminal', async (_event, sessionId, opts) => {
-  if (typeof sessionId !== 'string' || !sessionId.trim()) {
+  const requestedSessionId = typeof sessionId === 'string' ? sessionId.trim() : ''
+
+  if (!requestedSessionId || containsTerminalControlCharacters(requestedSessionId)) {
     return { ok: false, error: 'invalid-session-id' }
   }
 
   try {
     const profile = typeof opts?.profile === 'string' ? opts.profile.trim() : ''
-    const backend = resolveHermesBackend(tuiResumeArgs(sessionId.trim(), profile || undefined))
+
+    if (containsTerminalControlCharacters(profile)) {
+      return { ok: false, error: 'invalid-profile' }
+    }
+
+    const backend = resolveHermesBackend(tuiResumeArgs(requestedSessionId, profile || undefined))
 
     if (!backend.command) {
       return { ok: false, error: 'Hermes is not installed yet' }
@@ -11448,7 +11456,7 @@ ipcMain.handle('hermes:window:openInTerminal', async (_event, sessionId, opts) =
       return { ok: false, error: 'No terminal emulator found' }
     }
 
-    rememberLog(`[terminal] opening session ${sessionId} via ${launch.command}`)
+    rememberLog(`[terminal] opening session ${requestedSessionId} via ${launch.command}`)
 
     // Detached + unref'd: the terminal window outlives the desktop app, and
     // never inherits our stdio (a closed pipe would kill the TUI).
@@ -12530,17 +12538,19 @@ async function mergeRemoteProfileSessions(searchParams, remoteProfiles) {
 }
 
 ipcMain.handle('hermes:api', async (_event, request) => {
+  const requestedConnectionId = typeof request?.connectionId === 'string' ? request.connectionId.trim() : ''
+
   // Remote-profile session requests would otherwise hit the local primary off
   // each profile's on-disk state.db — fine for local profiles, but a remote
   // profile's sessions live on its remote host, so the UI's IDs 404 (or mutations
   // no-op) the moment they run there. Route reads + mutations to the remote.
-  const rerouted = await interceptSessionRequestForRemote(request)
+  const rerouted = requestedConnectionId ? undefined : await interceptSessionRequestForRemote(request)
 
   if (rerouted !== undefined) {
     return rerouted
   }
 
-  const tornDownProfile = await prepareProfileDeleteRequest(request)
+  const tornDownProfile = requestedConnectionId ? null : await prepareProfileDeleteRequest(request)
 
   const profile = request?.profile
   // After tearing down a backend for profile deletion, route to the primary
@@ -12548,10 +12558,22 @@ ipcMain.handle('hermes:api', async (_event, request) => {
   // backend calls ensure_hermes_home() which recreates the profile directory,
   // defeating the deletion and leaving a zombie process.
   const routeProfile = resolveRouteProfile(tornDownProfile, profile)
-  const connection = await ensureBackend(routeProfile)
+  // Explicit source scope is authoritative: do not resolve through the active
+  // window backend and do not fall back if the registry entry disappeared.
+
+  const connection = requestedConnectionId
+    ? await ensureRegistryBackend(requestedConnectionId, routeProfile)
+    : await ensureBackend(routeProfile)
+
   const timeoutMs = resolveTimeoutMs(request?.timeoutMs, DEFAULT_FETCH_TIMEOUT_MS)
 
-  const requestPath = pathWithGlobalRemoteProfile(request.path, profile, profileRouteOptions(profile))
+  // Registry-shared remote descriptors need the explicit request profile in
+  // the URL just like the app-wide shared remote does.
+  const requestPath = pathWithGlobalRemoteProfile(
+    request.path,
+    profile,
+    requestedConnectionId ? { sharedRemote: connection?.sharedRemote === true } : profileRouteOptions(profile)
+  )
 
   const url = `${connection.baseUrl}${requestPath}`
 
@@ -12618,7 +12640,11 @@ ipcMain.handle('hermes:notify', (_event, payload) => {
   // kind+session can arrive here twice. Collapse it at this single choke point.
   // Return true (not false): a notification for the event IS being shown by the
   // first caller, so the settings "send test" success probe stays honest.
-  if (isDuplicateNotification(`${payload?.kind ?? ''}:${payload?.sessionId ?? payload?.tag ?? ''}`)) {
+  if (
+    isDuplicateNotification(
+      `${payload?.kind ?? ''}:${payload?.connectionId ?? ''}:${payload?.profile ?? ''}:${payload?.sessionId ?? payload?.tag ?? ''}`
+    )
+  ) {
     return true
   }
 
@@ -12652,7 +12678,13 @@ ipcMain.handle('hermes:notify', (_event, payload) => {
     const action = actions[index]
 
     if (action?.id) {
-      mainWindow.webContents.send('hermes:notification-action', { sessionId: payload?.sessionId, actionId: action.id })
+      mainWindow.webContents.send('hermes:notification-action', {
+        actionId: action.id,
+        connectionId: payload?.connectionId,
+        profile: payload?.profile,
+        requestId: payload?.requestId,
+        sessionId: payload?.sessionId
+      })
     }
   })
   notification.show()

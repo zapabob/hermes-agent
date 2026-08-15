@@ -10,13 +10,26 @@ import { AGENT_MESSAGE_RE, agentAvatarCache, resolveAgentAvatar } from '@/compon
 // like ops tooling; the user-facing truth is "Messaged X" and, when the
 // quiet run returns the recipient's reply, "Message from X" — the same
 // compact event notices the receiving chat shows.
-const DELIVERY_COMMAND_RE =
-  /(?:^|[;&|]\s*|\bhermes\s+)-p\s+("?)([a-z0-9][a-z0-9_-]{0,63})\1\s+chat\b[\s\S]*?-q\s+["']Message from/iu
+// This is deliberately a recognizer for the two command forms emitted by the
+// Bot Mode sender, not a general shell parser. A false negative safely falls
+// back to the normal terminal row; a false positive would hide command/output
+// that may be important for audit and debugging.
+
+const PROFILE = String.raw`[a-z0-9][a-z0-9_-]{0,63}`
+const SAFE_ARG = String.raw`(?:"[a-zA-Z0-9_ ./,:=@%+~?-]*"|'[a-zA-Z0-9_ ./,:=@%+~?-]*'|[a-zA-Z0-9_./,:=@%+~?-]+)`
+
+const DELIVERY_COMMAND_RE = new RegExp(
+  String.raw`^(?:cd\s+~\s+&&\s+timeout\s+\d+\s+)?hermes\s+-p\s+(?:"(${PROFILE})"|'(${PROFILE})'|(${PROFILE}))\s+chat(?:\s+(?!-q(?:\s|$))${SAFE_ARG})*\s+-q\s+(?:"Message from [^"\r\n;&|<>\x60$]*"|'Message from [^'\r\n;&|<>\x60$]*')$`,
+  // `-Q` is a documented case-sensitive chat flag.  A case-insensitive
+  // matcher would mistake it for the `-q` message flag and reject a canonical
+  // Bot Mode delivery before it reaches the actual quoted message.
+  'u'
+)
 
 export function deliveryTargetFromCommand(command: string): null | string {
   const match = DELIVERY_COMMAND_RE.exec(command)
 
-  return match ? match[2].toLowerCase() : null
+  return match ? (match[1] ?? match[2] ?? match[3]).toLowerCase() : null
 }
 
 /** Extract the recipient's reply text from the terminal result payload. */

@@ -1377,7 +1377,13 @@ def _(rid, params: dict) -> dict:
     try:
         from tools.approval import list_gateway_approvals
 
-        return _ok(rid, {"approvals": list_gateway_approvals(session["session_key"])})
+        approvals = list_gateway_approvals(session["session_key"])
+
+        # Reconnect replay is an outbound approval surface just like the live
+        # event path, so never bypass the shared command-redaction boundary.
+        # Keep every queued approval in FIFO order; callers use request_id to
+        # resolve the exact entry rather than treating the first as exclusive.
+        return _ok(rid, {"approvals": [_approval_request_payload(approval) for approval in approvals]})
     except Exception as e:
         return _err(rid, 5004, str(e))
 

@@ -104,6 +104,40 @@ def test_mark_job_run_clears_claim(temp_home):
     assert claim_job_for_fire(jid) is True
 
 
+def test_bound_claim_matches_current_schedule_and_rejects_replay(temp_home):
+    """A signed old fire time cannot claim a job after it was re-armed."""
+    from cron.jobs import create_job, claim_job_for_fire, get_job, mark_job_run
+
+    job = create_job(prompt="x", schedule="every 5m", name="bound")
+    jid = job["id"]
+    signed_fire_at = get_job(jid)["next_run_at"]
+
+    assert claim_job_for_fire(jid, expected_fire_at=signed_fire_at) is True
+    mark_job_run(jid, success=True)
+    assert claim_job_for_fire(jid, expected_fire_at=signed_fire_at) is False
+
+    current_fire_at = get_job(jid)["next_run_at"]
+    assert current_fire_at != signed_fire_at
+    assert claim_job_for_fire(jid, expected_fire_at=current_fire_at) is True
+
+
+def test_bound_claim_rejects_mismatched_or_invalid_schedule_time(temp_home):
+    from cron.jobs import create_job, claim_job_for_fire, get_job
+
+    job = create_job(prompt="x", schedule="every 5m", name="mismatch")
+    signed_fire_at = get_job(job["id"])["next_run_at"]
+    assert claim_job_for_fire(
+        job["id"],
+        expected_fire_at="2026-08-16T12:00:00+00:00",
+    ) is False
+    assert claim_job_for_fire(job["id"], expected_fire_at="not-a-time") is False
+    assert claim_job_for_fire(
+        job["id"],
+        expected_fire_at="2026-08-16T12:00:00",
+    ) is False
+    assert claim_job_for_fire(job["id"], expected_fire_at=signed_fire_at) is True
+
+
 def test_fire_claim_heartbeat_refreshes_only_expected_owner(temp_home, monkeypatch):
     from datetime import datetime, timedelta
 

@@ -1337,6 +1337,11 @@ def _execution_home_for_job(job: dict | None) -> Path:
     return profile_home
 
 
+def _scripts_dir_for_job(job: dict | None) -> Path:
+    """Resolve the script allowlist directory in the job's execution profile."""
+    return _execution_home_for_job(job) / "scripts"
+
+
 @contextlib.contextmanager
 def _cron_profile_guard(job: dict):
     """Exclude named-profile global overrides from every other cron run."""

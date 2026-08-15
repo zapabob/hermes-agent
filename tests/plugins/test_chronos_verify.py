@@ -37,6 +37,7 @@ def _mint(priv, claims):
 
 AUD = "agent:inst-123"
 ISS = "https://portal.nousresearch.com"
+FIRE_AT = "2026-08-16T12:00:00+00:00"
 
 
 def _base_claims(**over):
@@ -45,6 +46,8 @@ def _base_claims(**over):
         "aud": AUD,
         "iss": ISS,
         "purpose": "cron_fire",
+        "cron_job_id": "j1",
+        "cron_fire_at": FIRE_AT,
         "iat": now,
         "nbf": now - 5,
         "exp": now + 300,
@@ -84,6 +87,39 @@ def test_missing_purpose_rejected(rsa_keys):
     token = _mint(priv, claims)
     assert verify_nas_fire_token(token=token, expected_audience=AUD,
                                  jwks_or_key=pub, issuer=ISS) is None
+
+
+@pytest.mark.parametrize("claim_name", ["cron_job_id", "cron_fire_at"])
+def test_missing_fire_binding_claim_rejected(rsa_keys, claim_name):
+    """A valid general fire JWT is not a capability without both bindings."""
+    from plugins.cron_providers.chronos.verify import verify_nas_fire_token
+
+    priv, pub = rsa_keys
+    claims = _base_claims()
+    del claims[claim_name]
+    token = _mint(priv, claims)
+    assert verify_nas_fire_token(
+        token=token,
+        expected_audience=AUD,
+        jwks_or_key=pub,
+        issuer=ISS,
+    ) is None
+
+
+def test_fire_token_matches_only_its_signed_job_and_time():
+    from plugins.cron_providers.chronos.verify import fire_token_matches
+
+    claims = _base_claims()
+    assert fire_token_matches(claims, job_id="j1", fire_at=FIRE_AT) is True
+    assert fire_token_matches(claims, job_id="other", fire_at=FIRE_AT) is False
+    assert (
+        fire_token_matches(
+            claims,
+            job_id="j1",
+            fire_at="2026-08-16T12:01:00+00:00",
+        )
+        is False
+    )
 
 
 def test_expired_token_rejected(rsa_keys):

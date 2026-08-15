@@ -27,7 +27,7 @@ import { billingCtaLabel, clearBillingBlock, runBillingRecovery, setBillingBlock
 import { clearClarifyRequest, normalizeChoices, setClarifyRequest, warnDroppedChoices } from '@/store/clarify'
 import { setSessionCompacting } from '@/store/compaction'
 import { refreshBackgroundProcesses } from '@/store/composer-status'
-import { $gateway } from '@/store/gateway'
+import { gatewayForScope, gatewayScope } from '@/store/gateway'
 import { applyGoalStatusText } from '@/store/goals'
 import {
   notifyCronChanged,
@@ -333,6 +333,15 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
       }
 
       const sessionId = route.sessionId
+      // Privileged renderer replies must travel back to the exact websocket
+      // that emitted the request. A missing source tag is not allowed to fall
+      // back to whichever profile happens to be active when the user clicks.
+      // The boot/secondary registries attach this to every production event.
+
+      const sourceScope =
+        typeof event.profile === 'string' && event.profile.trim()
+          ? gatewayScope(event.connectionId ?? null, event.profile)
+          : null
 
       // Late stragglers: an unscoped stream event attributed via the
       // active-session fallback (no pin) to a session that has no live turn
@@ -363,8 +372,8 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
 
       const replaySessionId = approvalReplaySessionId(event.type, activeSessionIdRef.current, sessionId)
 
-      if (replaySessionId) {
-        void replayPendingApproval($gateway.get(), replaySessionId).catch(() => undefined)
+      if (replaySessionId && sourceScope) {
+        void replayPendingApproval(gatewayForScope(sourceScope), replaySessionId, sourceScope).catch(() => undefined)
       }
 
       // Mid-turn compaction does not emit another message.start. The first
@@ -1040,7 +1049,7 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
         const choices = normalizeChoices(rawChoices)
         const multiSelect = payload?.multi_select === true
 
-        if (requestId && question) {
+        if (requestId && question && sourceScope) {
           if (rawChoices != null && choices.length === 0) {
             warnDroppedChoices('gateway', question, rawChoices)
           }
@@ -1050,7 +1059,8 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
             question,
             choices: choices.length > 0 ? choices : null,
             multiSelect,
-            sessionId: sessionId ?? null
+            sessionId: sessionId ?? null,
+            scope: sourceScope
           })
 
           if (sessionId) {
@@ -1104,8 +1114,8 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
         const action = rawAction === 'enable' || rawAction === 'authorize' ? rawAction : 'install'
         const reason = typeof payload?.reason === 'string' ? payload.reason : ''
 
-        if (requestId && server) {
-          setMcpSetupRequest({ action, reason, requestId, server, sessionId: sessionId ?? null })
+        if (requestId && server && sourceScope) {
+          setMcpSetupRequest({ action, reason, requestId, server, sessionId: sessionId ?? null, scope: sourceScope })
 
           if (sessionId) {
             upsertToolCall(
@@ -1133,7 +1143,11 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
         const command = typeof payload?.command === 'string' ? payload.command : ''
         const description = typeof payload?.description === 'string' ? payload.description : 'dangerous command'
 
-        void receiveApprovalRequest($gateway.get(), {
+        if (!sourceScope) {
+          return
+        }
+
+        void receiveApprovalRequest(gatewayForScope(sourceScope), {
           // false only when a tirith warning forbids it; backend omits the field otherwise.
           allowPermanent: payload?.allow_permanent !== false,
           choices: Array.isArray(payload?.choices)
@@ -1143,6 +1157,7 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
           description,
           requestId: typeof payload?.request_id === 'string' ? payload.request_id : undefined,
           sessionId: sessionId ?? null,
+          scope: sourceScope,
           smartDenied: payload?.smart_denied === true
         }).catch(() => undefined)
 
@@ -1156,7 +1171,10 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
             { id: 'reject', text: translateNow('notifications.native.rejectAction') }
           ],
           body: command || description,
+          connectionId: sourceScope.connectionId ?? undefined,
           kind: 'approval',
+          profile: sourceScope.profile,
+          requestId: typeof payload?.request_id === 'string' ? payload.request_id : undefined,
           sessionId,
           title: translateNow('notifications.native.approvalTitle')
         })
@@ -1165,8 +1183,8 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
         // sudo.respond {request_id, password}.
         const requestId = typeof payload?.request_id === 'string' ? payload.request_id : ''
 
-        if (requestId) {
-          setSudoRequest({ requestId, sessionId: sessionId ?? null })
+        if (requestId && sourceScope) {
+          setSudoRequest({ requestId, sessionId: sessionId ?? null, scope: sourceScope })
 
           if (sessionId) {
             updateSessionState(sessionId, state => ({ ...state, needsInput: true }))
@@ -1184,7 +1202,7 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
         // secret.respond {request_id, value}.
         const requestId = typeof payload?.request_id === 'string' ? payload.request_id : ''
 
-        if (requestId) {
+        if (requestId && sourceScope) {
           const envVar = typeof payload?.env_var === 'string' ? payload.env_var : ''
           const promptText = typeof payload?.prompt === 'string' ? payload.prompt : ''
 
@@ -1192,7 +1210,8 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
             requestId,
             envVar,
             prompt: promptText,
-            sessionId: sessionId ?? null
+            sessionId: sessionId ?? null,
+            scope: sourceScope
           })
 
           if (sessionId) {
@@ -1211,12 +1230,12 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
         // immediately (Python blocks on the respond). Empty text = no live pane.
         const requestId = typeof payload?.request_id === 'string' ? payload.request_id : ''
 
-        if (requestId) {
+        if (requestId && sourceScope) {
           const start = typeof payload?.start === 'number' ? payload.start : undefined
           const count = typeof payload?.count === 'number' ? payload.count : undefined
           const result = readActiveTerminal({ start, count })
 
-          void $gateway.get()?.request('terminal.read.respond', {
+          void gatewayForScope(sourceScope)?.request('terminal.read.respond', {
             request_id: requestId,
             text: result ? JSON.stringify(result) : ''
           })
@@ -1226,12 +1245,12 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
         // webview's page text is async) and answer. Empty text = nothing open.
         const requestId = typeof payload?.request_id === 'string' ? payload.request_id : ''
 
-        if (requestId) {
+        if (requestId && sourceScope) {
           const start = typeof payload?.start === 'number' ? payload.start : undefined
           const count = typeof payload?.count === 'number' ? payload.count : undefined
 
           void readActivePreview({ count, start }).then(result => {
-            void $gateway.get()?.request('preview.read.respond', {
+            void gatewayForScope(sourceScope)?.request('preview.read.respond', {
               request_id: requestId,
               text: result ? JSON.stringify(result) : ''
             })
@@ -1243,11 +1262,11 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
         // enumeration unsupported on this system e.g. Wayland).
         const requestId = typeof payload?.request_id === 'string' ? payload.request_id : ''
 
-        if (requestId) {
+        if (requestId && sourceScope) {
           const read = window.hermesDesktop?.readWindowBelow
 
           const answer = (result: unknown) =>
-            $gateway.get()?.request('window.read.respond', {
+            gatewayForScope(sourceScope)?.request('window.read.respond', {
               request_id: requestId,
               text: result ? JSON.stringify(result) : ''
             })

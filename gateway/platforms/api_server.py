@@ -6289,7 +6289,10 @@ class APIServerAdapter(BasePlatformAdapter):
         against double-fire on a NAS/scheduler retry.
         """
         from hermes_cli.config import cfg_get, load_config
-        from plugins.cron_providers.chronos.verify import get_fire_verifier
+        from plugins.cron_providers.chronos.verify import (
+            fire_token_matches,
+            get_fire_verifier,
+        )
 
         auth = request.headers.get("Authorization", "")
         token = auth[7:].strip() if auth.startswith("Bearer ") else ""
@@ -6334,11 +6337,16 @@ class APIServerAdapter(BasePlatformAdapter):
             except Exception:
                 body = {}
             job_id = (body or {}).get("job_id")
-            if not job_id:
+            fire_at = (body or {}).get("fire_at")
+            if not isinstance(job_id, str) or not job_id.strip():
                 return web.json_response({"error": "missing job_id"}, status=400)
+            if not isinstance(fire_at, str) or not fire_at.strip():
+                return web.json_response({"error": "missing fire_at"}, status=400)
+            if not fire_token_matches(claims, job_id=job_id, fire_at=fire_at):
+                return web.json_response({"error": "invalid fire token"}, status=401)
 
             from cron.scheduler_provider import (
-                provider_supports_split_fire,
+                provider_supports_bound_fire,
                 resolve_cron_scheduler,
             )
             provider = resolve_cron_scheduler()
@@ -6362,36 +6370,27 @@ class APIServerAdapter(BasePlatformAdapter):
                     runner = None
             adapters = getattr(runner, "adapters", None) or None
 
-            if not provider_supports_split_fire(provider):
-                # Legacy single-phase provider: it overrides the documented
-                # ``fire_due`` hook (custom claim/re-arm/telemetry) but
-                # inherits the base ``claim_fire`` — driving it through the
-                # split claim path would silently bypass that override.
-                task = asyncio.create_task(
-                    asyncio.to_thread(
-                        provider.fire_due,
-                        job_id,
-                        adapters=adapters,
-                        loop=loop,
-                    )
-                )
-                reservation["detached"] = True
-                task.add_done_callback(
-                    lambda _task: _release_pending_api_work(self, reservation)
-                )
-                try:
-                    self._background_tasks.add(task)
-                    task.add_done_callback(self._background_tasks.discard)
-                except (TypeError, AttributeError):
-                    pass
+            if not provider_supports_bound_fire(provider):
+                # A legacy provider that only receives a job id cannot enforce
+                # the signed schedule identity.  Do not silently run its
+                # single-phase hook for a public webhook: that reopens replay
+                # across re-arms.  Local/manual trigger paths remain unchanged.
                 return web.json_response(
-                    {"status": "accepted", "job_id": job_id}, status=202
+                    {
+                        "error": "cron provider lacks bound fire support",
+                        "job_id": job_id,
+                    },
+                    status=503,
                 )
 
             # Persist the attempt and exact store owner before acknowledging NAS.
             # A failure here is retryable and the reservation remains attached.
             try:
-                claimed_job = await asyncio.to_thread(provider.claim_fire, job_id)
+                claimed_job = await asyncio.to_thread(
+                    provider.claim_fire,
+                    job_id,
+                    expected_fire_at=fire_at,
+                )
             except Exception as exc:
                 logger.error("cron fire admission failed for %s: %s", job_id, exc)
                 return web.json_response(

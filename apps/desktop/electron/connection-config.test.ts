@@ -339,6 +339,13 @@ test('pathWithGlobalRemoteProfile skips local and per-profile remote override pa
   )
 })
 
+test('pathWithGlobalRemoteProfile scopes an explicitly selected shared registry remote', () => {
+  assert.equal(
+    pathWithGlobalRemoteProfile('/api/mcp/catalog', 'source-profile', { sharedRemote: true }),
+    '/api/mcp/catalog?profile=source-profile'
+  )
+})
+
 test('pathWithGlobalRemoteProfile skips empty profile/path safely', () => {
   assert.equal(
     pathWithGlobalRemoteProfile('/api/model/info', '', {

@@ -59,7 +59,7 @@ async function mountStream() {
 }
 
 const clarifyRequest = (payload: Record<string, unknown>) =>
-  act(() => handleEvent!({ payload, session_id: SID, type: 'clarify.request' }))
+  act(() => handleEvent!({ payload, profile: 'default', session_id: SID, type: 'clarify.request' }))
 
 const toolStart = (payload: Record<string, unknown>) =>
   act(() => handleEvent!({ payload, session_id: SID, type: 'tool.start' }))
@@ -115,6 +115,7 @@ describe('clarify.request stream hydration', () => {
     act(() =>
       handleEvent!({
         payload: { choices: ['yes', 'no'], question: 'Ship it?', request_id: 'req-background' },
+        profile: 'default',
         session_id: 'session-background',
         type: 'clarify.request'
       })

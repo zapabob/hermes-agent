@@ -3243,6 +3243,23 @@ class SessionStore:
             old_entry = self._entries[session_key]
             db_end_session_id = old_entry.session_id
 
+            # A reset is a hard conversation boundary.  Compression uses the
+            # separate advance_compression_session path and explicitly migrates
+            # its loop; a /new or other reset must instead retire the old
+            # session-owned loop before its route can be reused by a fresh
+            # transcript.
+            if db_end_session_id:
+                try:
+                    from hermes_cli.loops import clear_loop
+
+                    clear_loop(db_end_session_id)
+                except Exception:
+                    logger.debug(
+                        "Failed to clear loop for reset session %s",
+                        db_end_session_id,
+                        exc_info=True,
+                    )
+
             now = _now()
             session_id = f"{now.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
 

@@ -155,12 +155,17 @@ There is deliberately no in-dashboard execution fallback. The verifier is
   - `iss` == `cron.chronos.portal_url`,
   - `exp` / `nbf` (30s leeway),
   - `purpose == "cron_fire"` — a general agent JWT (no/other purpose) is
-    rejected so it can't be replayed against this endpoint.
-- **Body:** `{"job_id": "ab12cd34", "fire_at": "..."}` (only `job_id` is used).
+    rejected so it can't be replayed against this endpoint,
+  - `cron_job_id` and canonical `cron_fire_at` — required signed capability
+    fields that bind this token to exactly one job and scheduled instant.
+- **Body:** `{"job_id": "ab12cd34", "fire_at": "..."}`. Both values must
+  exactly equal the corresponding signed capability claims; the agent then
+  compares the timestamp's canonical instant against the job's current
+  `next_run_at` under the store lock.
 - **Behavior:**
   - invalid/missing/forged/expired/wrong-aud/wrong-purpose token → **401**, no
     execution.
-  - missing `job_id` → **400**.
+  - missing `job_id` or `fire_at` → **400**; a signed/body mismatch → **401**.
   - valid → **202 `{"status": "accepted", "job_id": "..."}`** immediately, and
     the job runs in the background. 202-before-run means a long agent turn never
     trips the relay's HTTP timeout.

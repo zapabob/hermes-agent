@@ -25,8 +25,33 @@
 // Everything here is pure so it can be unit-tested without Electron; the side
 // effects (writing the script, spawning) live in main.ts.
 
+// Batch files treat control characters as syntax even inside a double-quoted
+// argument. Session and profile identifiers can originate at a remote backend,
+// so reject controls at both the IPC boundary and the final .cmd serializer.
+export function containsTerminalControlCharacters(value: string): boolean {
+  return [...value].some(character => {
+    const codePoint = character.codePointAt(0) ?? 0
+
+    return codePoint <= 0x1f || codePoint === 0x7f
+  })
+}
+
+function assertSafeTerminalArgument(value: string, label: string): string {
+  if (containsTerminalControlCharacters(value)) {
+    throw new Error(`${label} cannot contain control characters`)
+  }
+
+  return value
+}
+
 /** Argv for resuming a session in the TUI, profile-pinned when we know it. */
 export function tuiResumeArgs(sessionId: string, profile?: string): string[] {
+  assertSafeTerminalArgument(sessionId, 'Session ID')
+
+  if (profile) {
+    assertSafeTerminalArgument(profile, 'Profile')
+  }
+
   const head = profile ? ['--profile', profile] : []
 
   return [...head, '--tui', '--resume', sessionId]
@@ -39,7 +64,13 @@ export function posixQuote(value: string): string {
 
 /** Quote a value for a cmd.exe script line. */
 export function windowsQuote(value: string): string {
-  return `"${String(value ?? '').replaceAll('"', '""')}"`
+  const text = String(value ?? '')
+
+  // Defense in depth for every .cmd field (runtime path, cwd, env, and argv),
+  // including any future caller that does not pass through tuiResumeArgs.
+  assertSafeTerminalArgument(text, 'Windows terminal script value')
+
+  return `"${text.replaceAll('"', '""')}"`
 }
 
 /**

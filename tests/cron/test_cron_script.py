@@ -84,6 +84,11 @@ def test_cronjob_tool_rejects_stale_past_one_shot(cron_env, monkeypatch):
 class TestRunJobScript:
     """Test the _run_job_script() function."""
 
+    def test_script_directory_uses_the_job_execution_home(self, cron_env):
+        from cron.scheduler import _scripts_dir_for_job
+
+        assert _scripts_dir_for_job({}) == cron_env / "scripts"
+
     def test_successful_script(self, cron_env):
         from cron.scheduler import _run_job_script
 

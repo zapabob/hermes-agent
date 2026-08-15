@@ -184,7 +184,38 @@ function artifactHref(value: string): string {
   return value
 }
 
+function isNetworkShareArtifactPath(value: string): boolean {
+  const path = value.trim()
+
+  if (path.startsWith('\\\\')) {
+    return true
+  }
+
+  if (!/^file:/i.test(path)) {
+    return false
+  }
+
+  try {
+    const url = new URL(path)
+
+    // A file URL with a host names a UNC share on Windows. A hostless URL
+    // whose decoded path begins with // is another UNC spelling.
+    return Boolean(url.hostname && url.hostname !== 'localhost') || /^\/\/[^/]/.test(decodeURIComponent(url.pathname))
+  } catch {
+    return false
+  }
+}
+
 export async function artifactImageSrc(value: string): Promise<string> {
+  // Artifact values are transcript-derived and image cards resolve on mount.
+  // Never turn an untrusted UNC path into an implicit SMB/network request; a
+  // user can still deliberately inspect a local artifact through its normal
+  // file action. Keep this boundary specific so supported local/WSL paths in
+  // the general media resolver retain their existing behavior.
+  if (isNetworkShareArtifactPath(value)) {
+    throw new Error('Network-share artifact previews are not allowed')
+  }
+
   // Delegate the whole local/remote ladder to the shared media resolver:
   // inline (http/data) stays as-is, remote gateway goes through the
   // authenticated fs bridge, local desktop through the Electron

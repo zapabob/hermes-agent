@@ -357,14 +357,33 @@ def test_approval_pending_replays_unresolved_requests(server, monkeypatch):
     from tools import approval
 
     server._sessions["ui-1"] = {"session_key": "agent-1", "history": []}
-    pending = [{"request_id": "req-1", "command": "danger"}]
+    pending = [
+        {"request_id": "req-1", "command": "first raw command"},
+        {"request_id": "req-2", "command": "second raw command"},
+    ]
+    redacted_inputs = []
     monkeypatch.setattr(approval, "list_gateway_approvals", lambda key: pending if key == "agent-1" else [])
+    monkeypatch.setattr(
+        server,
+        "_approval_request_payload",
+        lambda item: redacted_inputs.append(item) or {**item, "command": "[REDACTED]"},
+    )
 
     response = server.handle_request(
         {"id": "r1", "method": "approval.pending", "params": {"session_id": "ui-1"}}
     )
 
-    assert response["result"] == {"approvals": pending}
+    assert redacted_inputs == pending
+    assert response["result"] == {
+        "approvals": [
+            {"request_id": "req-1", "command": "[REDACTED]"},
+            {"request_id": "req-2", "command": "[REDACTED]"},
+        ]
+    }
+    assert pending == [
+        {"request_id": "req-1", "command": "first raw command"},
+        {"request_id": "req-2", "command": "second raw command"},
+    ]
 
 
 def test_approval_received_acknowledges_exact_request(server, monkeypatch):
