@@ -2400,7 +2400,7 @@ def patch_tool(mode: str = "replace", path: str = None, old_string: str = None,
         # it accepts ``***Update File:`` with no space after the asterisks
         # (patch_parser.py uses ``\*\*\*\s*Update\s+File:``). Requiring a space
         # here let a no-space header parse + apply while skipping this check.
-        for _m in _re.finditer(r'^\*\*\*\s*(Update|Add|Delete)\s+File:\s*(.+)$', patch, _re.MULTILINE):
+        for _m in re.finditer(r'^\*\*\*\s*(Update|Add|Delete)\s+File:\s*(.+)$', patch, re.MULTILINE):
             _op = _m.group(1)
             v4a_path = _m.group(2).strip()
             _err = _reject_v4a_traversal(v4a_path)

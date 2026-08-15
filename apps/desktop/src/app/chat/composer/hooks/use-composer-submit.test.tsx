@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { $clarifyRequests } from '@/store/clarify'
 import type { ComposerAttachment } from '@/store/composer'
-import { $gateway } from '@/store/gateway'
+import { $gateway, gatewayScope, setPrimaryGateway } from '@/store/gateway'
 import {
   clearAllPrompts,
   hasBlockingPromptRequest,
@@ -198,16 +198,20 @@ describe('useComposerSubmit with a clarify parked on the session', () => {
   const gatewayRequest = vi.fn(async () => ({ ok: true }))
 
   const parkClarify = (sessionId: string) => {
+    const gateway = { connectionState: 'open', request: gatewayRequest }
+
     $clarifyRequests.set({
       [sessionId]: {
         requestId: `req-${sessionId}`,
         question: 'which one?',
         choices: ['a', 'b'],
         multiSelect: false,
+        scope: gatewayScope(null, 'default'),
         sessionId
       }
     })
-    $gateway.set({ request: gatewayRequest } as unknown as ReturnType<typeof $gateway.get>)
+    $gateway.set(gateway as never)
+    setPrimaryGateway(gateway as never, 'default')
   }
 
   afterEach(() => {
@@ -215,6 +219,7 @@ describe('useComposerSubmit with a clarify parked on the session', () => {
     gatewayRequest.mockClear()
     $clarifyRequests.set({})
     $gateway.set(null)
+    setPrimaryGateway(null)
     vi.restoreAllMocks()
   })
 
