@@ -40,6 +40,71 @@ COPILOT_EDITOR_VERSION = "vscode/1.104.1"
 COPILOT_REASONING_EFFORTS_GPT5 = ["minimal", "low", "medium", "high"]
 COPILOT_REASONING_EFFORTS_O_SERIES = ["low", "medium", "high"]
 
+# Dynamic fallback/catalog helpers used by ``fallback_chain`` and the model
+# picker.  These declarations are intentionally kept near the other catalog
+# constants: the runtime helpers below are imported broadly and must remain
+# available even when no provider credential is configured.
+_OPENCODE_LIVE_MODEL_BASE_URLS = {
+    "opencode-zen": "https://opencode.ai/zen/v1",
+    "opencode-go": "https://opencode.ai/zen/go/v1",
+}
+_OPENCODE_LIVE_CACHE_TTL = 3600
+_OPENCODE_LIVE_MODEL_CACHE: dict[str, tuple[float, list[str]]] = {}
+OPENCODE_FREE_FALLBACK_MODEL_ALIASES = frozenset({
+    "free",
+    "auto-free",
+    "current-free",
+    "opencode-free",
+    "@free",
+    "$free",
+    "*free",
+})
+OPENCODE_FREE_FALLBACK_PROVIDER_ALIASES = frozenset({
+    "opencode-free",
+    "opencode-zen-free",
+    "zen-free",
+})
+NOUS_FREE_FALLBACK_MODEL_ALIASES = frozenset({
+    "free",
+    "auto-free",
+    "current-free",
+    "nous-free",
+    "@free",
+    "$free",
+    "*free",
+})
+NOUS_FREE_FALLBACK_PROVIDER_ALIASES = frozenset({
+    "nous-free",
+})
+NVIDIA_AUTO_FALLBACK_MODEL_ALIASES = frozenset({
+    "auto",
+    "auto-rotate",
+    "rotate",
+    "any",
+})
+_NOUS_STATIC_FREE_MODELS = [
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+]
+_OPENCODE_STATIC_FREE_MODELS = [
+    "big-pickle",
+    "deepseek-v4-flash-free",
+    "qwen3.6-plus-free",
+    "minimax-m2.5-free",
+    "nemotron-3-super-free",
+    "kimi-k2.5-free",
+    "glm-5-free",
+    "minimax-m2.1-free",
+    "mimo-v2-flash-free",
+    "trinity-large-preview-free",
+    "mimo-v2-pro-free",
+    "ling-2.6-flash-free",
+    "glm-4.7-free",
+    "hy3-preview-free",
+    "ring-2.6-1t-free",
+    "mimo-v2-omni-free",
+]
+
 def _urlopen_model_catalog_request(req: urllib.request.Request, *, timeout: float, ssl_context=None):
     """Open catalog requests without forwarding headers across origins."""
     return open_credentialed_url(req, timeout=timeout, ssl_context=ssl_context)
@@ -4891,6 +4956,9 @@ def probe_api_models(
         headers.update(normalize_extra_headers(request_headers))
 
     _ssl_context = _custom_provider_ssl_context(normalized)
+    # Preserve the security helper's distinction between an unreachable
+    # allowed endpoint and a URL that was rejected before any network probe.
+    blocked_all_candidates = True
     for candidate_base, is_fallback in candidates:
         url, blocked_reason = _provider_models_probe_url(candidate_base)
         if blocked_reason:
@@ -4908,7 +4976,9 @@ def probe_api_models(
             _open_kwargs["ssl_context"] = _ssl_context
         try:
             with _urlopen_model_catalog_request(req, **_open_kwargs) as resp:
-                data = json.loads(resp.read().decode())
+                # ``json.loads`` accepts the bytes returned by urllib as well
+                # as the text responses supplied by compatible transports.
+                data = json.loads(resp.read())
                 return {
                     "models": [m.get("id", "") for m in data.get("data", [])],
                     "probed_url": url,
