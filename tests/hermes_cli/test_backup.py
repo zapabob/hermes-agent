@@ -890,7 +890,7 @@ class TestImportAtomicWrites:
         monkeypatch.setattr(
             backup_mod,
             "_collect_memory_provider_external_paths",
-            lambda **kwargs: [honcho],
+            lambda **kwargs: [dotfiles],
         )
         from hermes_cli.backup import run_import
         run_import(Namespace(zipfile=str(zip_path), force=True))
@@ -1752,5 +1752,3 @@ class TestMemoryProviderExternalPaths:
             assert (restored.stat().st_mode & 0o777) == 0o600
         # External state did NOT leak into HERMES_HOME.
         assert not (hermes_home / "_external").exists()
-
-
