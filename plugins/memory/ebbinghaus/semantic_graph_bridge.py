@@ -104,6 +104,7 @@ def _node_shape(memory: dict[str, Any]) -> tuple[str, str]:
     tags = set(_split_tags(memory.get("tags")))
     source = str(memory.get("source") or "").strip().lower()
     memory_type = str(memory.get("memory_type") or "").strip().lower()
+    # Tags-based classification (higher priority than memory_type)
     if source == "validated_insight" or {"insight", "validated"} <= tags:
         return "Claim", "memory.insight"
     if "preference" in tags:
@@ -112,14 +113,19 @@ def _node_shape(memory: dict[str, Any]) -> tuple[str, str]:
         return "Goal", "memory.goal"
     if "decision" in tags:
         return "Decision", "memory.decision"
-    if tags & {"procedure", "skill"}:
+    if "procedure" in tags or "skill" in tags:
         return "Procedure", "memory.procedure"
-    if memory_type == "semantic" and "concept" in tags:
+    if "policy" in tags or "policy-fact" in tags:
+        return "Claim", "memory.policy"
+    if "concept" in tags:
         return "Concept", "memory.concept"
+    # Memory-type fallback
     if memory_type == "episodic":
         return "Event", "memory.episodic"
     if memory_type == "semantic":
         return "Claim", "memory.semantic"
+    if memory_type == "procedural":
+        return "Procedure", "memory.procedural"
     return "Claim", "memory.fact"
 
 
