@@ -2363,6 +2363,11 @@ def _get_platform_tools(
     configurable_keys = {ts_key for ts_key, _, _ in CONFIGURABLE_TOOLSETS}
     plugin_ts_keys = _get_plugin_toolset_keys()
     platform_default_keys = {p["default_toolset"] for p in PLATFORMS.values()}
+    explicit_empty_selection = (
+        platform in platform_toolsets
+        and isinstance(platform_toolsets.get(platform), list)
+        and not toolset_names
+    )
     # Plugin-provided toolsets are first-class on a platform-toolsets list —
     # explicit config like ``[hermes-cli, a2a]`` must survive filtering just
     # like a built-in configurable toolset would. See issue #81163.
@@ -2373,7 +2378,9 @@ def _get_platform_tools(
     # This avoids the subset-inference bug where composite toolsets like
     # "hermes-cli" (which include all _HERMES_CORE_TOOLS) cause disabled
     # toolsets to re-appear as enabled.
-    has_explicit_config = any(ts in explicit_known_keys for ts in toolset_names)
+    has_explicit_config = explicit_empty_selection or any(
+        ts in explicit_known_keys for ts in toolset_names
+    )
 
     if has_explicit_config:
         enabled_toolsets = {

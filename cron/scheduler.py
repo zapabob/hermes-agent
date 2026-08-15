@@ -3277,12 +3277,16 @@ def _run_job_script(
     """
     try:
         scripts_dir = _scripts_dir_for_job(job)
+        scripts_dir_resolved = scripts_dir.resolve()
     except (OSError, ValueError) as exc:
         return False, f"Blocked: invalid cron script profile ({exc})"
-    scripts_dir_resolved = scripts_dir.resolve()
 
     try:
         raw = Path(script_path).expanduser()
+        if raw.is_absolute():
+            path = raw.resolve()
+        else:
+            path = (scripts_dir / raw).resolve()
     except (ValueError, RuntimeError, OSError):
         # Same ingestion contract as cron.lifecycle_guard: a NUL-bearing
         # value (ValueError) or an unexpandable ``~`` (RuntimeError with no
@@ -3291,10 +3295,6 @@ def _run_job_script(
         # reach fire time — fail the run with a report instead of crashing
         # the scheduler with an unhandled exception.
         return False, f"Blocked: script path is not a valid filesystem path: {script_path!r}"
-    if raw.is_absolute():
-        path = raw.resolve()
-    else:
-        path = (scripts_dir / raw).resolve()
 
     # Guard against path traversal, absolute path injection, and symlink
     # escape — scripts MUST reside within HERMES_HOME/scripts/.
@@ -3319,14 +3319,21 @@ def _run_job_script(
     # choice explicit here keeps the allowed surface small and auditable.
     suffix = path.suffix.lower()
     if suffix in {".sh", ".bash"}:
-        # Resolve bash dynamically so Windows (Git Bash) and Linux/macOS
-        # all work.  On native Windows without Git for Windows installed
-        # shutil.which returns None — fall back to a clear error rather
-        # than a FileNotFoundError with a confusing "[WinError 2]"
-        # traceback.
-        _bash = shutil.which("bash") or (
-            "/bin/bash" if os.path.isfile("/bin/bash") else None
-        )
+        # On Windows, use the terminal's shared resolver.  A PATH lookup can
+        # select the System32/WindowsApps WSL launcher, which cannot execute a
+        # native Windows script path; _find_bash deliberately skips that stub
+        # and chooses a usable Git-for-Windows bash instead.
+        if sys.platform == "win32":
+            try:
+                from tools.environments.local import _find_bash
+
+                _bash = _find_bash()
+            except (OSError, RuntimeError) as exc:
+                return False, f"Cannot run .sh/.bash script {path.name!r}: {exc}"
+        else:
+            _bash = shutil.which("bash") or (
+                "/bin/bash" if os.path.isfile("/bin/bash") else None
+            )
         if _bash is None:
             return False, (
                 f"Cannot run .sh/.bash script {path.name!r}: bash not found on PATH. "
@@ -4337,6 +4344,7 @@ def run_job(
                     job,
                     defer_agent_teardown=defer_agent_teardown,
                     extra_prompt=extra_prompt,
+                    cancel_event=cancel_event,
                 )
 
 
@@ -4345,6 +4353,7 @@ def _run_job_unscoped(
     *,
     defer_agent_teardown: Optional[list] = None,
     extra_prompt: Optional[str] = None,
+    cancel_event: Optional[_CancelEventLike] = None,
 ) -> tuple[bool, str, str, Optional[str]]:
     job_id = job["id"]
     job_name = str(job.get("name") or job.get("prompt") or job_id or "cron job")

@@ -107,6 +107,21 @@ def test_active_context_engine_tools_survive_explicit_platform_toolsets():
     }
 
 
+def test_active_context_engine_respects_explicit_empty_platform_toolsets():
+    """An explicit empty `hermes tools` selection remains a full opt-out."""
+    cfg = {
+        "context": {"engine": "stub"},
+        "platform_toolsets": {"cli": []},
+        "agent": {},
+    }
+
+    from hermes_cli.tools_config import _get_platform_tools
+
+    enabled_toolsets = _get_platform_tools(cfg, "cli", include_default_mcp_servers=False)
+
+    assert "context_engine" not in enabled_toolsets
+
+
 def test_plugin_engine_update_model_args():
     """Verify update_model() receives model, context_length, base_url, api_key, provider."""
     engine = _StubEngine()
@@ -208,5 +223,4 @@ def test_codex_gpt55_autoraise_still_applies_to_builtin_compressor():
     assert agent.context_compressor.threshold_percent == 0.85
     # Gateway parity: the notice is stashed for replay on turn 1.
     assert agent._compression_warning and "85%" in agent._compression_warning
-
 
