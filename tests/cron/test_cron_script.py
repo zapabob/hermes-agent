@@ -84,6 +84,11 @@ def test_cronjob_tool_rejects_stale_past_one_shot(cron_env, monkeypatch):
 class TestRunJobScript:
     """Test the _run_job_script() function."""
 
+    def test_script_directory_uses_the_job_execution_home(self, cron_env):
+        from cron.scheduler import _scripts_dir_for_job
+
+        assert _scripts_dir_for_job({}) == cron_env / "scripts"
+
     def test_successful_script(self, cron_env):
         from cron.scheduler import _run_job_script
 
@@ -156,20 +161,39 @@ class TestRunJobScript:
 
         captured = {}
 
-        def fake_run(argv, **kwargs):
-            captured["argv"] = argv
-            captured["kwargs"] = kwargs
-            return SimpleNamespace(returncode=0, stdout="ok\n", stderr="")
+        class FakeProc:
+            def __init__(self, argv, **kwargs):
+                captured["argv"] = argv
+                captured["kwargs"] = kwargs
+                self.returncode = 0
+
+            def poll(self):
+                return self.returncode
+
+            def communicate(self, timeout=None):
+                return ("ok\n", "")
+
+            def wait(self, timeout=None):
+                return self.returncode
+
+        fake_run = FakeProc
 
         monkeypatch.setattr(sched_mod.sys, "executable", str(venv_python))
-        monkeypatch.setattr(sched_mod.subprocess, "run", fake_run)
+        monkeypatch.setattr(sched_mod, "windows_hide_flags", lambda: 0x08000000)
+        monkeypatch.setattr(sched_mod.subprocess, "Popen", fake_run)
 
         success, output = _run_job_script("probe.py")
 
         assert success is True
         assert output == "ok"
         assert captured["argv"] == [str(base_python), str(script.resolve())]
-        assert captured["kwargs"]["creationflags"] == sched_mod.windows_hide_flags()
+        # The script runner always adds CREATE_NEW_PROCESS_GROUP on win32 so a
+        # cancel can taskkill the whole tree; on POSIX the getattr default is
+        # 0 and the flag set is exactly windows_hide_flags().
+        expected_flags = sched_mod.windows_hide_flags() | getattr(
+            sched_mod.subprocess, "CREATE_NEW_PROCESS_GROUP", 0
+        )
+        assert captured["kwargs"]["creationflags"] == expected_flags
         env = captured["kwargs"]["env"]
         assert env["VIRTUAL_ENV"] == str(venv)
         assert str(site_packages) in env["PYTHONPATH"]
@@ -185,12 +209,25 @@ class TestRunJobScript:
 
         captured = {}
 
-        def fake_run(argv, **kwargs):
-            captured["argv"] = argv
-            captured["kwargs"] = kwargs
-            return SimpleNamespace(returncode=0, stdout="ok\n", stderr="")
+        class FakeProc:
+            def __init__(self, argv, **kwargs):
+                captured["argv"] = argv
+                captured["kwargs"] = kwargs
+                self.returncode = 0
 
-        monkeypatch.setattr(sched_mod.subprocess, "run", fake_run)
+            def poll(self):
+                return self.returncode
+
+            def communicate(self, timeout=None):
+                return ("ok\n", "")
+
+            def wait(self, timeout=None):
+                return self.returncode
+
+        fake_run = FakeProc
+
+        monkeypatch.setattr(sched_mod.sys, "platform", "linux")
+        monkeypatch.setattr(sched_mod.subprocess, "Popen", fake_run)
 
         success, output = _run_job_script("probe.py")
 

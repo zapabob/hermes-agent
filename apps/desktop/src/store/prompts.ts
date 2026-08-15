@@ -1,6 +1,7 @@
 import { atom, computed, type ReadableAtom } from 'nanostores'
 
 import { $clarifyRequest, $clarifyRequests } from './clarify'
+import type { GatewayScope } from './gateway'
 import { $activeSessionId } from './session'
 
 // Blocking interactive prompts the gateway raises mid-turn. Each maps to a
@@ -19,6 +20,8 @@ const keyFor = (sessionId: string | null | undefined): string => sessionId ?? ''
 
 interface KeyedPrompt {
   sessionId: string | null
+  /** Exact backend identity that emitted this privileged prompt. */
+  scope?: GatewayScope
 }
 
 interface PromptStore<T extends KeyedPrompt> {
@@ -67,16 +70,30 @@ function keyedPromptStore<T extends KeyedPrompt>(): PromptStore<T> {
   }
 }
 
-// Approval is session-keyed on the backend (one in-flight approval per session,
-// resolved via approval.respond {choice, session_id}). It carries no request_id,
-// unlike sudo/secret which are _block()-style request/response.
+// Approval is session-keyed on the backend and correlated by `request_id` when
+// available (legacy ID-free responses remain FIFO-compatible). Resolved via
+// approval.respond {choice, request_id, session_id}.
 export interface ApprovalRequest extends KeyedPrompt {
   // false when the backend won't honor a permanent allow (tirith warning) → hide "Always allow".
   allowPermanent?: boolean
   choices?: string[]
   command: string
   description: string
+  requestId?: string
   smartDenied?: boolean
+}
+
+interface ApprovalGateway {
+  request: (method: string, params: Record<string, unknown>) => Promise<unknown>
+}
+
+interface PendingApprovalPayload {
+  allow_permanent?: boolean
+  choices?: unknown
+  command?: unknown
+  description?: unknown
+  request_id?: unknown
+  smart_denied?: boolean
 }
 
 export interface SudoRequest extends KeyedPrompt {
@@ -100,6 +117,54 @@ const $approvalInlineAnchors = atom<Record<string, number>>({})
 export const $approvalRequest = approval.$active
 export const setApprovalRequest = approval.set
 export const clearApprovalRequest = approval.clear
+
+/** Imperative lookup for native-notification actions. */
+export const approvalRequestForSession = (sessionId: string | null) => approval.$all.get()[keyFor(sessionId)] ?? null
+
+export async function receiveApprovalRequest(gateway: ApprovalGateway | null, request: ApprovalRequest): Promise<void> {
+  setApprovalRequest(request)
+
+  if (gateway && request.requestId && request.sessionId) {
+    await gateway.request('approval.received', {
+      request_id: request.requestId,
+      session_id: request.sessionId
+    })
+  }
+}
+
+export async function replayPendingApproval(
+  gateway: ApprovalGateway | null,
+  sessionId: string | null,
+  scope?: GatewayScope
+): Promise<void> {
+  if (!gateway || !sessionId) {
+    return
+  }
+
+  const rawResult = await gateway.request('approval.pending', {
+    session_id: sessionId
+  })
+
+  const result =
+    rawResult && typeof rawResult === 'object' ? (rawResult as { approvals?: PendingApprovalPayload[] }) : {}
+
+  const pending = Array.isArray(result?.approvals) ? result.approvals[0] : undefined
+
+  if (!pending || typeof pending.request_id !== 'string') {
+    return
+  }
+
+  await receiveApprovalRequest(gateway, {
+    allowPermanent: pending.allow_permanent !== false,
+    choices: Array.isArray(pending.choices) ? pending.choices.filter(choice => typeof choice === 'string') : undefined,
+    command: typeof pending.command === 'string' ? pending.command : '',
+    description: typeof pending.description === 'string' ? pending.description : 'dangerous command',
+    requestId: pending.request_id,
+    sessionId,
+    scope,
+    smartDenied: pending.smart_denied === true
+  })
+}
 
 /** The prompt request for one specific session — the tile counterpart of the
  *  active-session `$*Request` views (same map, fixed key). */

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { $gateway } from './gateway'
+import { gatewayScope, setPrimaryGateway } from './gateway'
 import {
   dispatchNativeNotification,
   dispatchPluginNativeNotification,
@@ -230,26 +230,56 @@ describe('respondToApprovalAction', () => {
 
   beforeEach(() => {
     request.mockClear()
-    $gateway.set({ request } as unknown as ReturnType<typeof $gateway.get>)
+    setPrimaryGateway({ connectionState: 'open', request } as never, 'source-profile', 'connection-a')
   })
 
   afterEach(() => {
-    $gateway.set(null)
+    setPrimaryGateway(null)
   })
 
   it('approves via approval.respond {choice: "once"} and clears the prompt', async () => {
     setActiveSessionId('bg')
-    setApprovalRequest({ command: 'rm -rf /', description: 'dangerous', sessionId: 'bg' })
+    setApprovalRequest({
+      command: 'rm -rf /',
+      description: 'dangerous',
+      requestId: 'approval-a',
+      scope: gatewayScope('connection-a', 'source-profile'),
+      sessionId: 'bg'
+    })
 
-    await respondToApprovalAction('bg', 'approve')
+    await respondToApprovalAction('bg', 'approve', {
+      connectionId: 'connection-a',
+      profile: 'source-profile',
+      requestId: 'approval-a'
+    })
 
-    expect(request).toHaveBeenCalledWith('approval.respond', { choice: 'once', session_id: 'bg' })
+    expect(request).toHaveBeenCalledWith('approval.respond', {
+      choice: 'once',
+      request_id: 'approval-a',
+      session_id: 'bg'
+    })
     expect($approvalRequest.get()).toBeNull()
   })
 
   it('rejects via approval.respond {choice: "deny"}', async () => {
-    await respondToApprovalAction('bg', 'reject')
-    expect(request).toHaveBeenCalledWith('approval.respond', { choice: 'deny', session_id: 'bg' })
+    setApprovalRequest({
+      command: 'rm -rf /',
+      description: 'dangerous',
+      requestId: 'approval-a',
+      scope: gatewayScope('connection-a', 'source-profile'),
+      sessionId: 'bg'
+    })
+
+    await respondToApprovalAction('bg', 'reject', {
+      connectionId: 'connection-a',
+      profile: 'source-profile',
+      requestId: 'approval-a'
+    })
+    expect(request).toHaveBeenCalledWith('approval.respond', {
+      choice: 'deny',
+      request_id: 'approval-a',
+      session_id: 'bg'
+    })
   })
 
   it('ignores unknown action ids', async () => {
@@ -258,8 +288,39 @@ describe('respondToApprovalAction', () => {
   })
 
   it('no-ops without a gateway', async () => {
-    $gateway.set(null)
-    await respondToApprovalAction('bg', 'approve')
+    setPrimaryGateway(null)
+    setApprovalRequest({
+      command: 'rm -rf /',
+      description: 'dangerous',
+      requestId: 'approval-a',
+      scope: gatewayScope('connection-a', 'source-profile'),
+      sessionId: 'bg'
+    })
+    await respondToApprovalAction('bg', 'approve', {
+      connectionId: 'connection-a',
+      profile: 'source-profile',
+      requestId: 'approval-a'
+    })
     expect(request).not.toHaveBeenCalled()
+  })
+
+  it('does not deliver a stale native action to a different active source', async () => {
+    const otherGateway = vi.fn().mockResolvedValue({ resolved: true })
+    setPrimaryGateway({ connectionState: 'open', request: otherGateway } as never, 'other-profile', 'connection-b')
+    setApprovalRequest({
+      command: 'rm -rf /',
+      description: 'dangerous',
+      requestId: 'approval-a',
+      scope: gatewayScope('connection-a', 'source-profile'),
+      sessionId: 'bg'
+    })
+
+    await respondToApprovalAction('bg', 'approve', {
+      connectionId: 'connection-a',
+      profile: 'source-profile',
+      requestId: 'approval-a'
+    })
+
+    expect(otherGateway).not.toHaveBeenCalled()
   })
 })

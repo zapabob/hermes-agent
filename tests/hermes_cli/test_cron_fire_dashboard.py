@@ -9,8 +9,9 @@ hosted agents don't expose). It must:
     the JWT verifier runs,
   - reject a bad/missing NAS-JWT with 401 (the JWT is the real gate),
   - 400 on missing job_id,
-  - on a valid token, resolve the job's profile and run fire_due in the
-    background, returning 202.
+  - on a valid token, FORWARD the fire to the gateway api_server (which owns
+    cron execution and the live delivery adapters) and pass its response
+    through — 503 when the gateway is unreachable so NAS retries.
 """
 
 import pytest
@@ -18,6 +19,16 @@ from starlette.testclient import TestClient
 
 from hermes_cli import web_server
 from hermes_cli.dashboard_auth.public_paths import PUBLIC_API_PATHS
+
+FIRE_AT = "2026-08-16T12:00:00+00:00"
+
+
+def _bound_claims(job_id: str) -> dict[str, str]:
+    return {
+        "purpose": "cron_fire",
+        "cron_job_id": job_id,
+        "cron_fire_at": FIRE_AT,
+    }
 
 
 def _client(auth_required: bool):
@@ -67,7 +78,7 @@ def test_bad_token_401(monkeypatch):
     try:
         resp = client.post("/api/cron/fire",
                            headers={"Authorization": "Bearer forged"},
-                           json={"job_id": "abc"})
+                           json={"job_id": "abc", "fire_at": FIRE_AT})
         assert resp.status_code == 401
         assert fired == []
     finally:
@@ -78,7 +89,7 @@ def test_bad_token_401(monkeypatch):
 def test_missing_job_id_400(monkeypatch):
     monkeypatch.setattr(
         "plugins.cron_providers.chronos.verify.get_fire_verifier",
-        lambda: (lambda **kw: {"purpose": "cron_fire"}),
+        lambda: (lambda **kw: _bound_claims("ghost")),
     )
     client, pa, ph = _client(auth_required=False)
     try:
@@ -96,14 +107,14 @@ def test_unknown_job_200_gone(monkeypatch):
     (NAS shouldn't retry a fire for a cancelled/completed job)."""
     monkeypatch.setattr(
         "plugins.cron_providers.chronos.verify.get_fire_verifier",
-        lambda: (lambda **kw: {"purpose": "cron_fire"}),
+        lambda: (lambda **kw: _bound_claims("ghost")),
     )
     monkeypatch.setattr(web_server, "_find_cron_job_profile", lambda jid: None)
     client, pa, ph = _client(auth_required=False)
     try:
         resp = client.post("/api/cron/fire",
                            headers={"Authorization": "Bearer good"},
-                           json={"job_id": "ghost"})
+                           json={"job_id": "ghost", "fire_at": FIRE_AT})
         assert resp.status_code == 200
         assert resp.json().get("status") == "gone"
     finally:
@@ -119,13 +130,13 @@ def test_valid_fire_forwards_to_gateway(monkeypatch):
     forwarded = []
     executed = []
 
-    async def fake_forward(profile, job_id, authorization):
-        forwarded.append((profile, job_id, authorization))
+    async def fake_forward(profile, job_id, fire_at, authorization):
+        forwarded.append((profile, job_id, fire_at, authorization))
         return 202, {"status": "accepted", "job_id": job_id}
 
     monkeypatch.setattr(
         "plugins.cron_providers.chronos.verify.get_fire_verifier",
-        lambda: (lambda **kw: {"purpose": "cron_fire"}),
+        lambda: (lambda **kw: _bound_claims("j1")),
     )
     monkeypatch.setattr(web_server, "_find_cron_job_profile", lambda jid: "default")
     monkeypatch.setattr(web_server, "_forward_cron_fire_to_gateway", fake_forward)
@@ -136,10 +147,10 @@ def test_valid_fire_forwards_to_gateway(monkeypatch):
     try:
         resp = client.post("/api/cron/fire",
                            headers={"Authorization": "Bearer nas-jwt"},
-                           json={"job_id": "j1"})
+                           json={"job_id": "j1", "fire_at": FIRE_AT})
         assert resp.status_code == 202
         assert resp.json().get("status") == "accepted"
-        assert forwarded == [("default", "j1", "Bearer nas-jwt")]
+        assert forwarded == [("default", "j1", FIRE_AT, "Bearer nas-jwt")]
         assert executed == []  # no local execution — gateway owns cron
     finally:
         _restore(pa, ph)
@@ -153,12 +164,12 @@ def test_gateway_unreachable_503_for_nas_retry(monkeypatch):
     relay-fronted or E2EE targets."""
     executed = []
 
-    async def fake_forward(profile, job_id, authorization):
+    async def fake_forward(profile, job_id, fire_at, authorization):
         return None  # unreachable
 
     monkeypatch.setattr(
         "plugins.cron_providers.chronos.verify.get_fire_verifier",
-        lambda: (lambda **kw: {"purpose": "cron_fire"}),
+        lambda: (lambda **kw: _bound_claims("j2")),
     )
     monkeypatch.setattr(web_server, "_find_cron_job_profile", lambda jid: "default")
     monkeypatch.setattr(web_server, "_forward_cron_fire_to_gateway", fake_forward)
@@ -169,7 +180,7 @@ def test_gateway_unreachable_503_for_nas_retry(monkeypatch):
     try:
         resp = client.post("/api/cron/fire",
                            headers={"Authorization": "Bearer nas-jwt"},
-                           json={"job_id": "j2"})
+                           json={"job_id": "j2", "fire_at": FIRE_AT})
         assert resp.status_code == 503
         assert executed == []
     finally:
@@ -181,12 +192,12 @@ def test_gateway_error_status_passes_through(monkeypatch):
     """A non-2xx gateway response (e.g. its own 401 on a replayed JWT) passes
     through unchanged — the dashboard adds no interpretation of its own."""
 
-    async def fake_forward(profile, job_id, authorization):
+    async def fake_forward(profile, job_id, fire_at, authorization):
         return 401, {"error": "invalid fire token"}
 
     monkeypatch.setattr(
         "plugins.cron_providers.chronos.verify.get_fire_verifier",
-        lambda: (lambda **kw: {"purpose": "cron_fire"}),
+        lambda: (lambda **kw: _bound_claims("j3")),
     )
     monkeypatch.setattr(web_server, "_find_cron_job_profile", lambda jid: "default")
     monkeypatch.setattr(web_server, "_forward_cron_fire_to_gateway", fake_forward)
@@ -195,8 +206,35 @@ def test_gateway_error_status_passes_through(monkeypatch):
     try:
         resp = client.post("/api/cron/fire",
                            headers={"Authorization": "Bearer nas-jwt"},
-                           json={"job_id": "j3"})
+                           json={"job_id": "j3", "fire_at": FIRE_AT})
         assert resp.status_code == 401
+    finally:
+        _restore(pa, ph)
+        client.close()
+
+
+def test_signed_job_or_time_substitution_is_rejected_before_forward(monkeypatch):
+    forwarded = []
+
+    async def fake_forward(*args):
+        forwarded.append(args)
+        return 202, {"status": "accepted"}
+
+    monkeypatch.setattr(
+        "plugins.cron_providers.chronos.verify.get_fire_verifier",
+        lambda: (lambda **kw: _bound_claims("signed-job")),
+    )
+    monkeypatch.setattr(web_server, "_find_cron_job_profile", lambda jid: "default")
+    monkeypatch.setattr(web_server, "_forward_cron_fire_to_gateway", fake_forward)
+    client, pa, ph = _client(auth_required=False)
+    try:
+        response = client.post(
+            "/api/cron/fire",
+            headers={"Authorization": "Bearer nas-jwt"},
+            json={"job_id": "other-job", "fire_at": FIRE_AT},
+        )
+        assert response.status_code == 401
+        assert forwarded == []
     finally:
         _restore(pa, ph)
         client.close()
@@ -247,5 +285,3 @@ def test_fire_endpoint_multiplex_profile_prefix(tmp_path, monkeypatch):
     monkeypatch.setattr(web_server, "load_config", lambda: {})
     url = web_server._gateway_fire_endpoint("worker_alpha", tmp_path)
     assert url == "http://127.0.0.1:8642/p/worker_alpha/api/cron/fire"
-
-

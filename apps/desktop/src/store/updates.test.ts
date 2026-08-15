@@ -125,17 +125,13 @@ describe('maybeNotifyUpdateAvailable', () => {
     expect(notifySpy).not.toHaveBeenCalled()
   })
 
-  it('stays quiet after dismissUpdateReminder (overlay「後で」)', () => {
-    maybeNotifyUpdateAvailable(status())
+  // FAIL-BEFORE: a shallow installer clone reports behind:null + updateAvailable
+  // (exact count unknowable without a merge-base). The guard treated null as 0
+  // and silently swallowed the notification entirely.
+  it('still notifies with generic copy when the exact behind count is unknown', () => {
+    maybeNotifyUpdateAvailable(status({ behind: null, updateAvailable: true }))
     expect(notifySpy).toHaveBeenCalledTimes(1)
-    notifySpy.mockClear()
-    dismissSpy.mockClear()
-
-    dismissUpdateReminder()
-    expect(dismissSpy).toHaveBeenCalledWith('desktop-update-available')
-
-    maybeNotifyUpdateAvailable(status({ targetSha: 'sha-b', behind: 9 }))
-    expect(notifySpy).not.toHaveBeenCalled()
+    expect(notifySpy.mock.calls[0]?.[0]).toMatchObject({ message: 'A new update is available.' })
   })
 })
 

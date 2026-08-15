@@ -13,6 +13,8 @@ from agent.models_dev import (
     _explicit_model_override,
     _override_context_window,
     _override_for,
+    _NotModified,
+    _validate_registry,
     fetch_models_dev,
     get_model_capabilities,
     get_model_info,
@@ -161,6 +163,15 @@ class TestFetchModelsDev:
         md._models_dev_retry_after = 0
         md._models_dev_refresh_in_flight = False
 
+    def _mock_response(self, data, etag="", status_code=200):
+        """Build a MagicMock response with optional ETag header."""
+        resp = MagicMock()
+        resp.status_code = status_code
+        resp.json.return_value = data
+        resp.headers = {"ETag": etag} if etag else {}
+        resp.raise_for_status = MagicMock()
+        return resp
+
 
 
 
@@ -176,6 +187,7 @@ class TestFetchModelsDev:
         with patch.object(md, "_disk_cache_age_seconds",
                           return_value=md._MODELS_DEV_CACHE_TTL + 60), \
              patch.object(md, "_load_disk_cache", return_value=SAMPLE_REGISTRY), \
+             patch.object(md, "_load_etag", return_value=""), \
              patch.object(md, "_start_background_refresh_models_dev") as mock_refresh:
             result = fetch_models_dev()
 
@@ -197,7 +209,8 @@ class TestFetchModelsDev:
             md,
             "_disk_cache_age_seconds",
             return_value=md._MODELS_DEV_CACHE_TTL + 60,
-        ), patch.object(md, "_load_disk_cache", return_value=SAMPLE_REGISTRY):
+        ), patch.object(md, "_load_disk_cache", return_value=SAMPLE_REGISTRY), \
+           patch.object(md, "_load_etag", return_value=""):
             first = fetch_models_dev()
             # Join the background refresh worker so its failure backoff is
             # observable and requests.get stays patched for its lifetime.
@@ -225,20 +238,24 @@ class TestFetchModelsDev:
         """The bg worker must save disk + swap mem cache + clear backoff."""
         import agent.models_dev as md
 
-        response = MagicMock()
-        response.json.return_value = SAMPLE_REGISTRY
+        response = self._mock_response(SAMPLE_REGISTRY, etag='"abc123"')
         mock_get.return_value = response
 
         md._models_dev_cache = {"stale": {}}
         md._models_dev_cache_time = 0
         md._models_dev_retry_after = time.time() - 1
 
-        with patch.object(md, "_save_disk_cache") as mock_save:
+        with patch.object(md, "_save_disk_cache") as mock_save, \
+             patch.object(md, "_load_etag", return_value=""), \
+             patch.object(md, "_save_etag") as mock_save_etag:
             # Run the worker synchronously — deterministic, no thread.
             md._models_dev_refresh_in_flight = True
             md._background_refresh_models_dev()
 
-        mock_save.assert_called_once_with(SAMPLE_REGISTRY)
+        # ETag is committed together with the cache body so the sidecar
+        # can never get ahead of the data it vouches for.
+        mock_save.assert_called_once_with(SAMPLE_REGISTRY, '"abc123"')
+        mock_save_etag.assert_not_called()
         assert md._models_dev_cache == SAMPLE_REGISTRY
         assert md._models_dev_cache_time > 0
         assert md._models_dev_retry_after == 0
@@ -251,8 +268,7 @@ class TestFetchModelsDev:
 
         request_started = threading.Event()
         release_request = threading.Event()
-        response = MagicMock()
-        response.json.return_value = SAMPLE_REGISTRY
+        response = self._mock_response(SAMPLE_REGISTRY)
 
         def blocking_get(*_args, **_kwargs):
             request_started.set()
@@ -262,7 +278,9 @@ class TestFetchModelsDev:
         mock_get.side_effect = blocking_get
         with patch.object(md, "_disk_cache_age_seconds", return_value=None), patch.object(
             md, "_save_disk_cache"
-        ), ThreadPoolExecutor(max_workers=6) as pool:
+        ), patch.object(md, "_load_etag", return_value=""), \
+             patch.object(md, "_save_etag"), \
+             ThreadPoolExecutor(max_workers=6) as pool:
             futures = [pool.submit(fetch_models_dev) for _ in range(6)]
             assert request_started.wait(timeout=2)
             release_request.set()
@@ -275,13 +293,14 @@ class TestFetchModelsDev:
     def test_force_refresh_bypasses_failure_backoff(self, mock_get):
         import agent.models_dev as md
 
-        response = MagicMock()
-        response.json.return_value = SAMPLE_REGISTRY
+        response = self._mock_response(SAMPLE_REGISTRY)
         mock_get.side_effect = [OSError("models.dev unreachable"), response]
 
         with patch.object(md, "_disk_cache_age_seconds", return_value=None), patch.object(
             md, "_load_disk_cache", return_value={}
-        ), patch.object(md, "_save_disk_cache"):
+        ), patch.object(md, "_save_disk_cache"), \
+             patch.object(md, "_load_etag", return_value=""), \
+             patch.object(md, "_save_etag"):
             assert fetch_models_dev() == {}
             assert fetch_models_dev(force_refresh=True) == SAMPLE_REGISTRY
 
@@ -320,6 +339,417 @@ class TestFetchModelsDev:
 
 
 
+
+
+# ---------------------------------------------------------------------------
+# ETag conditional GET
+# ---------------------------------------------------------------------------
+
+
+class TestETagConditionalGet:
+    """Tests for ETag-based conditional GET (If-None-Match / 304 handling)."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_fetch_state(self):
+        import agent.models_dev as md
+        md._models_dev_cache = {}
+        md._models_dev_cache_time = 0
+        md._models_dev_retry_after = 0
+        md._models_dev_refresh_in_flight = False
+        yield
+        md._models_dev_cache = {}
+        md._models_dev_cache_time = 0
+        md._models_dev_retry_after = 0
+        md._models_dev_refresh_in_flight = False
+
+    @patch("agent.models_dev.requests.get")
+    def test_etag_sent_when_cached(self, mock_get):
+        """If-None-Match header is sent when a cached ETag exists."""
+        import agent.models_dev as md
+
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = SAMPLE_REGISTRY
+        response.headers = {"ETag": '"v2"'}
+        response.raise_for_status = MagicMock()
+        mock_get.return_value = response
+
+        # Conditional GET requires a servable in-memory registry — an
+        # If-None-Match without one invites a 304 against nothing.
+        md._models_dev_cache = SAMPLE_REGISTRY
+        md._models_dev_cache_time = 0
+
+        with patch.object(md, "_disk_cache_age_seconds", return_value=None), \
+             patch.object(md, "_load_disk_cache", return_value={}), \
+             patch.object(md, "_save_disk_cache"), \
+             patch.object(md, "_load_etag", return_value='"v1"'), \
+             patch.object(md, "_save_etag"):
+            fetch_models_dev(force_refresh=True)
+
+        call_kwargs = mock_get.call_args
+        headers = call_kwargs.kwargs.get("headers", {})
+        assert headers.get("If-None-Match") == '"v1"'
+
+    @patch("agent.models_dev.requests.get")
+    def test_304_reconfirms_cache_freshness(self, mock_get):
+        """A 304 Not Modified re-confirms the existing cache without download."""
+        import agent.models_dev as md
+
+        response = MagicMock()
+        response.status_code = 304
+        mock_get.return_value = response
+
+        md._models_dev_cache = SAMPLE_REGISTRY
+        md._models_dev_cache_time = 0
+        md._models_dev_retry_after = time.time() + 100  # backoff was armed
+
+        with patch.object(md, "_load_etag", return_value='"v1"'), \
+             patch.object(md, "_save_etag"):
+            # Run the background worker synchronously
+            md._models_dev_refresh_in_flight = True
+            md._background_refresh_models_dev()
+
+        # Cache content unchanged
+        assert md._models_dev_cache == SAMPLE_REGISTRY
+        # Freshness timestamp advanced
+        assert md._models_dev_cache_time > 0
+        # Backoff cleared
+        assert md._models_dev_retry_after == 0
+        assert not md._models_dev_refresh_in_flight
+        # response.json() was never called — no body to parse
+        response.json.assert_not_called()
+
+    @patch("agent.models_dev.requests.get")
+    def test_foreground_304_returns_existing_cache(self, mock_get):
+        """Foreground fetch with 304 returns the existing cache."""
+        import agent.models_dev as md
+
+        response = MagicMock()
+        response.status_code = 304
+        mock_get.return_value = response
+
+        md._models_dev_cache = SAMPLE_REGISTRY
+        md._models_dev_cache_time = 0
+        md._models_dev_retry_after = 0
+
+        with patch.object(md, "_disk_cache_age_seconds", return_value=None), \
+             patch.object(md, "_load_disk_cache", return_value={}), \
+             patch.object(md, "_load_etag", return_value='"v1"'), \
+             patch.object(md, "_save_etag"):
+            result = fetch_models_dev(force_refresh=True)
+
+        assert result == SAMPLE_REGISTRY
+        assert md._models_dev_cache_time > 0
+
+    @patch("agent.models_dev.requests.get")
+    def test_new_etag_persisted_after_successful_fetch(self, mock_get):
+        """A successful fetch with an ETag in the response persists it."""
+        import agent.models_dev as md
+
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = SAMPLE_REGISTRY
+        response.headers = {"ETag": '"new-etag"'}
+        response.raise_for_status = MagicMock()
+        mock_get.return_value = response
+
+        with patch.object(md, "_disk_cache_age_seconds", return_value=None), \
+             patch.object(md, "_load_disk_cache", return_value={}), \
+             patch.object(md, "_save_disk_cache") as mock_save, \
+             patch.object(md, "_load_etag", return_value=""), \
+             patch.object(md, "_save_etag") as mock_save_etag:
+            fetch_models_dev()
+
+        # ETag rides along with the cache body into _save_disk_cache.
+        mock_save.assert_called_once_with(SAMPLE_REGISTRY, '"new-etag"')
+        mock_save_etag.assert_not_called()
+
+    @patch("agent.models_dev.requests.get")
+    def test_no_etag_header_sent_without_cached_etag(self, mock_get):
+        """No If-None-Match header when no cached ETag exists."""
+        import agent.models_dev as md
+
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = SAMPLE_REGISTRY
+        response.headers = {}
+        response.raise_for_status = MagicMock()
+        mock_get.return_value = response
+
+        with patch.object(md, "_disk_cache_age_seconds", return_value=None), \
+             patch.object(md, "_load_disk_cache", return_value={}), \
+             patch.object(md, "_save_disk_cache"), \
+             patch.object(md, "_load_etag", return_value=""), \
+             patch.object(md, "_save_etag"):
+            fetch_models_dev()
+
+        call_kwargs = mock_get.call_args
+        headers = call_kwargs.kwargs.get("headers", {})
+        assert "If-None-Match" not in headers
+
+
+# ---------------------------------------------------------------------------
+# Corrupt / invalid cache rejection
+# ---------------------------------------------------------------------------
+
+
+class TestCorruptCacheRejection:
+    """A corrupt or empty disk cache must be rejected, not served as {}."""
+
+    def test_validate_registry_rejects_empty_dict(self):
+        assert not _validate_registry({})
+
+    def test_validate_registry_rejects_non_dict(self):
+        assert not _validate_registry("not a dict")
+        assert not _validate_registry(None)
+        assert not _validate_registry([])
+
+    def test_validate_registry_accepts_populated_dict(self):
+        assert _validate_registry({"anthropic": {}})
+
+    def test_corrupt_json_on_disk_rejected_with_warning(self, tmp_path, caplog):
+        """Invalid JSON in a REAL cache file is rejected with a warning."""
+        import logging
+
+        import agent.models_dev as md
+
+        cache = tmp_path / "models_dev_cache.json"
+        cache.write_text("not json{{{", encoding="utf-8")
+        with patch.object(md, "_get_cache_path", return_value=cache), \
+             patch.object(md, "_get_etag_path", return_value=tmp_path / "models_dev_cache.etag"):
+            with caplog.at_level(logging.WARNING):
+                result = md._load_disk_cache()
+
+        assert result == {}
+        assert any("disk cache" in r.message for r in caplog.records)
+
+    def test_empty_dict_on_disk_rejected_with_warning(self, tmp_path, caplog):
+        """A REAL cache file containing {} is rejected with a warning."""
+        import logging
+
+        import agent.models_dev as md
+
+        cache = tmp_path / "models_dev_cache.json"
+        cache.write_text("{}", encoding="utf-8")
+        with patch.object(md, "_get_cache_path", return_value=cache), \
+             patch.object(md, "_get_etag_path", return_value=tmp_path / "models_dev_cache.etag"):
+            with caplog.at_level(logging.WARNING):
+                result = md._load_disk_cache()
+
+        assert result == {}
+        assert any("corrupt or empty" in r.message for r in caplog.records)
+
+    def test_corrupt_cache_clears_etag_sidecar(self, tmp_path):
+        """Rejecting a corrupt cache must drop the ETag sidecar (#35838 loop).
+
+        If the sidecar outlives the registry it vouches for, the next
+        conditional GET draws a 304 against nothing and the process serves
+        {} forever. Clearing the sidecar forces an unconditional refetch.
+        """
+        import agent.models_dev as md
+
+        cache = tmp_path / "models_dev_cache.json"
+        etag = tmp_path / "models_dev_cache.etag"
+        cache.write_text("corrupt!!", encoding="utf-8")
+        etag.write_text("stale-etag", encoding="utf-8")
+
+        with patch.object(md, "_get_cache_path", return_value=cache), \
+             patch.object(md, "_get_etag_path", return_value=etag):
+            result = md._load_disk_cache()
+
+        assert result == {}
+        assert not etag.exists()
+        # The corrupt file is quarantined (renamed), so the rejection is
+        # a one-time event instead of a re-parse + warning per call.
+        assert not cache.exists()
+        assert cache.with_suffix(".json.corrupt").exists()
+
+    def test_conditional_get_skipped_without_servable_cache(self):
+        """No If-None-Match header when the process holds no registry.
+
+        A conditional GET without a servable cache invites a 304 that
+        leaves the process with no data at all — the permanent
+        empty-registry loop. The header is only sent when _models_dev_cache
+        is populated.
+        """
+        import agent.models_dev as md
+
+        captured: dict = {}
+
+        def fake_get(url, headers=None, timeout=None):
+            captured["headers"] = dict(headers or {})
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = {"anthropic": {"models": {}}}
+            resp.headers = {"ETag": "fresh"}
+            return resp
+
+        with patch.object(md.requests, "get", side_effect=fake_get), \
+             patch.object(md, "_load_etag", return_value="stale-etag"), \
+             patch.object(md, "_models_dev_cache", {}):
+            data, etag = md._fetch_models_dev_from_network()
+
+        assert "If-None-Match" not in captured["headers"]
+        assert data == {"anthropic": {"models": {}}}
+        assert etag == "fresh"
+
+    def test_304_with_empty_cache_arms_backoff_and_clears_etag(self, tmp_path):
+        """Defense in depth: a 304 landing on an empty registry must not
+        mark {} as fresh — it clears the sidecar and arms the backoff."""
+        import agent.models_dev as md
+
+        etag = tmp_path / "models_dev_cache.etag"
+        etag.write_text("stale", encoding="utf-8")
+
+        with patch.object(md, "_get_etag_path", return_value=etag), \
+             patch.object(md, "_models_dev_cache", {}):
+            before = md._models_dev_retry_after
+            try:
+                md._confirm_cache_not_modified(where="test")
+                assert not etag.exists()
+                assert md._models_dev_retry_after > time.time() - 1
+            finally:
+                md._models_dev_retry_after = before
+
+
+# ---------------------------------------------------------------------------
+# Mirror URL override via config
+# ---------------------------------------------------------------------------
+
+
+class TestMirrorUrlOverride:
+    """models_dev.url config key overrides the API endpoint."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_fetch_state(self):
+        import agent.models_dev as md
+        md._models_dev_cache = {}
+        md._models_dev_cache_time = 0
+        md._models_dev_retry_after = 0
+        md._models_dev_refresh_in_flight = False
+        yield
+        md._models_dev_cache = {}
+        md._models_dev_cache_time = 0
+        md._models_dev_retry_after = 0
+        md._models_dev_refresh_in_flight = False
+
+    @patch("agent.models_dev.requests.get")
+    def test_mirror_url_used_when_configured(self, mock_get):
+        """When config has models_dev.url, requests.get hits that URL."""
+        import agent.models_dev as md
+
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = SAMPLE_REGISTRY
+        response.headers = {}
+        response.raise_for_status = MagicMock()
+        mock_get.return_value = response
+
+        fake_config = {"models_dev": {"url": "https://mirror.example.com/api.json"}}
+
+        with patch.object(md, "_disk_cache_age_seconds", return_value=None), \
+             patch.object(md, "_load_disk_cache", return_value={}), \
+             patch.object(md, "_save_disk_cache"), \
+             patch.object(md, "_load_etag", return_value=""), \
+             patch.object(md, "_save_etag"), \
+             patch("hermes_cli.config.load_config_readonly", return_value=fake_config):
+            fetch_models_dev()
+
+        call_args = mock_get.call_args
+        assert "mirror.example.com" in call_args.args[0]
+
+    @patch("agent.models_dev.requests.get")
+    def test_default_url_used_when_not_configured(self, mock_get):
+        """Without config override, the default models.dev URL is used."""
+        import agent.models_dev as md
+
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = SAMPLE_REGISTRY
+        response.headers = {}
+        response.raise_for_status = MagicMock()
+        mock_get.return_value = response
+
+        with patch.object(md, "_disk_cache_age_seconds", return_value=None), \
+             patch.object(md, "_load_disk_cache", return_value={}), \
+             patch.object(md, "_save_disk_cache"), \
+             patch.object(md, "_load_etag", return_value=""), \
+             patch.object(md, "_save_etag"), \
+             patch("hermes_cli.config.load_config_readonly", return_value={}):
+            fetch_models_dev()
+
+        call_args = mock_get.call_args
+        assert "models.dev" in call_args.args[0]
+
+    @patch("agent.models_dev.requests.get")
+    def test_empty_url_falls_back_to_default(self, mock_get):
+        """An empty string URL in config falls back to the default."""
+        import agent.models_dev as md
+
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = SAMPLE_REGISTRY
+        response.headers = {}
+        response.raise_for_status = MagicMock()
+        mock_get.return_value = response
+
+        fake_config = {"models_dev": {"url": ""}}
+
+        with patch.object(md, "_disk_cache_age_seconds", return_value=None), \
+             patch.object(md, "_load_disk_cache", return_value={}), \
+             patch.object(md, "_save_disk_cache"), \
+             patch.object(md, "_load_etag", return_value=""), \
+             patch.object(md, "_save_etag"), \
+             patch("hermes_cli.config.load_config_readonly", return_value=fake_config):
+            fetch_models_dev()
+
+        call_args = mock_get.call_args
+        assert "models.dev" in call_args.args[0]
+
+
+# ---------------------------------------------------------------------------
+# No-network-on-hot-paths invariant
+# ---------------------------------------------------------------------------
+
+
+class TestNoNetworkOnHotPaths:
+    """Query functions must default to allow_network=False on hot paths."""
+
+    @patch("agent.models_dev.requests.get")
+    def test_get_model_capabilities_default_no_network(self, mock_get):
+        """get_model_capabilities defaults to allow_network=False."""
+        with patch("agent.models_dev.fetch_models_dev") as mock_fetch:
+            mock_fetch.return_value = CAPS_REGISTRY
+            get_model_capabilities("anthropic", "claude-sonnet-4")
+        # fetch_models_dev was called with allow_network=False
+        mock_fetch.assert_called_once_with(allow_network=False)
+
+    @patch("agent.models_dev.requests.get")
+    def test_get_model_info_default_no_network(self, mock_get):
+        """get_model_info defaults to allow_network=False."""
+        with patch("agent.models_dev.fetch_models_dev") as mock_fetch:
+            mock_fetch.return_value = SAMPLE_REGISTRY
+            get_model_info("anthropic", "claude-opus-4-6")
+        mock_fetch.assert_called_once_with(allow_network=False)
+
+    @patch("agent.models_dev.requests.get")
+    def test_lookup_models_dev_context_default_no_network(self, mock_get):
+        """lookup_models_dev_context defaults to allow_network=False."""
+        with patch("agent.models_dev.fetch_models_dev") as mock_fetch:
+            mock_fetch.return_value = SAMPLE_REGISTRY
+            lookup_models_dev_context("anthropic", "claude-opus-4-6")
+        mock_fetch.assert_called_once_with(allow_network=False)
+
+    @patch("agent.models_dev.requests.get")
+    def test_get_model_capabilities_explicit_network(self, mock_get):
+        """get_model_capabilities can opt into network."""
+        with patch("agent.models_dev.fetch_models_dev") as mock_fetch:
+            mock_fetch.return_value = CAPS_REGISTRY
+            get_model_capabilities("anthropic", "claude-sonnet-4", allow_network=True)
+        # allow_network=True uses the zero-arg call shape so the dozens of
+        # test sites that monkeypatch fetch_models_dev with zero-arg
+        # lambdas keep working.
+        mock_fetch.assert_called_once_with()
 
 
 # ---------------------------------------------------------------------------

@@ -2,9 +2,9 @@ import { atom } from 'nanostores'
 
 import { persistString, storedString } from '@/lib/storage'
 
-import { $gateway } from './gateway'
+import { gatewayForScope } from './gateway'
 import { withinNativeNotifyBaseline } from './notify-baseline'
-import { clearApprovalRequest } from './prompts'
+import { approvalRequestForSession, clearApprovalRequest } from './prompts'
 import { $activeSessionId } from './session'
 
 // Native OS notifications (Electron `Notification`), separate from the in-app
@@ -154,6 +154,10 @@ export interface NativeNotificationInput {
   title: string
   body?: string
   sessionId?: null | string
+  /** Exact source carried through native action IPC for approval replies. */
+  connectionId?: string
+  profile?: string
+  requestId?: string
   /**
    * Not tied to a chat session (e.g. pet generation). Fires whenever the user
    * is away, bypassing the session-match gate that completion kinds normally
@@ -185,14 +189,22 @@ export function dispatchNativeNotification(input: NativeNotificationInput): void
     return
   }
 
-  if (throttled(`${input.kind}:${input.sessionId ?? input.tag ?? (input.global ? 'global' : '')}`, Date.now())) {
+  if (
+    throttled(
+      `${input.kind}:${input.connectionId ?? ''}:${input.profile ?? ''}:${input.sessionId ?? input.tag ?? (input.global ? 'global' : '')}`,
+      Date.now()
+    )
+  ) {
     return
   }
 
   void window.hermesDesktop?.notify({
     actions: input.actions,
     body: input.body,
+    connectionId: input.connectionId,
     kind: input.kind,
+    profile: input.profile,
+    requestId: input.requestId,
     sessionId: input.sessionId ?? undefined,
     silent: input.silent,
     tag: input.tag,
@@ -219,22 +231,42 @@ export function dispatchPluginNativeNotification(pluginId: string, input: Plugin
 
 // Resolve a pending approval from a notification button, mirroring the in-app
 // Run/Reject bar. Keyed by session id — a background approval has no local guard.
-export async function respondToApprovalAction(sessionId: null | string, actionId: string): Promise<void> {
+export async function respondToApprovalAction(
+  sessionId: null | string,
+  actionId: string,
+  source?: { connectionId?: string; profile?: string; requestId?: string }
+): Promise<void> {
   const choice = actionId === 'approve' ? 'once' : actionId === 'reject' ? 'deny' : null
 
-  if (!choice) {
+  if (!choice || !source?.requestId || !source.profile) {
     return
   }
 
-  const gateway = $gateway.get()
+  const request = approvalRequestForSession(sessionId)
+
+  if (!request?.scope || request.requestId !== source.requestId) {
+    return
+  }
+
+  const sourceConnectionId = source.connectionId?.trim() || null
+
+  if (sourceConnectionId !== request.scope.connectionId || source.profile !== request.scope.profile) {
+    return
+  }
+
+  const gateway = gatewayForScope(request.scope)
 
   if (!gateway) {
     return
   }
 
   try {
-    await gateway.request('approval.respond', { choice, session_id: sessionId ?? undefined })
-    clearApprovalRequest(sessionId)
+    await gateway.request('approval.respond', {
+      choice,
+      request_id: request.requestId,
+      session_id: sessionId ?? undefined
+    })
+    clearApprovalRequest(sessionId, request.requestId)
   } catch {
     // Leave the prompt parked so the user can still resolve it in-app.
   }

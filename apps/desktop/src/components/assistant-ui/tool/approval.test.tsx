@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import type { HermesGateway } from '@/hermes'
-import { $gateway } from '@/store/gateway'
+import { $gateway, gatewayScope, setPrimaryGateway } from '@/store/gateway'
 import { $approvalRequest, clearAllPrompts, setApprovalRequest } from '@/store/prompts'
 import { $activeSessionId } from '@/store/session'
 
@@ -36,12 +36,22 @@ function setRequest(
   extra: { choices?: string[]; smartDenied?: boolean } = {}
 ) {
   $activeSessionId.set('sess-1')
-  setApprovalRequest({ allowPermanent, command, description: 'dangerous command', sessionId: 'sess-1', ...extra })
+  setApprovalRequest({
+    allowPermanent,
+    command,
+    description: 'dangerous command',
+    scope: gatewayScope(null, 'default'),
+    sessionId: 'sess-1',
+    ...extra
+  })
 }
 
 function mockGateway() {
   const request = vi.fn().mockResolvedValue({ resolved: true })
-  $gateway.set({ request } as unknown as HermesGateway)
+  const gateway = { connectionState: 'open', request } as unknown as HermesGateway
+
+  $gateway.set(gateway)
+  setPrimaryGateway(gateway, 'default')
 
   return request
 }
@@ -51,6 +61,7 @@ afterEach(() => {
   clearAllPrompts()
   $activeSessionId.set(null)
   $gateway.set(null)
+  setPrimaryGateway(null)
 })
 
 describe('PendingToolApproval', () => {

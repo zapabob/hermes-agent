@@ -10,7 +10,7 @@ import {
   setClarifyRequest,
   skipClarifyRequest
 } from './clarify'
-import { $gateway } from './gateway'
+import { gatewayScope, setPrimaryGateway } from './gateway'
 import { $activeSessionId } from './session'
 
 function clarify(sessionId: string | null, requestId: string): ClarifyRequest {
@@ -18,6 +18,7 @@ function clarify(sessionId: string | null, requestId: string): ClarifyRequest {
     requestId,
     question: `question-${requestId}`,
     choices: null,
+    multiSelect: false,
     sessionId
   }
 }
@@ -90,16 +91,16 @@ describe('skipClarifyRequest', () => {
   beforeEach(() => {
     $clarifyRequests.set({})
     request.mockClear()
-    $gateway.set({ request } as unknown as ReturnType<typeof $gateway.get>)
+    setPrimaryGateway({ connectionState: 'open', request } as never, 'default')
   })
 
   afterEach(() => {
     $clarifyRequests.set({})
-    $gateway.set(null)
+    setPrimaryGateway(null)
   })
 
   it('answers the session\u2019s clarify with an empty answer and drops it', async () => {
-    setClarifyRequest(clarify('session-a', 'req-a'))
+    setClarifyRequest({ ...clarify('session-a', 'req-a'), scope: gatewayScope(null, 'default') })
     setClarifyRequest(clarify('session-b', 'req-b'))
 
     await expect(skipClarifyRequest('session-a')).resolves.toBe(true)
@@ -117,11 +118,21 @@ describe('skipClarifyRequest', () => {
   })
 
   it('still reports the skip when the respond RPC fails', async () => {
-    setClarifyRequest(clarify('session-a', 'req-a'))
+    setClarifyRequest({ ...clarify('session-a', 'req-a'), scope: gatewayScope(null, 'default') })
     request.mockRejectedValueOnce(new Error('socket closed'))
 
     await expect(skipClarifyRequest('session-a')).resolves.toBe(true)
     expect(hasClarifyRequest('session-a')).toBe(false)
+  })
+
+  it('fails closed rather than sending a source request through a different primary gateway', async () => {
+    const otherGateway = vi.fn(async () => ({ ok: true }))
+    setPrimaryGateway({ connectionState: 'open', request: otherGateway } as never, 'other-profile')
+    setClarifyRequest({ ...clarify('session-a', 'req-a'), scope: gatewayScope(null, 'source-profile') })
+
+    await expect(skipClarifyRequest('session-a')).resolves.toBe(true)
+
+    expect(otherGateway).not.toHaveBeenCalled()
   })
 })
 

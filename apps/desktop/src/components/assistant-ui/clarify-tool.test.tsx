@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { onComposerInsertRequest } from '@/app/chat/composer/focus'
 import { I18nProvider } from '@/i18n'
 import { clearClarifyRequest, setClarifyRequest } from '@/store/clarify'
-import { $gateway } from '@/store/gateway'
+import { $gateway, gatewayScope, setPrimaryGateway } from '@/store/gateway'
 import { $activeSessionId } from '@/store/session'
 
 import { ClarifyTool, readClarifyResult } from './clarify-tool'
@@ -22,6 +22,7 @@ afterEach(() => {
   clearClarifyRequest()
   $activeSessionId.set(null)
   $gateway.set(null)
+  setPrimaryGateway(null)
   vi.clearAllMocks()
 })
 
@@ -71,21 +72,76 @@ function liveClarifyProps(choices = ['staging', 'production']): ToolCallMessageP
   }
 }
 
-function renderLiveClarify() {
+function renderLiveClarify({ multiSelect = false }: { multiSelect?: boolean } = {}) {
   const request = vi.fn().mockResolvedValue({ ok: true })
+  const gateway = { connectionState: 'open', request }
 
   $activeSessionId.set('session-1')
-  $gateway.set({ request } as never)
+  $gateway.set(gateway as never)
+  setPrimaryGateway(gateway as never, 'default')
   setClarifyRequest({
     choices: ['staging', 'production'],
+    multiSelect,
     question: 'Which deployment target?',
     requestId: 'request-1',
+    scope: gatewayScope(null, 'default'),
     sessionId: 'session-1'
   })
   renderClarify(<ClarifyTool {...liveClarifyProps()} />)
 
   return request
 }
+
+describe('ClarifyTool choice selection', () => {
+  it('selects independently, deselects and submits multi-select choices as a JSON array', async () => {
+    const request = renderLiveClarify({ multiSelect: true })
+    const staging = screen.getByRole('button', { name: /staging/ })
+    const production = screen.getByRole('button', { name: /production/ })
+
+    fireEvent.click(staging)
+    fireEvent.click(production)
+    expect(staging.getAttribute('aria-pressed')).toBe('true')
+    expect(production.getAttribute('aria-pressed')).toBe('true')
+
+    fireEvent.keyDown(window, { key: 'ArrowDown' })
+    expect(staging.getAttribute('aria-pressed')).toBe('true')
+    expect(production.getAttribute('aria-pressed')).toBe('true')
+
+    fireEvent.click(staging)
+    expect(staging.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(staging)
+
+    fireEvent.click(screen.getByRole('button', { name: /Continue/ }))
+
+    await waitFor(() => {
+      expect(request).toHaveBeenCalledWith('clarify.respond', {
+        answer: JSON.stringify(['production', 'staging']),
+        request_id: 'request-1'
+      })
+    })
+  })
+
+  it('keeps single-select replacement and plain-string submission', async () => {
+    const request = renderLiveClarify()
+    const staging = screen.getByRole('button', { name: /staging/ })
+    const production = screen.getByRole('button', { name: /production/ })
+
+    fireEvent.click(staging)
+    fireEvent.click(production)
+
+    expect(staging.getAttribute('aria-pressed')).toBe('false')
+    expect(production.getAttribute('aria-pressed')).toBe('true')
+
+    fireEvent.click(screen.getByRole('button', { name: /Continue/ }))
+
+    await waitFor(() => {
+      expect(request).toHaveBeenCalledWith('clarify.respond', {
+        answer: 'production',
+        request_id: 'request-1'
+      })
+    })
+  })
+})
 
 describe('readClarifyResult', () => {
   it('reads question + user_response from the tool JSON payload', () => {
@@ -271,6 +327,26 @@ describe('ClarifyTool keyboard navigation', () => {
     })
   })
 
+  it('stages a highlighted multi-select choice with Enter and submits it with Continue', async () => {
+    const request = renderLiveClarify({ multiSelect: true })
+    const production = screen.getByRole('button', { name: /production/ })
+
+    fireEvent.keyDown(window, { key: 'ArrowDown' })
+    fireEvent.keyDown(window, { key: 'Enter' })
+
+    expect(production.getAttribute('aria-pressed')).toBe('true')
+    expect(request).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: /Continue/ }))
+
+    await waitFor(() => {
+      expect(request).toHaveBeenCalledWith('clarify.respond', {
+        answer: JSON.stringify(['production']),
+        request_id: 'request-1'
+      })
+    })
+  })
+
   it('focuses Other when its number is pressed and leaves typing keys alone', () => {
     renderLiveClarify()
 
@@ -300,13 +376,17 @@ describe('ClarifyTool keyboard navigation', () => {
 describe('ClarifyTool recommended option', () => {
   it('dims the (Recommended) label and answers with the choice the backend sent', async () => {
     const request = vi.fn().mockResolvedValue({ ok: true })
+    const gateway = { connectionState: 'open', request }
 
     $activeSessionId.set('session-1')
-    $gateway.set({ request } as never)
+    $gateway.set(gateway as never)
+    setPrimaryGateway(gateway as never, 'default')
     setClarifyRequest({
       choices: ['staging (Recommended)', 'production'],
+      multiSelect: false,
       question: 'Which deployment target?',
       requestId: 'request-1',
+      scope: gatewayScope(null, 'default'),
       sessionId: 'session-1'
     })
     renderClarify(<ClarifyTool {...liveClarifyProps(['staging (Recommended)', 'production'])} />)
@@ -344,12 +424,17 @@ describe('ClarifyTool pending marker', () => {
   })
 
   it('does not mark a free-text (no-choice) pending card', () => {
+    const gateway = { connectionState: 'open', request: vi.fn().mockResolvedValue({ ok: true }) }
+
     $activeSessionId.set('session-1')
-    $gateway.set({ request: vi.fn().mockResolvedValue({ ok: true }) } as never)
+    $gateway.set(gateway as never)
+    setPrimaryGateway(gateway as never, 'default')
     setClarifyRequest({
       choices: null,
+      multiSelect: false,
       question: 'Anything else?',
       requestId: 'request-1',
+      scope: gatewayScope(null, 'default'),
       sessionId: 'session-1'
     })
 

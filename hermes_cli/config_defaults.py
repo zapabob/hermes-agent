@@ -78,13 +78,25 @@ DEFAULT_CONFIG = {
         # (/restart, SIGUSR1), prefer restart_after_turn_timeout below so
         # active turns finish *before* stop() begins (#77184).
         "restart_drain_timeout": 0,
+        # Cron-only floor under the stop()/drain wait (seconds). A chat turn
+        # interrupted by a restart is announced to the user and resumed on
+        # their next message; an interrupted cron run is written to jobs.json
+        # as a permanent failure that nobody is waiting on, so it must not
+        # inherit restart_drain_timeout's 0 (#82161). Clamped at runtime to
+        # the shutdown-watchdog leash minus teardown headroom, so raising it
+        # past ~50s has no effect unless TimeoutStopSec is raised too.
+        # 0 = opt out (cron drains on restart_drain_timeout, legacy).
+        "cron_drain_timeout": 30,
         # In-band restart wait for active turns to finish before stop()
         # (seconds). /restart and SIGUSR1 refuse new work, then wait up to
         # this cap for in-flight agents/cron/api runs to complete naturally
         # so the requesting turn is not amputated by restart_drain_timeout.
         # 0 = legacy behaviour (enter stop()/drain immediately). Default
-        # 6h is a safety valve for wedged agents, not a target latency.
-        "restart_after_turn_timeout": 21600,
+        # 30 min is a safety valve for wedged agents, not a target latency —
+        # an interactive `hermes gateway restart` must never block for hours
+        # on a turn that wedged (#79133). Long unattended turns can raise
+        # this in config.yaml.
+        "restart_after_turn_timeout": 1800,
         # Upper bound (seconds) a submitted prompt waits for the deferred
         # agent build (MCP discovery, model metadata, skills scan) before
         # failing with a visible error (#63078). The gateway's wait is
@@ -1189,6 +1201,13 @@ DEFAULT_CONFIG = {
         # "Steered into current run" confirmation bubble by setting this false.
         # The mid-turn steering itself still happens.
         "busy_steer_ack_enabled": True,
+        # Classic CLI multiline fallbacks beyond Alt+Enter.
+        # Default true matches Claude Code / Codex / OpenCode: Ctrl+J inserts
+        # a newline, a trailing backslash followed by Enter continues the draft,
+        # and supported terminals are asked to report Shift+Enter distinctly.
+        # Set false to restore the legacy c-j submit fallback on unusual POSIX
+        # PTYs whose plain Enter arrives as LF instead of CR.
+        "cli_multiline_shortcuts": True,
         # Which interface bare `hermes` (and `hermes chat`) launches by default:
         #   "cli" — the classic prompt_toolkit REPL (default, preserves prior behavior)
         #   "tui" — the modern Ink TUI (same as passing `--tui`)
@@ -1221,8 +1240,17 @@ DEFAULT_CONFIG = {
         #   "verbose" — include a compact content preview of what changed
         # Per-platform overrides via display.platforms.<platform>.memory_notifications.
         "memory_notifications": "on",
+        # Gateway notifications when a terminal(background=true) process
+        # finishes:
+        #   "concise" — one-line status message; failures append a short
+        #               output tail (default)
+        #   "all"     — running-output updates + final raw-output message
+        #   "result"  — final raw-output message only
+        #   "error"   — final raw-output message only on non-zero exit
+        #   "off"     — no watcher messages at all
+        "background_process_notifications": "concise",
         "streaming": False,
-        "timestamps": False,      # Show timestamp on user and assistant labels
+        "timestamps": False,      # Show message timestamps (CLI labels, TUI rows, desktop transcript)
         "timestamp_format": "%H:%M",  # strftime format for timestamps (e.g. "%b-%d %H:%M")
         "final_response_markdown": "strip",  # render | strip | raw
         # Preserve recent classic CLI output across Ctrl+L, /redraw, and
@@ -1230,6 +1258,12 @@ DEFAULT_CONFIG = {
         # behaves badly with replayed scrollback.
         "persistent_output": True,
         "persistent_output_max_lines": 200,
+        # Clear terminal scrollback as well as the visible viewport when the
+        # classic CLI performs a full redraw/resize recovery. Disabled by
+        # default because some users prefer preserving terminal history;
+        # enable when a terminal/tmux stack stamps stale prompt chrome into
+        # scrollback during fullscreen/restore window transitions.
+        "cli_rebuild_scrollback_on_redraw": False,
         # Print a one-line summary of resolved modal prompts (approval /
         # clarify) into scrollback so the question and decision survive the
         # panel repaint. Set false to keep scrollback untouched.
@@ -1804,7 +1838,7 @@ DEFAULT_CONFIG = {
         # extras" without silently stripping MCP tools the parent already has.
         # Set to false for strict intersection.
         "inherit_mcp_toolsets": True,
-        "max_iterations": 50,  # per-subagent iteration cap (each subagent gets its own budget,
+        "max_iterations": 250,  # per-subagent iteration cap (each subagent gets its own budget,
                                # independent of the parent's max_iterations)
         # Subagent summaries return to the parent's context verbatim. A batch
         # fan-out (N children) returns N summaries at once, which can exceed
@@ -1829,7 +1863,7 @@ DEFAULT_CONFIG = {
                                      # (floor 30s) to enforce a hard cap.
         "reasoning_effort": "",  # subagent effort: "ultra", "max", "xhigh", "high",
                                  # "medium", "low", "minimal", "none" (empty = inherit)
-        "max_concurrent_children": 3,  # unified concurrency cap: max parallel children per batch
+        "max_concurrent_children": 10,  # unified concurrency cap: max parallel children per batch
                                        # AND max concurrent background (background=true)
                                        # delegation units. New async dispatches beyond the cap
                                        # fall back to synchronous execution. Floor of 1, no ceiling.
@@ -1869,6 +1903,24 @@ DEFAULT_CONFIG = {
         # negatives (goal actually done but judge says continue) and
         # unbounded model spend on fuzzy / unachievable goals.
         "max_turns": 20,
+    },
+
+
+    # Loops — /loop recurring in-session wakeups (Claude Code parity).
+    # A loop re-runs a prompt (or slash command) on a cadence inside the
+    # live session. Fixed-interval mode fires on the user's clock;
+    # self-paced mode (no interval given) starts at the floor and backs
+    # off exponentially while the agent's replies stop changing.
+    "loops": {
+        # Smallest fixed interval accepted (seconds). Tighter cadences are
+        # raised to this floor — each tick is a full agent turn.
+        "min_interval_seconds": 30,
+        # Backstop tick budget: the loop auto-pauses after this many
+        # wakeups unless the user set --times. 0 = unlimited.
+        "max_ticks": 100,
+        # Self-paced cadence bounds (seconds).
+        "self_paced_floor_seconds": 60,
+        "self_paced_ceiling_seconds": 900,
     },
 
     # Mixture of Agents — named presets used by /moa. A preset is an execution
@@ -2206,8 +2258,9 @@ DEFAULT_CONFIG = {
         # through tools.slash_confirm — native yes/no buttons on Telegram,
         # Discord, and Slack; text fallback elsewhere.  Users click "Always
         # Approve" to silence the prompt permanently; that flips this key to
-        # false.  TUI has its own modal overlay (HERMES_TUI_NO_CONFIRM=1 to
-        # opt out there).
+        # false.  TUI also honors this setting for its /clear, /new, and /reset
+        # modal; HERMES_TUI_NO_CONFIRM=1 force-skips that modal regardless of
+        # the configured value.
         "destructive_slash_confirm": True,
     },
 
@@ -2632,6 +2685,16 @@ DEFAULT_CONFIG = {
     #     _default:            # fill-gap only: models not in the catalog
     #       context_window: 128000
     "model_overrides": {},
+
+    # models.dev registry — provider/model metadata (context windows,
+    # capabilities, pricing, modalities).  The agent fetches this on startup
+    # and serves from cache; a background daemon refreshes stale data.
+    # Override ``url`` to point at a mirror (e.g. a self-hosted copy behind
+    # a corporate proxy).  ETag conditional GET ensures refreshes are
+    # cheap (304 = no download).
+    "models_dev": {
+        "url": "",  # empty = default https://models.dev/api.json
+    },
 
     # Network settings — workarounds for connectivity issues.
     "network": {
@@ -3403,7 +3466,7 @@ DEFAULT_CONFIG = {
     },
 
     # Config schema version - bump this when adding new required fields
-    "_config_version": 34,
+    "_config_version": 37,
 }
 
 # Optional environment variables that enhance functionality

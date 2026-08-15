@@ -18,6 +18,7 @@ import {
   closeSecondaryGateways,
   configureGatewayRegistry,
   ensureGatewayForProfile,
+  primaryGatewayScope,
   pruneSecondaryGateways,
   reconnectSecondaryGateways,
   reportPrimaryGatewayState,
@@ -168,6 +169,11 @@ export function useGatewayBoot({
         }
 
         publish(conn)
+        setPrimaryGateway(
+          gateway,
+          conn.profile ?? normalizeProfileKey($activeGatewayProfile.get()),
+          conn.connectionId ?? null
+        )
         // Re-mint the WS URL before reconnecting. OAuth tickets are single-use
         // with a short TTL, so the ticket baked into the cached conn.wsUrl is
         // dead on every reconnect after the initial boot — reusing it surfaces
@@ -271,7 +277,7 @@ export function useGatewayBoot({
         const profileKey = override ?? (await desktop.profile?.get?.())?.profile ?? ''
         const key = normalizeProfileKey(profileKey)
         $activeGatewayProfile.set(key)
-        setPrimaryGateway(gateway, key)
+        setPrimaryGateway(gateway, key, $connection.get()?.connectionId ?? null)
         void ensureGatewayForProfile(key)
       } catch {
         $activeGatewayProfile.set(normalizeProfileKey(override))
@@ -318,7 +324,12 @@ export function useGatewayBoot({
           return
         }
 
-        publish(conn)
+          publish(conn)
+          setPrimaryGateway(
+            gateway,
+            conn.profile ?? normalizeProfileKey($activeGatewayProfile.get()),
+            conn.connectionId ?? null
+          )
         const wsUrl = await resolveGatewayWsUrl(desktop, conn)
         await gateway.connect(wsUrl)
 
@@ -394,7 +405,11 @@ export function useGatewayBoot({
     const gateway = adoptedFromHmr ? survivor!.gateway : new HermesGateway()
 
     callbacksRef.current.onGatewayReady(gateway)
-    setPrimaryGateway(gateway, survivor?.profile ?? normalizeProfileKey($activeGatewayProfile.get()))
+    setPrimaryGateway(
+      gateway,
+      survivor?.profile ?? normalizeProfileKey($activeGatewayProfile.get()),
+      survivor?.connection?.connectionId ?? null
+    )
     // Secondary (background-profile) sockets funnel into the same handler.
     configureGatewayRegistry({ onEvent: event => callbacksRef.current.handleGatewayEvent(event) })
 
@@ -425,11 +440,16 @@ export function useGatewayBoot({
       }
     })
 
-    const sourceProfile = normalizeProfileKey($activeGatewayProfile.get())
+    const offEvent = gateway.onEvent(event => {
+      const source = primaryGatewayScope()
+      const profile = typeof event.profile === 'string' && event.profile.trim() ? event.profile : source.profile
 
-    const offEvent = gateway.onEvent(event =>
-      callbacksRef.current.handleGatewayEvent({ ...event, profile: sourceProfile })
-    )
+      callbacksRef.current.handleGatewayEvent({
+        ...event,
+        profile,
+        ...(source.connectionId ? { connectionId: source.connectionId } : {})
+      })
+    })
 
     // Wake signals: power resume (macOS/Windows), network coming back, and the
     // window regaining focus/visibility. Each nudges an immediate reconnect.
@@ -517,6 +537,11 @@ export function useGatewayBoot({
           progress: 95
         })
         publish(conn)
+        setPrimaryGateway(
+          gateway,
+          conn.profile ?? normalizeProfileKey($activeGatewayProfile.get()),
+          conn.connectionId ?? null
+        )
 
         // Seed the workspace BEFORE the gateway opens: every session-restore
         // path is gated on gatewayState === 'open', so nothing can be active yet
@@ -601,6 +626,11 @@ export function useGatewayBoot({
 
       if (survivor?.connection) {
         publish(survivor.connection)
+        setPrimaryGateway(
+          gateway,
+          survivor.connection.profile ?? normalizeProfileKey($activeGatewayProfile.get()),
+          survivor.connection.connectionId ?? null
+        )
       }
 
       const profile = survivor?.profile ?? $activeGatewayProfile.get()

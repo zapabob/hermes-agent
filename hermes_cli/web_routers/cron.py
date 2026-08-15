@@ -44,6 +44,7 @@ _delete_cron_job_sync = late("_delete_cron_job_sync")
 _find_cron_job_profile = late("_find_cron_job_profile")
 _fire_cron_job_for_profile = late("_fire_cron_job_for_profile")
 _forward_cron_fire_to_gateway = late("_forward_cron_fire_to_gateway")
+_notify_cron_provider_for_profile = late("_notify_cron_provider_for_profile")
 _call_cron_for_profile = late("_call_cron_for_profile")
 _raise_if_cron_registration_error = late("_raise_if_cron_registration_error")
 load_config = late("load_config")
@@ -148,7 +149,10 @@ async def cron_fire_webhook(request: Request):
     fire. Deliberately NO local-execution fallback: delivering from the wrong
     process is worse than a delayed retry.
     """
-    from plugins.cron_providers.chronos.verify import get_fire_verifier
+    from plugins.cron_providers.chronos.verify import (
+        fire_token_matches,
+        get_fire_verifier,
+    )
 
     auth = request.headers.get("Authorization", "")
     token = auth[7:].strip() if auth.startswith("Bearer ") else ""
@@ -168,8 +172,13 @@ async def cron_fire_webhook(request: Request):
     except Exception:
         body = {}
     job_id = (body or {}).get("job_id") if isinstance(body, dict) else None
-    if not job_id:
+    fire_at = (body or {}).get("fire_at") if isinstance(body, dict) else None
+    if not isinstance(job_id, str) or not job_id.strip():
         return JSONResponse({"error": "missing job_id"}, status_code=400)
+    if not isinstance(fire_at, str) or not fire_at.strip():
+        return JSONResponse({"error": "missing fire_at"}, status_code=400)
+    if not fire_token_matches(claims, job_id=job_id, fire_at=fire_at):
+        return JSONResponse({"error": "invalid fire token"}, status_code=401)
 
     # _find_cron_job_profile walks every profile and lists its jobs (file
     # I/O per profile) — run it off the event loop like the other cron
@@ -180,7 +189,7 @@ async def cron_fire_webhook(request: Request):
         # does not retry a fire that is intentionally absent.
         return JSONResponse({"status": "gone", "job_id": job_id}, status_code=200)
 
-    forwarded = await _forward_cron_fire_to_gateway(profile, job_id, auth)
+    forwarded = await _forward_cron_fire_to_gateway(profile, job_id, fire_at, auth)
     if forwarded is None:
         return JSONResponse(
             {
@@ -251,7 +260,13 @@ async def instantiate_blueprint(body: AutomationBlueprintInstantiate, profile: s
         # like the sibling cron endpoints (partial avoids **spec keys ever
         # colliding with the wrapper's own parameters).
         _create = functools.partial(_call_cron_for_profile, profile, "create_job", **spec)
-        return await _run_cron_dashboard_io(_create)
+        created = await _run_cron_dashboard_io(_create)
+        # Same contract as the other dashboard mutations: reconcile the
+        # profile-scoped provider (best-effort; fail-closed for external
+        # providers on a multi-profile dashboard). Off the event loop —
+        # a Chronos reconcile does file I/O plus NAS network calls.
+        await _run_cron_dashboard_io(_notify_cron_provider_for_profile, profile)
+        return created
     except HTTPException:
         raise
     except Exception as e:

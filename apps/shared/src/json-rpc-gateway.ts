@@ -1,6 +1,7 @@
 export type GatewayEventName =
   | 'gateway.ready'
   | 'session.info'
+  | 'session.usage'
   | 'message.start'
   | 'message.delta'
   | 'message.interim'
@@ -25,6 +26,7 @@ export type GatewayEventName =
 export interface GatewayEvent<P = unknown> {
   payload?: P
   /** Renderer-side source tag added by the Desktop gateway registry. */
+  connectionId?: string
   profile?: string
   session_id?: string
   type: GatewayEventName
