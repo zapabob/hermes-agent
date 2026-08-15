@@ -748,7 +748,10 @@ def test_profile_scoped_agent_build_starts_mcp_discovery_in_profile_home(
     try:
         server._start_agent_build(sid, session)
         assert built.wait(timeout=15), "agent build thread never called _make_agent"
-        assert ready.wait(timeout=5), "agent_ready never set after build"
+        release.set()
+        assert ready.wait(timeout=15), "agent_ready never set after build"
+        session["_agent_build_thread"].join(timeout=2)
+        assert not session["_agent_build_thread"].is_alive()
     finally:
         release.set()
         server._sessions.pop(sid, None)
@@ -813,7 +816,10 @@ def test_profile_scoped_agent_build_installs_secret_scope(monkeypatch, tmp_path)
     try:
         server._start_agent_build(sid, session)
         assert built.wait(timeout=15), "agent build thread never called _make_agent"
-        assert ready.wait(timeout=5), "agent_ready never set after build"
+        release.set()
+        assert ready.wait(timeout=15), "agent_ready never set after build"
+        session["_agent_build_thread"].join(timeout=2)
+        assert not session["_agent_build_thread"].is_alive()
     finally:
         release.set()
         server._sessions.pop(sid, None)
@@ -14185,7 +14191,7 @@ def test_session_most_recent_folds_db_exception_into_null_result(monkeypatch):
 
 
 def test_session_most_recent_handles_db_unavailable(monkeypatch):
-    monkeypatch.setattr(server, "_open_session_db", lambda _home=None: None)
+    monkeypatch.setattr(server, "_get_db", lambda: None)
 
     resp = server.handle_request({
         "id": "1",
