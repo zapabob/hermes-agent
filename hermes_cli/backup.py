@@ -1116,6 +1116,7 @@ def run_import(args) -> None:
         restored_external = 0
         skipped_runtime: list[str] = []
         home_dir = Path.home().resolve()
+        allowed_external_roots: Optional[List[Path]] = None
         # Resolved once: every member is published via a temp file, and mkstemp
         # would otherwise create newly restored files as 0600.
         new_file_mode = _default_new_file_mode()
