@@ -12,7 +12,11 @@ import { translateNow } from '@/i18n'
 import { type GatewayEventPayload, textPart } from '@/lib/chat-messages'
 import { coerceGatewayText, coerceThinkingText, normalizePersonalityValue } from '@/lib/chat-runtime'
 import { playCompletionSound } from '@/lib/completion-sound'
-import { resolveGatewayEventSessionId } from '@/lib/gateway-events'
+import {
+  approvalReplaySessionId,
+  resolveGatewayEventSessionId,
+  UNSCOPED_STREAM_EVENT_TYPES
+} from '@/lib/gateway-events'
 import { triggerHaptic } from '@/lib/haptics'
 import { modelOptionsQueryKey } from '@/lib/model-options'
 import { isProviderSetupErrorMessage } from '@/lib/provider-setup-errors'
@@ -42,7 +46,13 @@ import { revealDesktopPane } from '@/store/pane-focus'
 import { flashPetActivity, markPetUnread, setPetActivity } from '@/store/pet'
 import { $activeGatewayProfile, normalizeProfileKey } from '@/store/profile'
 import { followActiveSessionCwd } from '@/store/projects'
-import { clearAllPrompts, setApprovalRequest, setSecretRequest, setSudoRequest } from '@/store/prompts'
+import {
+  clearAllPrompts,
+  receiveApprovalRequest,
+  replayPendingApproval,
+  setSecretRequest,
+  setSudoRequest
+} from '@/store/prompts'
 import { recordAgentReaction } from '@/store/reactions-local'
 import {
   $currentCwd,
@@ -69,6 +79,7 @@ import { dropSessionState } from '@/store/session-states'
 import { pruneDelegateFallbackSubagents, pruneFinishedSessionSubagents, upsertSubagent } from '@/store/subagents'
 import { reportMcpToolResult } from '@/store/suggestion-providers/repair'
 import { invalidateSkillSuggestionIndex } from '@/store/suggestion-providers/skill'
+import { requestScrollToBottom } from '@/store/thread-scroll'
 import { clearActiveSessionTodos } from '@/store/todos'
 import { recordToolDiff } from '@/store/tool-diffs'
 import { setSessionDraftingTool } from '@/store/tool-drafting'
@@ -208,17 +219,18 @@ interface GatewayEventDeps {
   compactedTurnRef: MutableRefObject<Set<string>>
   lastCwdInfoSessionRef: MutableRefObject<string | null>
   nativeSubagentSessionsRef: MutableRefObject<Set<string>>
-  appendAssistantDelta: (sessionId: string, delta: string) => void
-  appendReasoningDelta: (sessionId: string, delta: string, replace?: boolean) => void
+  appendAssistantDelta: (sessionId: string, delta: string, occurredAt?: number) => void
+  appendReasoningDelta: (sessionId: string, delta: string, replace?: boolean, occurredAt?: number) => void
   completeAssistantMessage: (
     sessionId: string,
     text: string,
     responsePreviewed?: boolean,
-    failure?: { error: string; partial: boolean }
+    failure?: { error: string; partial: boolean },
+    occurredAt?: number
   ) => void
-  failAssistantMessage: (sessionId: string, errorMessage: string) => void
+  failAssistantMessage: (sessionId: string, errorMessage: string, occurredAt?: number) => void
   flushQueuedDeltas: (sessionId?: string) => void
-  finalizeInterimAssistantMessage: (sessionId: string, text: string) => void
+  finalizeInterimAssistantMessage: (sessionId: string, text: string, occurredAt?: number) => void
   queryClient: QueryClient
   refreshHermesConfig: () => Promise<void>
   sessionInterrupted: (sessionId: string) => boolean
@@ -232,7 +244,8 @@ interface GatewayEventDeps {
     sessionId: string,
     payload: GatewayEventPayload | undefined,
     phase: 'running' | 'complete',
-    sourceEventType?: string
+    sourceEventType?: string,
+    occurredAt?: number
   ) => void
 }
 
@@ -298,6 +311,12 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
   return useCallback(
     (event: RpcEvent) => {
       const payload = event.payload as GatewayEventPayload | undefined
+
+      const occurredAt =
+        typeof payload?.timestamp === 'number' && Number.isFinite(payload.timestamp)
+          ? payload.timestamp
+          : Date.now() / 1000
+
       const explicitSid = event.session_id || ''
 
       const route = resolveGatewayEventSessionId({
@@ -314,7 +333,39 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
       }
 
       const sessionId = route.sessionId
+
+      // Late stragglers: an unscoped stream event attributed via the
+      // active-session fallback (no pin) to a session that has no live turn
+      // belongs to a turn that already ended elsewhere. Dropping it keeps the
+      // previous session's tail events (a delayed `thinking.delta` or
+      // `status.update`) from landing in a freshly opened chat (#43142 family:
+      // busy/streaming UI inherited when switching sessions).
+      if (
+        sessionId &&
+        !explicitSid &&
+        !route.pinned &&
+        event.type &&
+        event.type !== 'message.start' &&
+        UNSCOPED_STREAM_EVENT_TYPES.has(event.type)
+      ) {
+        const state = sessionStateByRuntimeIdRef.current.get(sessionId)
+
+        const hasLiveTurn = Boolean(
+          state && (state.awaitingResponse || state.busy || state.streamId || state.sawAssistantPayload)
+        )
+
+        if (!hasLiveTurn) {
+          return
+        }
+      }
+
       const isActiveEvent = !!sessionId && sessionId === activeSessionIdRef.current
+
+      const replaySessionId = approvalReplaySessionId(event.type, activeSessionIdRef.current, sessionId)
+
+      if (replaySessionId) {
+        void replayPendingApproval($gateway.get(), replaySessionId).catch(() => undefined)
+      }
 
       // Mid-turn compaction does not emit another message.start. The first
       // model output or tool event proves summarization has finished and the
@@ -558,7 +609,7 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
                 // finalizeInterruptedMessages un-pends kept text and drops
                 // empty placeholders; on the normal path message.complete
                 // already settled everything and this is a no-op.
-                messages: finalizeInterruptedMessages(state.messages, state.streamId),
+                messages: finalizeInterruptedMessages(state.messages, state.streamId, occurredAt),
                 pendingBranchGroup: null,
                 streamId: null,
                 turnStartedAt: null
@@ -589,6 +640,22 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
               explicitSid && sessionId ? modelOptionsQueryKey(activeGatewayProfile, sessionId) : ['model-options']
           })
         }
+      } else if (event.type === 'session.usage') {
+        // Live usage tick emitted while a turn is mid-flight (see tui_gateway
+        // _start_usage_ticker) so the status-bar context window tracks growth
+        // during the turn instead of only jumping at message.complete.
+        if (payload?.usage && sessionId) {
+          // Per-session twin first: a focused secondary tile reads this cache,
+          // while the primary-only global mirrors the active session.
+          updateSessionState(sessionId, state => ({
+            ...state,
+            usage: { calls: 0, input: 0, output: 0, total: 0, ...state.usage, ...payload.usage }
+          }))
+
+          if (isActiveEvent) {
+            setCurrentUsage(current => ({ ...current, ...payload.usage }))
+          }
+        }
       } else if (event.type === 'message.start') {
         if (!sessionId) {
           return
@@ -605,6 +672,16 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
 
         if (isActiveEvent) {
           triggerHaptic('streamStart')
+        }
+
+        // Submit→accept latency: seedOptimistic armed the clock at Enter; this
+        // event is the backend accepting the turn. Debug-only visibility into
+        // how long the arm actually took (the "no progress box for seconds"
+        // complaint) — reads the pre-update cache, costs nothing when clean.
+        const seededAt = sessionStateByRuntimeIdRef.current.get(sessionId)?.turnStartedAt
+
+        if (typeof seededAt === 'number') {
+          console.debug('[turn-accept-latency]', { sessionId, ms: Date.now() - seededAt })
         }
 
         updateSessionState(sessionId, state => {
@@ -626,16 +703,25 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
             sawAssistantPayload: false,
             interrupted: false,
             interimBoundaryPending: false,
-            turnStartedAt: Date.now()
+            // Keep the submit-time seed (submit.ts seedOptimistic) — resetting
+            // here would hide the submit→accept round trip from the timer.
+            // Backend-originated turns (queue drain elsewhere, goal follow-up)
+            // have no seed and arm here.
+            turnStartedAt: state.turnStartedAt ?? Date.now()
           }
         })
 
         if (isActiveEvent) {
-          setTurnStartedAt(Date.now())
+          // Belt-and-suspenders mirror of the ACTIVE session's per-session
+          // clock (the load-bearing mirror is the view-sync flush in
+          // use-session-state-cache). Mirror the seeded value, not Date.now():
+          // resetting to accept-time here would visibly snap the timer back
+          // after the submit-time seed above already started it.
+          setTurnStartedAt(sessionStateByRuntimeIdRef.current.get(sessionId)?.turnStartedAt ?? Date.now())
         }
       } else if (event.type === 'message.delta') {
         if (sessionId) {
-          appendAssistantDelta(sessionId, coerceGatewayText(payload?.text))
+          appendAssistantDelta(sessionId, coerceGatewayText(payload?.text), occurredAt)
         }
       } else if (event.type === 'message.interim') {
         // The agent emitted interim assistant commentary (text alongside tool
@@ -647,7 +733,7 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
           const text = coerceGatewayText(payload?.text)
 
           if (text) {
-            finalizeInterimAssistantMessage(sessionId, text)
+            finalizeInterimAssistantMessage(sessionId, text, occurredAt)
           }
         }
       } else if (event.type === 'thinking.delta') {
@@ -663,7 +749,7 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
         }
       } else if (event.type === 'reasoning.delta') {
         if (sessionId) {
-          appendReasoningDelta(sessionId, coerceThinkingText(payload?.text))
+          appendReasoningDelta(sessionId, coerceThinkingText(payload?.text), false, occurredAt)
         }
 
         if (isActiveEvent) {
@@ -671,7 +757,7 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
         }
       } else if (event.type === 'reasoning.available') {
         if (sessionId) {
-          appendReasoningDelta(sessionId, coerceThinkingText(payload?.text), true)
+          appendReasoningDelta(sessionId, coerceThinkingText(payload?.text), true, occurredAt)
         }
 
         if (isActiveEvent) {
@@ -693,7 +779,7 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
           if (idx === undefined || idx <= 1) {
             // First reference: clear any stale reasoning left over from
             // before this turn's references start, same as before.
-            appendReasoningDelta(sessionId, text, true)
+            appendReasoningDelta(sessionId, text, true, occurredAt)
           } else {
             // Later references must accumulate, not replace — otherwise
             // each new reference wipes out the ones already shown (#64658).
@@ -705,7 +791,7 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
             // already-complete text, with no concurrent token stream for the
             // reference-gathering phase, so there is no in-flight delta to
             // collide with in the shared queue bucket.
-            appendReasoningDelta(sessionId, text, false)
+            appendReasoningDelta(sessionId, text, false, occurredAt)
             flushQueuedDeltas(sessionId)
           }
         }
@@ -732,7 +818,7 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
             ? `◇ MoA refs ${payload.refs_done}/${payload.refs_total} — ${label}\n`
             : `◇ MoA refs ${payload.refs_done}/${payload.refs_total}\n`
 
-          appendReasoningDelta(sessionId, line, payload.refs_done <= 1)
+          appendReasoningDelta(sessionId, line, payload.refs_done <= 1, occurredAt)
           flushQueuedDeltas(sessionId)
         }
 
@@ -744,7 +830,7 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
         // aggregator acting). Append a one-line marker; the first
         // moa.reference that follows replaces the whole block.
         if (sessionId && payload?.phase === 'aggregator') {
-          appendReasoningDelta(sessionId, '◇ MoA aggregating…\n', false)
+          appendReasoningDelta(sessionId, '◇ MoA aggregating…\n', false, occurredAt)
           flushQueuedDeltas(sessionId)
         }
 
@@ -786,7 +872,7 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
               }
             : undefined
 
-        completeAssistantMessage(sessionId, finalText, payload?.response_previewed, failure)
+        completeAssistantMessage(sessionId, finalText, payload?.response_previewed, failure, occurredAt)
 
         // Structured billing wall forwarded by the gateway (out of credits /
         // payment required) — cache it + raise a billing-specific toast.
@@ -858,7 +944,7 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
         }
 
         flushQueuedDeltas(sessionId)
-        upsertToolCall(sessionId, toTodoPayload(payload) ?? payload, 'running', event.type)
+        upsertToolCall(sessionId, toTodoPayload(payload) ?? payload, 'running', event.type, occurredAt)
 
         if (isActiveEvent) {
           setPetActivity({ reasoning: false, toolRunning: true })
@@ -866,10 +952,17 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
       } else if (event.type === 'tool.complete') {
         if (sessionId) {
           flushQueuedDeltas(sessionId)
-          upsertToolCall(sessionId, toTodoPayload(payload) ?? payload, 'complete', event.type)
+          upsertToolCall(sessionId, toTodoPayload(payload) ?? payload, 'complete', event.type, occurredAt)
 
           if (isActiveEvent) {
             setPetActivity({ toolRunning: false })
+
+            // A tool can fail without ending the turn when the agent recovers
+            // and continues. Surface that failure as a short pet beat too;
+            // otherwise only turn-level errors ever reach the failed state.
+            if (payload?.error) {
+              flashPetActivity({ error: true })
+            }
           }
 
           // A pending clarify blocks the turn, so the first tool.complete after
@@ -945,6 +1038,7 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
         const question = typeof payload?.question === 'string' ? payload.question : ''
         const rawChoices = payload?.choices
         const choices = normalizeChoices(rawChoices)
+        const multiSelect = payload?.multi_select === true
 
         if (requestId && question) {
           if (rawChoices != null && choices.length === 0) {
@@ -955,6 +1049,7 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
             requestId,
             question,
             choices: choices.length > 0 ? choices : null,
+            multiSelect,
             sessionId: sessionId ?? null
           })
 
@@ -966,7 +1061,17 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
             // choices. Upsert a stable pending clarify tool row from the request
             // itself so the prompt stays answerable; a real tool.start/complete
             // with the same request id merges rather than duplicates.
-            upsertToolCall(sessionId, { args: { choices, question }, name: 'clarify', tool_id: requestId }, 'running')
+            upsertToolCall(
+              sessionId,
+              {
+                args: { choices, ...(multiSelect ? { multi_select: true } : {}), question },
+                name: 'clarify',
+                tool_id: requestId
+              },
+              'running',
+              event.type,
+              occurredAt
+            )
 
             // The transcript only renders the active session, so a background
             // clarify is otherwise invisible (the row just keeps spinning like
@@ -974,6 +1079,10 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
             // "needs input" indicator on its row — works for the active session
             // too, and survives alt-tab / window blur (unlike a toast).
             updateSessionState(sessionId, state => ({ ...state, needsInput: true }))
+
+            if (sessionId === activeSessionIdRef.current) {
+              requestScrollToBottom()
+            }
           }
 
           dispatchNativeNotification({
@@ -1024,7 +1133,7 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
         const command = typeof payload?.command === 'string' ? payload.command : ''
         const description = typeof payload?.description === 'string' ? payload.description : 'dangerous command'
 
-        setApprovalRequest({
+        void receiveApprovalRequest($gateway.get(), {
           // false only when a tirith warning forbids it; backend omits the field otherwise.
           allowPermanent: payload?.allow_permanent !== false,
           choices: Array.isArray(payload?.choices)
@@ -1032,9 +1141,10 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
             : undefined,
           command,
           description,
+          requestId: typeof payload?.request_id === 'string' ? payload.request_id : undefined,
           sessionId: sessionId ?? null,
           smartDenied: payload?.smart_denied === true
-        })
+        }).catch(() => undefined)
 
         if (sessionId) {
           updateSessionState(sessionId, state => ({ ...state, needsInput: true }))
@@ -1250,8 +1360,8 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
               {
                 id: `review-summary-${Date.now()}`,
                 role: 'system',
-                parts: [textPart(`review:${text}`)],
-                timestamp: Math.floor(Date.now() / 1000)
+                parts: [textPart(`review:${text}`, occurredAt)],
+                timestamp: occurredAt
               }
             ]
           }))
@@ -1333,7 +1443,7 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
 
         if (sessionId) {
           flushQueuedDeltas(sessionId)
-          failAssistantMessage(sessionId, errorMessage)
+          failAssistantMessage(sessionId, errorMessage, occurredAt)
         }
 
         if (isActiveEvent) {

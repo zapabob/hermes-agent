@@ -15,8 +15,25 @@ Data resolution order:
      served rather than blocking callers on the network)
   3. Network fetch (https://models.dev/api.json) — only when no cache
      exists at all; failed refreshes back off for 5 minutes process-wide
-Latency-sensitive callers (gateway route-identity checks) pass
-``allow_network=False`` and never touch the network.
+
+Network hardening:
+
+- **ETag conditional GET**: network refreshes send ``If-None-Match``
+  with the last-known ETag whenever a servable registry is held (memory,
+  hydrated from disk on cold force-refresh). A 304 Not Modified response
+  is a no-op — the existing cache is re-confirmed fresh without
+  re-downloading the full registry (≈2 MB). The ETag is persisted
+  atomically alongside the cache file.
+- **No-network-on-hot-paths invariant**: resolution, picker, and resume
+  paths NEVER perform network I/O. ``allow_network=False`` is threaded
+  through every query function, and hot-path callers (vision routing,
+  image routing, cost guard, context-length lookup) pass it explicitly.
+- **Corrupt-cache rejection**: a disk cache that fails to parse, is not a
+  dict, or is empty is ignored with a warning rather than served as
+  ``{}`` and silently breaking provider/model resolution.
+- **Mirror URL override**: ``models_dev.url`` in config.yaml lets
+  deployments point at a mirror (e.g. a self-hosted copy) without code
+  changes.
 
 Other modules should import the dataclasses and query functions from here
 rather than parsing the raw JSON themselves.
@@ -37,7 +54,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 MODELS_DEV_URL = "https://models.dev/api.json"
-_MODELS_DEV_CACHE_TTL = 3600  # 1 hour in-memory
+_MODELS_DEV_CACHE_TTL = 4 * 3600  # 4 hours — ETag conditional GET makes refresh cheap
 _MODELS_DEV_RETRY_DELAY = 300  # 5 minutes after a failed refresh
 
 # In-memory cache
@@ -220,16 +237,119 @@ def _get_cache_path() -> Path:
     return get_hermes_home() / "models_dev_cache.json"
 
 
+def _get_etag_path() -> Path:
+    """Return path to the ETag sidecar file for conditional GET."""
+    from hermes_constants import get_hermes_home
+    return get_hermes_home() / "models_dev_cache.etag"
+
+
+def _load_etag() -> str:
+    """Load the last-known ETag from disk, or empty string if missing."""
+    try:
+        etag_path = _get_etag_path()
+        if etag_path.exists():
+            return etag_path.read_text(encoding="utf-8").strip()
+    except Exception as e:
+        logger.debug("Failed to load models.dev ETag: %s", e)
+    return ""
+
+
+def _save_etag(etag: str) -> None:
+    """Persist an ETag to the sidecar file atomically."""
+    try:
+        from utils import atomic_write_text
+
+        etag_path = _get_etag_path()
+        etag_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(etag_path, etag)
+    except Exception as e:
+        logger.debug("Failed to save models.dev ETag: %s", e)
+
+
+def _clear_etag() -> None:
+    """Delete the ETag sidecar so the next fetch is unconditional.
+
+    Called when the cached registry the ETag vouches for is gone or
+    unusable — sending If-None-Match without a servable cache invites a
+    304 that would leave the process with no data at all.
+    """
+    try:
+        _get_etag_path().unlink(missing_ok=True)
+    except Exception as e:
+        logger.debug("Failed to clear models.dev ETag: %s", e)
+
+
+def _get_models_dev_url() -> str:
+    """Resolve the models.dev API URL, honoring a config.yaml override.
+
+    The ``models_dev.url`` config key lets deployments point at a mirror
+    (e.g. a self-hosted copy behind a corporate proxy) without code changes.
+    Falls back to the default public URL when unset or empty.
+    """
+    try:
+        from hermes_cli.config import cfg_get, load_config_readonly
+        cfg = load_config_readonly()
+        url = cfg_get(cfg, "models_dev", "url", default="")
+        if isinstance(url, str) and url.strip():
+            return url.strip()
+    except Exception:
+        pass
+    # Fall back to the module global (not the constant) so existing
+    # code/tests that patch MODELS_DEV_URL keep working.
+    return MODELS_DEV_URL
+
+
+def _validate_registry(data: Any) -> bool:
+    """Return True if *data* is a non-empty dict suitable for serving."""
+    return isinstance(data, dict) and len(data) > 0
+
+
 def _load_disk_cache() -> Dict[str, Any]:
-    """Load models.dev data from disk cache."""
+    """Load models.dev data from disk cache.
+
+    A corrupt cache (invalid JSON, not a dict, or empty) is rejected with
+    a warning so it doesn't silently masquerade as ``{}`` and break
+    provider/model resolution for every caller.
+    """
     try:
         cache_path = _get_cache_path()
         if cache_path.exists():
             with open(cache_path, encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+            if not _validate_registry(data):
+                logger.warning(
+                    "models.dev disk cache is corrupt or empty; "
+                    "quarantining (will refetch from network)"
+                )
+                _quarantine_corrupt_cache(cache_path)
+                return {}
+            return data
     except Exception as e:
-        logger.debug("Failed to load models.dev disk cache: %s", e)
+        logger.warning(
+            "Failed to load models.dev disk cache; quarantining: %s", e
+        )
+        try:
+            _quarantine_corrupt_cache(_get_cache_path())
+        except Exception:
+            pass
     return {}
+
+
+def _quarantine_corrupt_cache(cache_path: Path) -> None:
+    """Move a rejected cache aside and drop its ETag sidecar.
+
+    Renaming (rather than leaving the file in place) makes the rejection
+    a one-time event: without it, every hot-path call that finds the
+    in-memory cache empty re-reads and re-parses the corrupt file and
+    re-emits the warning until a network fetch succeeds. The sidecar is
+    cleared because it vouches for a registry we no longer hold — a 304
+    against a missing cache would leave the process with no data at all.
+    """
+    try:
+        cache_path.rename(cache_path.with_suffix(".json.corrupt"))
+    except Exception as e:
+        logger.debug("Could not quarantine corrupt models.dev cache: %s", e)
+    _clear_etag()
 
 
 def _disk_cache_age_seconds() -> Optional[float]:
@@ -258,31 +378,68 @@ def _disk_cache_age_seconds() -> Optional[float]:
         return None
 
 
-def _save_disk_cache(data: Dict[str, Any]) -> None:
-    """Save models.dev data to disk cache atomically."""
+def _save_disk_cache(data: Dict[str, Any], etag: str = "") -> None:
+    """Save models.dev data to disk cache atomically.
+
+    Also persists the ETag sidecar when *etag* is non-empty so the next
+    refresh can issue a conditional GET.
+    """
     try:
         cache_path = _get_cache_path()
         atomic_json_write(cache_path, data, indent=None, separators=(",", ":"))
     except Exception as e:
         logger.debug("Failed to save models.dev disk cache: %s", e)
+    if etag:
+        _save_etag(etag)
 
 
-def _fetch_models_dev_from_network() -> Dict[str, Any]:
-    """Fetch the live models.dev registry without touching local caches.
+class _NotModified(Exception):
+    """Server returned 304 Not Modified — existing cache is still valid."""
 
-    Raises on network errors and on an empty/invalid registry payload.
+
+def _fetch_models_dev_from_network(
+    *, conditional: bool = False
+) -> Tuple[Dict[str, Any], str]:
+    """Fetch the live models.dev registry.
+
+    ``conditional`` enables ETag conditional GET (``If-None-Match`` with
+    the sidecar's ETag). Callers must pass True ONLY while holding
+    ``_models_dev_fetch_lock`` AND holding a servable registry the 304
+    can re-confirm — a conditional request without one invites a 304
+    that leaves the process with no data at all (previously a permanent
+    empty-registry loop when the sidecar outlived a corrupt cache file).
+    A 304 raises ``_NotModified`` so the caller can re-confirm the
+    existing cache's freshness without re-downloading the full payload.
+
+    Returns ``(registry, etag)``; the etag is empty when the server sent
+    none. The caller persists it together with the cache body
+    (``_commit_registry``) so the sidecar can never get ahead of the data
+    it vouches for. Raises on network errors and on an empty/invalid
+    registry payload.
     """
+    url = _get_models_dev_url()
+    headers: Dict[str, str] = {}
+    if conditional:
+        etag = _load_etag()
+        if etag:
+            headers["If-None-Match"] = etag
+
     # Tuple (connect, read): a flat timeout=15 let a blackholed connect
     # stall the first-turn critical path for the full 15 s. 5 s connect
     # fails fast on unreachable hosts; 10 s read still tolerates a slow
     # registry response (matches the OpenRouter fetch convention in
     # agent/model_metadata.py).
-    response = requests.get(MODELS_DEV_URL, timeout=(5, 10))
+    response = requests.get(url, headers=headers, timeout=(5, 10))
+
+    if response.status_code == 304:
+        raise _NotModified()
+
     response.raise_for_status()
     data = response.json()
-    if not isinstance(data, dict) or not data:
+    if not _validate_registry(data):
         raise ValueError("models.dev returned an empty or invalid registry")
-    return data
+
+    return data, response.headers.get("ETag", "")
 
 
 def _mark_stale_cache_grace() -> None:
@@ -298,7 +455,7 @@ def _mark_stale_cache_grace() -> None:
         _models_dev_cache_time = grace_time
 
 
-def _commit_registry(data: Dict[str, Any], *, where: str) -> None:
+def _commit_registry(data: Dict[str, Any], *, etag: str = "", where: str) -> None:
     """Persist a freshly fetched registry: disk + in-mem + clear backoff.
 
     Callers must hold ``_models_dev_fetch_lock`` so a failing refresh on one
@@ -307,7 +464,7 @@ def _commit_registry(data: Dict[str, Any], *, where: str) -> None:
     immediately after a successful ``force_refresh``).
     """
     global _models_dev_cache, _models_dev_cache_time, _models_dev_retry_after
-    _save_disk_cache(data)
+    _save_disk_cache(data, etag)
     _models_dev_cache = data
     _models_dev_cache_time = time.time()
     _models_dev_retry_after = 0
@@ -316,6 +473,39 @@ def _commit_registry(data: Dict[str, Any], *, where: str) -> None:
         where,
         len(data),
         sum(len(p.get("models", {})) for p in data.values() if isinstance(p, dict)),
+    )
+
+
+def _confirm_cache_not_modified(*, where: str) -> None:
+    """Re-confirm the existing cache as fresh after a 304 Not Modified.
+
+    Callers must hold ``_models_dev_fetch_lock``. Clears the backoff and
+    resets the in-memory cache timestamp so the next caller hits the fast
+    path. The disk cache itself is not rewritten — its contents are
+    unchanged, only its freshness marker is advanced.
+    """
+    global _models_dev_cache_time, _models_dev_retry_after
+    if not _models_dev_cache:
+        # Pathological: a 304 arrived but we hold no registry. Should be
+        # unreachable now that conditional GETs require a servable cache
+        # (see _fetch_models_dev_from_network); kept as defense in depth
+        # because this state previously caused a permanent empty-registry
+        # loop. Drop the sidecar so the next attempt is unconditional and
+        # arm the normal failure backoff instead of marking {} "fresh".
+        _clear_etag()
+        _models_dev_retry_after = time.time() + _MODELS_DEV_RETRY_DELAY
+        logger.warning(
+            "models.dev returned 304 but no cached registry is held (%s); "
+            "cleared ETag sidecar, will refetch unconditionally",
+            where,
+        )
+        return
+    _models_dev_cache_time = time.time()
+    _models_dev_retry_after = 0
+    logger.debug(
+        "models.dev registry unchanged (304 Not Modified, %s); "
+        "cache re-confirmed fresh",
+        where,
     )
 
 
@@ -338,9 +528,19 @@ def _background_refresh_models_dev() -> None:
     """Best-effort refresh after serving stale cache data."""
     global _models_dev_refresh_in_flight
     try:
-        data = _fetch_models_dev_from_network()
+        # Fetch INSIDE the lock: symmetric with the foreground path, so
+        # conditional-GET inputs (memory cache + etag sidecar) can't be
+        # mutated mid-fetch by a concurrent force_refresh, and the two
+        # paths can't double-download concurrently. Hot-path callers are
+        # unaffected — they return stale data without touching this lock.
         with _models_dev_fetch_lock:
-            _commit_registry(data, where="background")
+            data, etag = _fetch_models_dev_from_network(
+                conditional=bool(_models_dev_cache)
+            )
+            _commit_registry(data, etag=etag, where="background")
+    except _NotModified:
+        with _models_dev_fetch_lock:
+            _confirm_cache_not_modified(where="background")
     except Exception as e:
         with _models_dev_fetch_lock:
             _note_refresh_failure(e, where="background")
@@ -384,6 +584,12 @@ def fetch_models_dev(
 
     Returns the full registry dict keyed by provider ID, or empty dict on failure.
 
+    Network requests use ETag conditional GET when a cached ETag exists
+    AND a servable registry is held (on a cold ``force_refresh`` the
+    memory cache is hydrated from disk first). A 304 Not Modified
+    response re-confirms the existing cache's freshness without
+    re-downloading the full (~2 MB) registry.
+
     Cache hierarchy (when ``force_refresh=False``):
       1. Fresh in-memory cache → return immediately.
       2. Stale in-memory cache → return immediately and refresh in a single
@@ -392,6 +598,7 @@ def fetch_models_dev(
          new models, so stale data is preferable to a foreground timeout.
       3. Disk cache file (any age) → load, populate in-mem, return
          immediately. Stale disk caches trigger the same background refresh.
+         A corrupt or empty disk cache is rejected with a warning.
       4. No cache at all → singleflight foreground network fetch. On
          success, save to disk + in-mem and return.
       5. Any failed refresh (foreground or background) suppresses further
@@ -402,8 +609,9 @@ def fetch_models_dev(
     backoff are bypassed; the function hits the network and only falls back
     to cached data if the call fails. When ``allow_network=False``, any
     memory or disk cache is returned regardless of age and no request is
-    made — used by latency-sensitive paths (gateway route-identity checks)
-    that must never wait on the network.
+    made — used by latency-sensitive paths (gateway route-identity checks,
+    vision routing, context-length lookup) that must never wait on the
+    network.
     """
     global _models_dev_cache, _models_dev_cache_time, _models_dev_retry_after
 
@@ -484,10 +692,28 @@ def fetch_models_dev(
             if now < _models_dev_retry_after:
                 return _models_dev_cache
 
+        # Cold force_refresh (fresh CLI process): stages 1-3 were skipped,
+        # so the memory cache may be empty even though a servable disk
+        # cache + ETag sidecar exist. Hydrate first so the conditional GET
+        # fires (a 304 then re-confirms the disk data instead of
+        # re-downloading the full ~2 MB registry).
+        if force_refresh and not _models_dev_cache:
+            disk = _load_disk_cache()
+            if disk:
+                _models_dev_cache = disk
+                _models_dev_cache_time = 0  # servable but not fresh
+
         try:
-            data = _fetch_models_dev_from_network()
-            _commit_registry(data, where="foreground")
+            data, etag = _fetch_models_dev_from_network(
+                conditional=bool(_models_dev_cache)
+            )
+            _commit_registry(data, etag=etag, where="foreground")
             return data
+        except _NotModified:
+            # Server confirmed our cache is still valid. Re-confirm freshness
+            # without re-downloading the full registry.
+            _confirm_cache_not_modified(where="foreground")
+            return _models_dev_cache
         except Exception as e:
             _note_refresh_failure(e, where="foreground")
 
@@ -506,7 +732,9 @@ def fetch_models_dev(
         return _models_dev_cache
 
 
-def lookup_models_dev_context(provider: str, model: str) -> Optional[int]:
+def lookup_models_dev_context(
+    provider: str, model: str, *, allow_network: bool = False
+) -> Optional[int]:
     """Look up context_length for a provider+model combo in models.dev.
 
     Returns the context window in tokens, or None if not found.
@@ -516,6 +744,10 @@ def lookup_models_dev_context(provider: str, model: str) -> Optional[int]:
     wins over the catalog value; ``_default`` entries fill the gap only
     when the catalog has no answer — the supported self-unblock path for
     models with wrong or missing context in models.dev (#84482).
+
+    ``allow_network`` defaults to False — context-length lookup is a
+    hot path (called during every conversation turn) and must never block
+    on the network. Pass True only from explicit refresh flows.
     """
     # Explicit config override — checked before catalog so it always wins.
     override_ctx = _override_context_window(provider, model)
@@ -526,7 +758,14 @@ def lookup_models_dev_context(provider: str, model: str) -> Optional[int]:
     if not mdev_provider_id:
         return _default_override_context(provider)
 
-    data = fetch_models_dev()
+    # NOTE: keep the zero-argument call on the allow_network path. Dozens
+    # of test sites monkeypatch fetch_models_dev with zero-arg lambdas;
+    # passing the kwarg unconditionally breaks them all (TypeError).
+    data = (
+        fetch_models_dev()
+        if allow_network
+        else fetch_models_dev(allow_network=False)
+    )
     provider_data = data.get(mdev_provider_id)
     if not isinstance(provider_data, dict):
         return _default_override_context(provider)
@@ -855,16 +1094,28 @@ def _merge_catalog_entry_with_override(
     return merged
 
 
-def _get_provider_models(provider: str) -> Optional[Dict[str, Any]]:
+def _get_provider_models(
+    provider: str, *, allow_network: bool = False
+) -> Optional[Dict[str, Any]]:
     """Resolve a Hermes provider ID to its models dict from models.dev.
 
     Returns the models dict or None if the provider is unknown or has no data.
+
+    ``allow_network`` defaults to False — this is called from hot paths
+    (vision routing, image routing, capability checks) and must never block.
     """
     mdev_provider_id = PROVIDER_TO_MODELS_DEV.get(provider)
     if not mdev_provider_id:
         return None
 
-    data = fetch_models_dev()
+    # NOTE: keep the zero-argument call on the allow_network path. Dozens
+    # of test sites monkeypatch fetch_models_dev with zero-arg lambdas;
+    # passing the kwarg unconditionally breaks them all (TypeError).
+    data = (
+        fetch_models_dev()
+        if allow_network
+        else fetch_models_dev(allow_network=False)
+    )
     provider_data = data.get(mdev_provider_id)
     if not isinstance(provider_data, dict):
         return None
@@ -911,7 +1162,9 @@ def _find_model_entry(models: Dict[str, Any], model: str) -> Optional[Dict[str, 
     return None
 
 
-def get_model_capabilities(provider: str, model: str) -> Optional[ModelCapabilities]:
+def get_model_capabilities(
+    provider: str, model: str, *, allow_network: bool = False
+) -> Optional[ModelCapabilities]:
     """Look up full capability metadata from models.dev cache.
 
     Uses the existing fetch_models_dev() and PROVIDER_TO_MODELS_DEV mapping.
@@ -925,6 +1178,9 @@ def get_model_capabilities(provider: str, model: str) -> Optional[ModelCapabilit
     of fields; unspecified fields fall through to the catalog value (or
     sensible defaults when the model is absent from the catalog).
 
+    ``allow_network`` defaults to False — capability lookup is a hot path
+    (vision routing, image routing) and must never block on the network.
+
     Extracts from model entry fields:
       - reasoning  (bool)  → supports_reasoning
       - tool_call  (bool)  → supports_tools
@@ -933,7 +1189,7 @@ def get_model_capabilities(provider: str, model: str) -> Optional[ModelCapabilit
       - limit.output  (int) → max_output_tokens
       - family     (str)   → model_family
     """
-    models = _get_provider_models(provider)
+    models = _get_provider_models(provider, allow_network=allow_network)
     entry = _find_model_entry(models, model) if models is not None else None
 
     # Select the override AFTER the catalog lookup: explicit overrides
@@ -1010,15 +1266,21 @@ def get_model_capabilities(provider: str, model: str) -> Optional[ModelCapabilit
     )
 
 
-def list_provider_models(provider: str) -> List[str]:
+def list_provider_models(
+    provider: str, *, allow_network: bool = True
+) -> List[str]:
     """Return all model IDs for a provider from models.dev.
 
     Returns an empty list if the provider is unknown or has no data.
+
+    ``allow_network`` defaults to True — this is called from the model
+    picker (``hermes model``), which is an interactive user-facing flow
+    where a fresh catalog is worth a short network wait.
     """
     from hermes_cli.models import normalize_provider
     provider = normalize_provider(provider) or provider
     
-    models = _get_provider_models(provider)
+    models = _get_provider_models(provider, allow_network=allow_network)
     if models is None:
         return []
     return [
@@ -1074,14 +1336,19 @@ def _should_hide_from_provider_catalog(provider: str, model_id: str) -> bool:
     return False
 
 
-def list_agentic_models(provider: str) -> List[str]:
+def list_agentic_models(
+    provider: str, *, allow_network: bool = True
+) -> List[str]:
     """Return model IDs suitable for agentic use from models.dev.
 
     Filters for tool_call=True and excludes noise (TTS, embedding,
     dated preview snapshots, live/streaming, image-only models).
     Returns an empty list on any failure.
+
+    ``allow_network`` defaults to True — like ``list_provider_models``,
+    this is called from interactive model selection flows.
     """
-    models = _get_provider_models(provider)
+    models = _get_provider_models(provider, allow_network=allow_network)
     if models is None:
         return []
 
@@ -1180,6 +1447,11 @@ def get_provider_info(
 
     Accepts either a Hermes provider ID (e.g. "kilocode") or a models.dev
     ID (e.g. "kilo").  Returns None if the provider is not in the catalog.
+
+    ``allow_network`` defaults to True — the primary caller is
+    ``resolve_provider_full`` during interactive setup, where a fresh
+    catalog is worth a short network wait. Hot-path callers should pass
+    ``allow_network=False``.
     """
     # Resolve Hermes ID → models.dev ID
     mdev_id = PROVIDER_TO_MODELS_DEV.get(provider_id, provider_id)
@@ -1204,7 +1476,7 @@ def get_provider_info(
 # ---------------------------------------------------------------------------
 
 def get_model_info(
-    provider_id: str, model_id: str
+    provider_id: str, model_id: str, *, allow_network: bool = False
 ) -> Optional[ModelInfo]:
     """Get full model metadata from models.dev.
 
@@ -1218,6 +1490,9 @@ def get_model_info(
     ``modalities``) are merged rather than clobbered. EXPLICIT entries
     patch known catalog models; ``_default`` entries fill the gap only
     for models the catalog does not know (#8731, #84482).
+
+    ``allow_network`` defaults to False — model info lookup is a hot path
+    (cost guard, inventory) and must never block on the network.
     """
     mdev_id = PROVIDER_TO_MODELS_DEV.get(provider_id, provider_id)
 
@@ -1236,7 +1511,14 @@ def get_model_info(
         shaped = _merge_catalog_entry_with_override(base, override)
         return _parse_model_info(model_id, shaped, mdev_id)
 
-    data = fetch_models_dev()
+    # NOTE: keep the zero-argument call on the allow_network path. Dozens
+    # of test sites monkeypatch fetch_models_dev with zero-arg lambdas;
+    # passing the kwarg unconditionally breaks them all (TypeError).
+    data = (
+        fetch_models_dev()
+        if allow_network
+        else fetch_models_dev(allow_network=False)
+    )
     pdata = data.get(mdev_id)
     if not isinstance(pdata, dict):
         return _from_override_alone()
