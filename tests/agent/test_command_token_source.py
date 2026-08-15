@@ -14,6 +14,7 @@ behaviours that make the feature work:
 
 from __future__ import annotations
 
+import sys
 import time
 from types import SimpleNamespace
 
@@ -25,6 +26,11 @@ from agent.command_token_source import (
     _mint,
     build_command_token_provider,
 )
+
+
+def _python_key_cmd(script: str) -> str:
+    """Return a ``key_cmd`` that works under both POSIX shells and ``cmd.exe``."""
+    return f'"{sys.executable}" -c "{script}"'
 
 
 class TestMinting:
@@ -90,18 +96,33 @@ class TestNoCredentialLeak:
         assert "SENTINEL" not in str(excinfo.value)
 
 
+class TestCredentialScoping:
+    def test_key_cmd_does_not_inherit_provider_credentials(self, monkeypatch):
+        """A token helper gets a scrubbed child env unless explicitly allowed."""
+        monkeypatch.setenv("OPENAI_API_KEY", "security-test-sentinel")
+        source = CommandTokenSource(
+            _python_key_cmd(
+                "import os; print('present' if os.getenv('OPENAI_API_KEY') else 'absent')"
+            ),
+            "dbx",
+        )
+        assert source() == "absent"
+
+
 class TestCaching:
     def test_token_is_cached_between_calls(self):
         """Without caching the command would run on every request."""
         # A command whose output changes each run: equal results prove caching.
-        source = CommandTokenSource("date +%s%N", "dbx")
+        source = CommandTokenSource(_python_key_cmd("import time; print(time.time_ns())"), "dbx")
         assert source() == source()
 
     def test_expired_token_is_reminted(self):
         # date +%s%N changes every run; $RANDOM would be bash-only (empty
         # under dash, which is what /bin/sh is on Debian-family CI).
         source = CommandTokenSource(
-            """printf '{"access_token":"tok-%s","expires_in":3600}' "$(date +%s%N)" """,
+            _python_key_cmd(
+                "import json, time; print(json.dumps({'access_token': 'tok-' + str(time.time_ns()), 'expires_in': 3600}))"
+            ),
             "dbx",
         )
         first = source()
@@ -119,7 +140,7 @@ class TestCaching:
         """
         from agent.command_token_source import _NO_TTL_REFRESH_SECONDS
 
-        source = CommandTokenSource("date +%s%N", "dbx")
+        source = CommandTokenSource(_python_key_cmd("import time; print(time.time_ns())"), "dbx")
         first = source()
         assert 0 < source._expires_at - time.monotonic() <= _NO_TTL_REFRESH_SECONDS
         assert source() == first  # cached inside the window
@@ -282,9 +303,12 @@ class TestAbsoluteExpiry:
     def test_the_token_actually_gets_re_minted(self, tmp_path):
         """The regression that mattered: a deadline must expire the cache."""
         counter = tmp_path / "calls"
-        cmd = (
-            f"printf x >> {counter}; "
-            f"printf '%s' '{{\"access_token\":\"t\",\"expiry\":\"{self._iso(1)}\"}}'"
+        payload = {"access_token": "t", "expiry": self._iso(1)}
+        cmd = _python_key_cmd(
+            "from pathlib import Path; import json; "
+            f"p = Path({str(counter)!r}); "
+            "p.write_text((p.read_text() if p.exists() else '') + 'x'); "
+            f"print(json.dumps({payload!r}))"
         )
         src = CommandTokenSource(cmd, "p")
         src()

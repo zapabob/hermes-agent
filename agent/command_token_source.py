@@ -65,6 +65,20 @@ class CommandTokenError(RuntimeError):
 
 def _mint(command: str, label: str) -> tuple[str, Optional[float]]:
     """Run *command*, returning ``(token, ttl_seconds_or_None)``."""
+    # A configured helper is an external child process, not part of the
+    # trusted Hermes process.  It must receive the same credential-scoped
+    # environment as every other subprocess surface (SECURITY.md §2.3).
+    # Import lazily so resolving a static provider never loads terminal
+    # environment machinery.
+    try:
+        from tools.environments.local import build_subprocess_env
+
+        child_env = build_subprocess_env()
+    except Exception as exc:
+        raise CommandTokenError(
+            f"key_cmd for provider {label!r} could not prepare a credential-scoped environment"
+        ) from exc
+
     try:
         completed = subprocess.run(
             command,
@@ -72,6 +86,7 @@ def _mint(command: str, label: str) -> tuple[str, Optional[float]]:
             capture_output=True,
             text=True,
             timeout=_MINT_TIMEOUT_SECONDS,
+            env=child_env,
         )
     except subprocess.TimeoutExpired as exc:
         raise CommandTokenError(
