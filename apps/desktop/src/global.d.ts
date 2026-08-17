@@ -294,6 +294,21 @@ declare global {
         // new-worktree dialog. The remote default (origin/HEAD) is flagged so
         // the UI can preselect it.
         baseBranchList: (repoPath: string) => Promise<HermesGitBaseBranch[]>
+        // Branch / tag / stash CRUD and fetch/pull for the SCM rail. Reads
+        // degrade to empty on a non-repo / remote backend; mutations reject so
+        // the UI can toast the reason.
+        branchCreate: (repoPath: string, name: string, base?: null | string) => Promise<{ ok: boolean }>
+        branchRename: (repoPath: string, name: string, newName: string) => Promise<{ ok: boolean }>
+        branchDelete: (repoPath: string, name: string, force?: boolean) => Promise<{ ok: boolean }>
+        tagList: (repoPath: string) => Promise<HermesGitTag[]>
+        tagCreate: (repoPath: string, name: string, target?: null | string) => Promise<{ ok: boolean }>
+        tagDelete: (repoPath: string, name: string) => Promise<{ ok: boolean }>
+        stashList: (repoPath: string) => Promise<HermesGitStash[]>
+        stashCreate: (repoPath: string, message?: null | string, includeUntracked?: boolean) => Promise<{ ok: boolean }>
+        stashApply: (repoPath: string, index: number) => Promise<{ ok: boolean }>
+        stashDrop: (repoPath: string, index: number) => Promise<{ ok: boolean }>
+        fetch: (repoPath: string, remote?: null | string) => Promise<{ ok: boolean }>
+        pull: (repoPath: string, rebase?: boolean) => Promise<{ ok: boolean }>
         // Compact working-tree status for the composer coding rail. Null on a
         // non-repo / remote backend (where the Electron probe can't run).
         repoStatus: (repoPath: string) => Promise<HermesRepoStatus | null>
@@ -1102,6 +1117,7 @@ export interface HermesGitBranch {
   isDefault: boolean
   isRemote: boolean
   worktreePath: null | string
+  sha: string
 }
 
 // A branch the new worktree can be based on: local heads + remote-tracking
@@ -1181,6 +1197,28 @@ export interface HermesGitCommit {
   author: string
   // ISO-8601 author timestamp as returned by `git log --date=iso-strict`.
   authoredAt: string
+}
+
+// One tag in the repo, newest-first. `sha` is the commit the tag points at
+// (peeled for annotated tags), so the History surface can jump to it.
+export interface HermesGitTag {
+  name: string
+  sha: string
+  shortSha: string
+  // ISO-8601 creation time as returned by `for-each-ref`.
+  date: string
+  subject: string
+}
+
+// One entry of `git stash` (the stash reflog), newest-first. `index` is the
+// `stash@{N}` number the UI passes back to apply / drop.
+export interface HermesGitStash {
+  index: number
+  id: string
+  sha: string
+  shortSha: string
+  date: string
+  message: string
 }
 
 // The branch's PR (if any) as reported by `gh pr view`.

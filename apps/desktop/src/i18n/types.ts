@@ -2000,6 +2000,35 @@ export interface Translations {
       switchTo: (branch: string) => string
       switchFailed: (branch: string) => string
       worktrees: string
+      scm: string
+      branches: string
+      tags: string
+      stashes: string
+      noBranches: string
+      noTags: string
+      noStashes: string
+      checkedOut: string
+      fetch: string
+      pull: string
+      createBranch: string
+      createBranchDesc: string
+      renameBranch: string
+      renameBranchDesc: (name: string) => string
+      deleteBranch: string
+      deleteBranchConfirm: (name: string) => string
+      createTag: string
+      createTagDesc: string
+      deleteTag: string
+      deleteTagConfirm: (name: string) => string
+      stashChanges: string
+      stashChangesDesc: string
+      stashMessage: string
+      stashMessagePlaceholder: string
+      applyStash: string
+      dropStash: string
+      dropStashConfirm: (id: string) => string
+      branchName: string
+      tagName: string
     }
   }
 

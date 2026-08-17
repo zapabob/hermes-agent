@@ -32,6 +32,7 @@ const OPEN_KEY = 'hermes.desktop.reviewOpen'
 const COMMIT_DEFAULT_KEY = 'hermes.desktop.reviewCommitDefault'
 const TREE_MODE_KEY = 'hermes.desktop.reviewTreeMode'
 const VIEW_KEY = 'hermes.desktop.reviewView'
+const REF_FILTER_KEY = 'hermes.desktop.reviewRefFilter'
 const SELECTED_KEY = 'hermes.desktop.reviewSelectedPath'
 const REVIEW_REFRESH_DEBOUNCE_MS = 100
 const SHIP_INFO_STALE_MS = 30_000
@@ -62,12 +63,14 @@ export function toggleReviewTreeMode(): void {
 // Review has two intentionally separate sources of truth: uncommitted files
 // and immutable commits. Keeping the selection transient avoids restoring a
 // commit from a different worktree after a session switch.
-export type ReviewView = 'changes' | 'history'
+export type ReviewView = 'changes' | 'history' | 'scm'
 
 export const $reviewView = persistentAtom<ReviewView>(VIEW_KEY, 'changes', {
-  decode: raw => (raw === 'history' ? 'history' : 'changes'),
+  decode: raw => (raw === 'history' ? 'history' : raw === 'scm' ? 'scm' : 'changes'),
   encode: value => value
 })
+
+export const $reviewRefFilter = persistentAtom<'all' | 'local' | string>(REF_FILTER_KEY, 'all', Codecs.text)
 
 export const $reviewFiles = atom<HermesReviewFile[]>([])
 export const $reviewLoading = atom(false)
@@ -322,6 +325,10 @@ export function setReviewView(view: ReviewView): void {
   if (view === 'history') {
     void refreshReviewHistory()
   }
+}
+
+export function setReviewRefFilter(filter: 'all' | 'local' | string): void {
+  $reviewRefFilter.set(filter)
 }
 
 function refreshActiveReviewView(): void {

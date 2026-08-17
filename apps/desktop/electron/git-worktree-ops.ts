@@ -8,7 +8,14 @@ import path from 'node:path'
 
 import { resolveRequestedPathForIpc } from './hardening'
 
-function runGit(gitBin, args, cwd): Promise<string> {
+// Unit separator between format fields. Git's pretty-format parser only honors
+// `%xNN` escapes (and for-each-ref honors neither `%xNN` nor `%NN`), so the
+// separator is passed as a literal control byte in the format string — same
+// assumption parseHistory makes for its record/field separators.
+const SEP = String.fromCharCode(31)
+
+// HermesGitBranch now carries a `sha` field (commit the ref points at), so the
+// History surface can display branch/tag markers keyed to commit SHA.
   return new Promise((resolve, reject) => {
     execFile(
       gitBin,
@@ -382,52 +389,58 @@ async function listBranches(repoPath, gitBin) {
 
   try {
     const [localOut, remoteOut] = await Promise.all([
-      runGit(gitBin, ['for-each-ref', '--format=%(refname:short)', '--sort=-committerdate', 'refs/heads'], resolved),
-      runGit(gitBin, ['for-each-ref', '--format=%(refname:short)', '--sort=-committerdate', 'refs/remotes'], resolved)
+      runGit(gitBin, ['for-each-ref', `--format=%(refname:short)${SEP}%(objectname)`, '--sort=-committerdate', 'refs/heads'], resolved),
+      runGit(gitBin, ['for-each-ref', `--format=%(refname:short)${SEP}%(objectname)`, '--sort=-committerdate', 'refs/remotes'], resolved)
     ])
 
     const trees = await listWorktrees(resolved, gitBin)
     const pathByBranch = new Map(trees.filter(tree => tree.branch).map(tree => [tree.branch, tree.path]))
     const trunk = await defaultBranch(gitBin, resolved)
 
-    const names = (out: string) =>
+    const sepParse = (out: string) =>
       out
         .split('\n')
         .map(line => line.trim())
         .filter(Boolean)
+        .map(line => {
+          const [name, ...shaParts] = line.split(SEP)
+          return { name: name || '', sha: shaParts.join(SEP) || '' }
+        })
 
-    const locals = names(localOut)
-    const localSet = new Set(locals)
+    const locals = sepParse(localOut)
+    const localSet = new Set(locals.map(l => l.name))
 
-    const remotes = names(remoteOut).filter(name => {
+    const remotes = sepParse(remoteOut).filter(entry => {
       // "origin/HEAD" is a symbolic alias for the default branch of the remote.
       // It is not a branch, and it shows in the list as a duplicate.
-      if (name.endsWith('/HEAD')) {
+      if (entry.name.endsWith('/HEAD')) {
         return false
       }
 
       // The user reaches a remote branch that they track locally through its
       // local head. To list both is noise, and a checkout of the
       // remote-tracking ref detaches HEAD.
-      return !localSet.has(name.slice(name.indexOf('/') + 1))
+      return !localSet.has(entry.name.slice(entry.name.indexOf('/') + 1))
     })
 
     return [
-      ...locals.map(name => ({
-        name,
-        checkedOut: pathByBranch.has(name),
-        isDefault: Boolean(trunk && name === trunk),
+      ...locals.map(entry => ({
+        name: entry.name,
+        checkedOut: pathByBranch.has(entry.name),
+        isDefault: Boolean(trunk && entry.name === trunk),
         isRemote: false,
-        worktreePath: pathByBranch.get(name) || null
+        worktreePath: pathByBranch.get(entry.name) || null,
+        sha: entry.sha
       })),
-      ...remotes.map(name => ({
+      ...remotes.map(entry => ({
         // A remote branch has no local checkout, and it cannot be the local
         // trunk. It is therefore never checked out and never the default.
-        name,
+        name: entry.name,
         checkedOut: false,
         isDefault: false,
         isRemote: true,
-        worktreePath: null
+        worktreePath: null,
+        sha: entry.sha
       }))
     ]
   } catch {
