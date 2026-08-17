@@ -384,12 +384,12 @@ export function useGatewayBoot({
           return
         }
 
-          publish(conn)
-          setPrimaryGateway(
-            gateway,
-            conn.profile ?? normalizeProfileKey($activeGatewayProfile.get()),
-            conn.connectionId ?? null
-          )
+        publish(conn)
+        setPrimaryGateway(
+          gateway,
+          conn.profile ?? normalizeProfileKey($activeGatewayProfile.get()),
+          conn.connectionId ?? null
+        )
         const wsUrl = await resolveGatewayWsUrl(desktop, conn)
         await gateway.connect(wsUrl)
 
