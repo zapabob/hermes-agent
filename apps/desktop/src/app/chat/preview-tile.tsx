@@ -91,6 +91,14 @@ export function watchPreviewTiles(): void {
   // the already-active tab changes only `$previewTabs` (fresh tab object), while
   // switching tabs changes only the active id.
   const reveal = () => {
+    const tabs = $previewTabs.get()
+
+    for (const tab of tabs) {
+      if (tab.target.kind === 'url') {
+        revealTreePane(`${PREVIEW_TILE_PREFIX}:${tab.id}`)
+      }
+    }
+
     const tabId = $rightRailActiveTabId.get()
 
     if (tabId && targetFor(tabId)) {
@@ -100,6 +108,7 @@ export function watchPreviewTiles(): void {
 
   $rightRailActiveTabId.listen(reveal)
   $previewTabs.listen(reveal)
+  reveal()
 
   // And the reverse: clicking a preview TAB activates its pane in the TREE
   // only, so the store's selection must follow or `$previewTarget` (⌘L quote

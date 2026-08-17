@@ -15,7 +15,7 @@ import { resolveRequestedPathForIpc } from './hardening'
 const SEP = String.fromCharCode(31)
 
 // HermesGitBranch now carries a `sha` field (commit the ref points at), so the
-// History surface can display branch/tag markers keyed to commit SHA.
+function execGit(gitBin, args, cwd) {
   return new Promise((resolve, reject) => {
     execFile(
       gitBin,
