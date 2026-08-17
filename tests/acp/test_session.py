@@ -3,6 +3,7 @@
 import contextlib
 import io
 import json
+import os
 import time
 from types import SimpleNamespace
 import pytest
@@ -168,7 +169,10 @@ class TestSymlinkAliasNormalization:
         real = tmp_path / "real"
         real.mkdir()
         alias = tmp_path / "alias"
-        alias.symlink_to(real)
+        try:
+            alias.symlink_to(real)
+        except OSError as exc:
+            pytest.skip(f"Symlink creation requires elevation on Windows: {exc}")
         assert acp_session._normalize_cwd_for_compare(
             str(alias)
         ) == acp_session._normalize_cwd_for_compare(str(real))
@@ -188,13 +192,16 @@ class TestSymlinkAliasNormalization:
         # exactly as the old normpath comparison did.
         assert acp_session._normalize_cwd_for_compare(
             "/nonexistent-hermes-test/x/../y"
-        ) == "/nonexistent-hermes-test/y"
+        ) == os.path.realpath("/nonexistent-hermes-test/y")
 
     def test_list_sessions_matches_symlink_alias_cwd(self, manager, tmp_path):
         real = tmp_path / "proj"
         real.mkdir()
         alias = tmp_path / "link"
-        alias.symlink_to(real)
+        try:
+            alias.symlink_to(real)
+        except OSError as exc:
+            pytest.skip(f"Symlink creation requires elevation on Windows: {exc}")
         state = manager.create_session(cwd=str(real))
         state.history.append({"role": "user", "content": "hello"})
         listed = manager.list_sessions(cwd=str(alias))

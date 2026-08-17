@@ -1,4 +1,4 @@
-﻿# One-shot: stop Hermes Desktop, rebuild from Documents source, retarget
+# One-shot: stop Hermes Desktop, rebuild from Documents source, retarget
 # shortcuts, restart Desktop, and restart llama hot-swap (RTX 5060 Ti).
 #
 # Usage (PowerShell):
@@ -58,19 +58,31 @@ Get-Process Hermes, electron, hermes -ErrorAction SilentlyContinue | ForEach-Obj
 Start-Sleep -Seconds 2
 
 if (-not $SkipDesktopRebuild) {
-    Write-Step "npm install (repo root) + apps/desktop build"
+    Write-Step "corepack pnpm install (repo root) + apps/desktop build"
     Push-Location -LiteralPath $RepoRoot
     try {
-        npm install
-        if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
+        if (Get-Command corepack -ErrorAction SilentlyContinue) {
+            corepack pnpm install
+        } elseif (Get-Command pnpm -ErrorAction SilentlyContinue) {
+            pnpm install
+        } else {
+            npm install
+        }
+        if ($LASTEXITCODE -ne 0) { throw "install failed" }
     } finally {
         Pop-Location
     }
     $desktop = Join-Path $RepoRoot "apps\desktop"
     Push-Location -LiteralPath $desktop
     try {
-        npm run build
-        if ($LASTEXITCODE -ne 0) { throw "npm run build failed" }
+        if (Get-Command corepack -ErrorAction SilentlyContinue) {
+            corepack pnpm --filter @hermes/desktop build
+        } elseif (Get-Command pnpm -ErrorAction SilentlyContinue) {
+            pnpm --filter @hermes/desktop build
+        } else {
+            npm run build
+        }
+        if ($LASTEXITCODE -ne 0) { throw "build failed" }
     } finally {
         Pop-Location
     }

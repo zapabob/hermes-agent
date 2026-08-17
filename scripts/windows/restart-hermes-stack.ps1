@@ -108,7 +108,12 @@ if ($StartLlama) {
     $hotswapScript = Join-Path $PSScriptRoot "start-llama-hotswap.ps1"
     if (Test-Path -LiteralPath $hotswapScript) {
         Write-Step "Starting llama hot-swap router on :8080 (primary + Huihui agentic Q4_K_M)"
-        & $hotswapScript -WaitSeconds $WaitModelsSeconds
+        $runtimePreset = Join-Path $HermesHome "llama\models-hotswap-primary-secondary.ini"
+        if (Test-Path -LiteralPath $runtimePreset) {
+            & $hotswapScript -RuntimePresetPath $runtimePreset -WaitSeconds $WaitModelsSeconds
+        } else {
+            & $hotswapScript -WaitSeconds $WaitModelsSeconds
+        }
     } else {
         Write-Step "Starting llama secretary on :8080 (H: HF cache)"
         & (Join-Path $PSScriptRoot "start-llama-secretary.ps1") -WaitSeconds $WaitModelsSeconds

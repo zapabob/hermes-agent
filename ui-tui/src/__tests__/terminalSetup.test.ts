@@ -450,7 +450,9 @@ describe('configureTerminalKeybindings', () => {
     await expect(
       shouldPromptForTerminalSetup({
         env: { TERM_PROGRAM: 'vscode' } as NodeJS.ProcessEnv,
-        fileOps: { readFile: readLegacy }
+        fileOps: { readFile: readLegacy },
+        homeDir: '/Users/me',
+        platform: 'darwin'
       })
     ).resolves.toBe(true)
   })

@@ -25,8 +25,6 @@ export type GatewayEventName =
 
 export interface GatewayEvent<P = unknown> {
   payload?: P
-  /** Renderer-side source tag added by the Desktop gateway registry. */
-  connectionId?: string
   profile?: string
   /** Registry connection whose socket delivered the event (renderer-side tag;
    * absent for the local/legacy primary path). */

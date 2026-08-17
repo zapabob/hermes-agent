@@ -381,14 +381,22 @@ describe('body prose stays in the theme palette', () => {
     // chalk is a singleton and defaults to level 0 under vitest (no TTY),
     // which would emit no SGR at all and make every assertion here vacuous.
     const savedLevel = chalk.level
+    const savedForceColor = process.env.FORCE_COLOR
+    const savedColorTerm = process.env.COLORTERM
+    const savedTermProgram = process.env.TERM_PROGRAM
+    const savedHermesTruecolor = process.env.HERMES_TUI_TRUECOLOR
     chalk.level = 3
+    process.env.FORCE_COLOR = '3'
+    process.env.COLORTERM = 'truecolor'
+    process.env.TERM_PROGRAM = 'vscode'
+    process.env.HERMES_TUI_TRUECOLOR = '1'
 
     const stdout = new PassThrough()
     const stdin = new PassThrough()
     const stderr = new PassThrough()
     let output = ''
 
-    Object.assign(stdout, { columns: 80, isTTY: true, rows: 24 })
+    Object.assign(stdout, { columns: 80, getColorDepth: () => 24, isTTY: true, rows: 24 })
     Object.assign(stdin, { isTTY: false })
     Object.assign(stderr, { isTTY: false })
     stdout.on('data', chunk => {
@@ -408,6 +416,26 @@ describe('body prose stays in the theme palette', () => {
     instance.unmount()
     instance.cleanup()
     chalk.level = savedLevel
+    if (savedForceColor !== undefined) {
+      process.env.FORCE_COLOR = savedForceColor
+    } else {
+      delete process.env.FORCE_COLOR
+    }
+    if (savedColorTerm !== undefined) {
+      process.env.COLORTERM = savedColorTerm
+    } else {
+      delete process.env.COLORTERM
+    }
+    if (savedTermProgram !== undefined) {
+      process.env.TERM_PROGRAM = savedTermProgram
+    } else {
+      delete process.env.TERM_PROGRAM
+    }
+    if (savedHermesTruecolor !== undefined) {
+      process.env.HERMES_TUI_TRUECOLOR = savedHermesTruecolor
+    } else {
+      delete process.env.HERMES_TUI_TRUECOLOR
+    }
 
     return [...output.matchAll(new RegExp(`${ESC}\\[38;2;(\\d+);(\\d+);(\\d+)m`, 'g'))].map(
       m =>

@@ -114,6 +114,14 @@ export const colorize = (str: string, color: string | undefined, type: ColorType
     return str
   }
 
+  if (
+    process.env.FORCE_COLOR === '3' ||
+    process.env.COLORTERM === 'truecolor' ||
+    process.env.HERMES_TUI_TRUECOLOR === '1'
+  ) {
+    chalk.level = 3
+  }
+
   if (color.startsWith('ansi:')) {
     const value = color.substring('ansi:'.length)
 

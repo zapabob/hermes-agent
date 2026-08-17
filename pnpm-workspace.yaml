@@ -1,2 +1,10 @@
+packages:
+  - 'apps/*'
+  - 'ui-tui'
+  - 'ui-tui/packages/*'
+  - 'web'
+  - 'tests-js'
+
 allowBuilds:
   agent-browser: set this to true or false
+
