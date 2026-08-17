@@ -2,6 +2,8 @@ import type {
   HermesGitBaseBranch,
   HermesGitBranch,
   HermesGitCommit,
+  HermesGitStash,
+  HermesGitTag,
   HermesGitWorktree,
   HermesRepoPullRequests,
   HermesRepoStatus,
@@ -65,6 +67,33 @@ const remoteGit: GitBridge = {
     (await gitGet<{ branches: HermesGitBaseBranch[] }>('base-branches', { path: repoPath })).branches,
 
   repoStatus: repoPath => gitGet<HermesRepoStatus | null>('status', { path: repoPath }),
+
+  tagList: async repoPath => (await gitGet<{ tags: HermesGitTag[] }>('tags', { path: repoPath })).tags,
+
+  stashList: async repoPath => (await gitGet<{ stashes: HermesGitStash[] }>('stashes', { path: repoPath })).stashes,
+
+  branchCreate: (repoPath, name, base) =>
+    gitPost('branch/create', { base: base ?? null, name, path: repoPath }),
+
+  branchRename: (repoPath, name, newName) => gitPost('branch/rename', { name, newName, path: repoPath }),
+
+  branchDelete: (repoPath, name, force) => gitPost('branch/delete', { force: force ?? false, name, path: repoPath }),
+
+  tagCreate: (repoPath, name, target) =>
+    gitPost('tag/create', { name, path: repoPath, target: target ?? null }),
+
+  tagDelete: (repoPath, name) => gitPost('tag/delete', { name, path: repoPath }),
+
+  stashCreate: (repoPath, message, includeUntracked) =>
+    gitPost('stash/create', { includeUntracked: includeUntracked ?? false, message: message ?? null, path: repoPath }),
+
+  stashApply: (repoPath, index) => gitPost('stash/apply', { index, path: repoPath }),
+
+  stashDrop: (repoPath, index) => gitPost('stash/drop', { index, path: repoPath }),
+
+  fetch: (repoPath, remote) => gitPost('fetch', { path: repoPath, remote: remote ?? null }),
+
+  pull: (repoPath, rebase) => gitPost('pull', { path: repoPath, rebase: rebase ?? false }),
 
   fileDiff: async (repoPath, filePath) =>
     (await gitGet<{ diff: string }>('file-diff', { file: filePath, path: repoPath })).diff,

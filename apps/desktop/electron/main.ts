@@ -156,6 +156,20 @@ import {
 import { probeGatewayWebSocket } from './gateway-ws-probe'
 import { scanGitRepos } from './git-repo-scan'
 import {
+  branchCreate,
+  branchDelete,
+  branchRename,
+  gitFetch,
+  gitPull,
+  listStashes,
+  listTags,
+  stashApply,
+  stashCreate,
+  stashDrop,
+  tagCreate,
+  tagDelete
+} from './git-ref-ops'
+import {
   fileDiffVsHead,
   repoStatus,
   reviewCommit,
@@ -14570,6 +14584,45 @@ ipcMain.handle('hermes:git:baseBranchList', async (_event, repoPath) => listBase
 // composer coding rail. Returns null on a non-repo / remote backend so the rail
 // hides cleanly rather than erroring.
 ipcMain.handle('hermes:git:repoStatus', async (_event, repoPath) => repoStatus(repoPath, resolveGitBinary()))
+
+// Branch / tag / stash CRUD and fetch/pull for the SCM rail. Reads degrade to
+// empty on a non-repo / remote backend; mutations reject so the renderer can
+// toast the reason.
+ipcMain.handle('hermes:git:tagList', async (_event, repoPath) => listTags(repoPath, resolveGitBinary()))
+
+ipcMain.handle('hermes:git:stashList', async (_event, repoPath) => listStashes(repoPath, resolveGitBinary()))
+
+ipcMain.handle('hermes:git:branchCreate', async (_event, repoPath, name, base) =>
+  branchCreate(repoPath, name, base, resolveGitBinary())
+)
+
+ipcMain.handle('hermes:git:branchRename', async (_event, repoPath, name, newName) =>
+  branchRename(repoPath, name, newName, resolveGitBinary())
+)
+
+ipcMain.handle('hermes:git:branchDelete', async (_event, repoPath, name, force) =>
+  branchDelete(repoPath, name, force, resolveGitBinary())
+)
+
+ipcMain.handle('hermes:git:tagCreate', async (_event, repoPath, name, target) =>
+  tagCreate(repoPath, name, target, resolveGitBinary())
+)
+
+ipcMain.handle('hermes:git:tagDelete', async (_event, repoPath, name) => tagDelete(repoPath, name, resolveGitBinary()))
+
+ipcMain.handle('hermes:git:stashCreate', async (_event, repoPath, message, includeUntracked) =>
+  stashCreate(repoPath, message, includeUntracked, resolveGitBinary())
+)
+
+ipcMain.handle('hermes:git:stashApply', async (_event, repoPath, index) =>
+  stashApply(repoPath, index, resolveGitBinary())
+)
+
+ipcMain.handle('hermes:git:stashDrop', async (_event, repoPath, index) => stashDrop(repoPath, index, resolveGitBinary()))
+
+ipcMain.handle('hermes:git:fetch', async (_event, repoPath, remote) => gitFetch(repoPath, remote, resolveGitBinary()))
+
+ipcMain.handle('hermes:git:pull', async (_event, repoPath, rebase) => gitPull(repoPath, rebase, resolveGitBinary()))
 
 // Codex-style review pane: list changed files for a scope, fetch one file's
 // unified diff, and stage / unstage / revert. Reads return empty on failure;

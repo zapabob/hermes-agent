@@ -833,50 +833,53 @@ def branch_list(cwd: str) -> list[dict]:
     reachable without a manual checkout). Parity with the Electron op — a
     remote gateway serves this mirror for the same desktop UI (#81724)."""
     out = _git_out(
-        cwd, ["for-each-ref", "--format=%(refname:short)", "--sort=-committerdate", "refs/heads"]
+        cwd, ["for-each-ref", f"--format={_SEP}%(refname:short){_SEP}%(objectname)", "--sort=-committerdate", "refs/heads"]
     )
     if not out:
         return []
     trees = worktree_list(cwd)
     path_by_branch = {t["branch"]: t["path"] for t in trees if t["branch"]}
     trunk = _default_branch(cwd)
-    locals_ = [name for name in (line.strip() for line in out.split("\n")) if name]
-    local_set = set(locals_)
+    sepParse = lambda line: {"name": line.split(_SEP)[1], "sha": line.split(_SEP)[2]} if _SEP in line else {"name": line, "sha": ""}
+    locals_ = [{"name": line.split(_SEP)[1], "sha": _SEP.join(line.split(_SEP)[2:])} for line in out.split("\n") if line.strip()]
+    local_set = set(l["name"] for l in locals_)
     remote_out = _git_out(
-        cwd, ["for-each-ref", "--format=%(refname:short)", "--sort=-committerdate", "refs/remotes"]
+        cwd, ["for-each-ref", f"--format={_SEP}%(refname:short){_SEP}%(objectname)", "--sort=-committerdate", "refs/remotes"]
     )
     remotes = [
-        name
-        for name in (line.strip() for line in remote_out.split("\n"))
-        if name
+        entry
+        for entry in [sepParse(line) for line in remote_out.split("\n") if line.strip()]
+        if entry["name"]
         # "origin/HEAD" is a symbolic alias for the remote's default branch —
         # not a branch, and a duplicate row in the list.
-        and not name.endswith("/HEAD")
+        and not entry["name"].endswith("/HEAD")
         # A remote branch tracked locally is reachable via its local head; a
         # second row is noise, and checking out the remote ref detaches HEAD.
-        and name.split("/", 1)[-1] not in local_set
+        and entry["name"].split("/", 1)[-1] not in local_set
     ]
     return [
         *(
             {
-                "name": name,
-                "checkedOut": name in path_by_branch,
-                "isDefault": bool(trunk and name == trunk),
+                "name": entry["name"],
+                "checkedOut": entry["name"] in path_by_branch,
+                "isDefault": bool(trunk and entry["name"] == trunk),
                 "isRemote": False,
-                "worktreePath": path_by_branch.get(name),
+                "worktreePath": path_by_branch.get(entry["name"]),
+                "sha": entry["sha"]
             }
-            for name in locals_
+            for entry in locals_
         ),
         *(
             {
                 # No local checkout, and never the local trunk.
-                "name": name,
+                "name": entry["name"],
                 "checkedOut": False,
                 "isDefault": False,
                 "isRemote": True,
                 "worktreePath": None,
+                "sha": entry["sha"]
             }
-            for name in remotes
+            for entry in remotes
         ),
     ]
 
@@ -887,6 +890,206 @@ def branch_switch(cwd: str, branch: str) -> dict:
         raise RuntimeError("Branch name is required.")
     _git_ok(cwd, ["switch", target])
     return {"branch": target}
+
+
+# ── scm rail (branches/tags/stashes CRUD + fetch/pull) ───────────────────────
+# Mirror of the Electron SCM-rail ops (apps/desktop/electron/git-ref-ops.ts) so
+# a *remote* gateway serves the same rail. Shapes, validation and failure
+# semantics are identical; validation uses git's own ref grammar
+# (`check-ref-format`) at the boundary — never `_sanitize_branch`, because a
+# rewritten name would hide a typo the user should see.
+
+_SEP = "\x1f"
+
+
+def _assert_branch_name(cwd: str, name: str) -> str:
+    label = str(name or "").strip()
+    if not label:
+        raise RuntimeError("Branch name is required.")
+    code, _, _ = _git(cwd, ["check-ref-format", "--branch", label])
+    if code != 0:
+        raise RuntimeError("Invalid branch name.")
+    return label
+
+
+def _assert_tag_name(cwd: str, name: str) -> str:
+    label = str(name or "").strip()
+    if not label:
+        raise RuntimeError("Tag name is required.")
+    code, _, _ = _git(cwd, ["check-ref-format", f"refs/tags/{label}"])
+    if code != 0:
+        raise RuntimeError("Invalid tag name.")
+    return label
+
+
+def _assert_ref_arg(value: str, label: str) -> str:
+    """A ref the renderer picked from a listing — option-like or whitespace-
+    bearing values can't come from those lists, so reject them outright."""
+    clean = str(value or "").strip()
+    if not clean or re.search(r"\s", clean) or clean.startswith("-"):
+        raise RuntimeError(f"Invalid {label}.")
+    return clean
+
+
+def _assert_remote_name(value: str) -> str:
+    """Remote names follow a tighter grammar than refs: no slash, no leading dash."""
+    clean = str(value or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", clean):
+        raise RuntimeError("Invalid remote name.")
+    return clean
+
+
+def _assert_stash_index(value) -> int:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        raise RuntimeError("Invalid stash index.") from None
+    if n < 0 or n > 100_000:
+        raise RuntimeError("Invalid stash index.")
+    return n
+
+
+def tag_list(cwd: str) -> list[dict]:
+    """Tags newest-first: name, peeled commit sha ('' for a lightweight tag),
+    tag-object sha, author date, subject. Degrades to [] on a non-repo."""
+    if not _is_dir(cwd):
+        return []
+    out = _git_out(
+        cwd,
+        [
+            "for-each-ref",
+            "--sort=-creatordate",
+            f"--format=%(refname:short){_SEP}%(*objectname){_SEP}%(objectname){_SEP}%(creatordate:iso-strict){_SEP}%(subject)",
+            "refs/tags",
+        ],
+    )
+    tags = []
+    for line in out.splitlines():
+        parts = line.split(_SEP)
+        if len(parts) < 4 or not parts[0]:
+            continue
+        name, peeled, obj, date = parts[:4]
+        sha = peeled or obj
+        tags.append(
+            {
+                "name": name,
+                "sha": sha,
+                "shortSha": sha[:7],
+                "date": date,
+                "subject": _SEP.join(parts[4:]),
+            }
+        )
+    return tags
+
+
+_STASH_RE = re.compile(r"^stash@\{(\d+)\}$")
+
+
+def stash_list(cwd: str) -> list[dict]:
+    """Stash rows from the stash reflog (`stash@{N}`, sha, date, message — git
+    prefixes "On <branch>: " unless a message was set). Degrades to [] on a
+    non-repo / no stashes (`git log -g refs/stash` exits non-zero then)."""
+    if not _is_dir(cwd):
+        return []
+    out = _git_out(cwd, ["log", "-g", f"--format=%gd{_SEP}%H{_SEP}%aI{_SEP}%s", "refs/stash"])
+    stashes = []
+    for line in out.splitlines():
+        parts = line.split(_SEP)
+        if len(parts) < 3:
+            continue
+        rid, sha, date = parts[:3]
+        match = _STASH_RE.match(rid or "")
+        stashes.append(
+            {
+                "index": int(match.group(1)) if match else -1,
+                "id": rid,
+                "sha": sha,
+                "shortSha": sha[:7],
+                "date": date,
+                "message": _SEP.join(parts[3:]),
+            }
+        )
+    return stashes
+
+
+def branch_create(cwd: str, name: str, base: str | None) -> dict:
+    name = _assert_branch_name(cwd, name)
+    args = ["branch", name]
+    if base:
+        args.append(_assert_ref_arg(base, "branch base"))
+    _git_ok(cwd, args)
+    return {"ok": True}
+
+
+def branch_rename(cwd: str, name: str, new_name: str) -> dict:
+    _assert_branch_name(cwd, new_name)
+    _git_ok(cwd, ["branch", "-m", _assert_ref_arg(name, "branch"), new_name])
+    return {"ok": True}
+
+
+def branch_delete(cwd: str, name: str, force: bool) -> dict:
+    # `-d` refuses an unmerged branch and the currently checked-out branch;
+    # git's own guards do that work. `force` opts into `-D`.
+    _git_ok(cwd, ["branch", "-D" if force else "-d", _assert_ref_arg(name, "branch")])
+    return {"ok": True}
+
+
+def tag_create(cwd: str, name: str, target: str | None) -> dict:
+    name = _assert_tag_name(cwd, name)
+    args = ["tag", name]
+    if target:
+        args.append(_assert_ref_arg(target, "tag target"))
+    _git_ok(cwd, args)
+    return {"ok": True}
+
+
+def tag_delete(cwd: str, name: str) -> dict:
+    _git_ok(cwd, ["tag", "-d", _assert_ref_arg(name, "tag")])
+    return {"ok": True}
+
+
+def stash_create(cwd: str, message: str | None, include_untracked: bool) -> dict:
+    """`git stash push` with no changes exits 0 ("No local changes to save"),
+    so creating an empty stash is not an error — the renderer decides whether
+    to disable the button from the status it already has."""
+    args = ["stash", "push"]
+    if include_untracked:
+        args.append("-u")
+    note = str(message or "").strip()[:1000]
+    if note:
+        args += ["-m", note]
+    _git_ok(cwd, args)
+    return {"ok": True}
+
+
+def stash_apply(cwd: str, index: int) -> dict:
+    # Conflicts raise so the renderer can offer a path forward instead of
+    # pretending the apply landed.
+    _git_ok(cwd, ["stash", "apply", f"stash@{{{_assert_stash_index(index)}}}"])
+    return {"ok": True}
+
+
+def stash_drop(cwd: str, index: int) -> dict:
+    _git_ok(cwd, ["stash", "drop", f"stash@{{{_assert_stash_index(index)}}}"])
+    return {"ok": True}
+
+
+def git_fetch(cwd: str, remote: str | None) -> dict:
+    """Prune stale remote-tracking refs by default — matches VS Code's fetch
+    and keeps the branch list honest after a teammate deletes a branch."""
+    args = ["fetch", "--prune"]
+    if remote:
+        args.append(_assert_remote_name(remote))
+    _git_ok(cwd, args)
+    return {"ok": True}
+
+
+def git_pull(cwd: str, rebase: bool) -> dict:
+    args = ["pull"]
+    if rebase:
+        args.append("--rebase")
+    _git_ok(cwd, args)
+    return {"ok": True}
 
 
 def base_branch_list(cwd: str) -> list[dict]:

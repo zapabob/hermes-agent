@@ -21,30 +21,29 @@ const api = vi.fn(async ({ path }: { path: string }) => {
     return { diff: 'remote-diff' }
   }
 
+  if (path.startsWith('/api/git/review/history-diff')) {
+    return { diff: 'remote-history-diff' }
+  }
+
+  if (path.startsWith('/api/git/review/history')) {
+    return { commits: [{ shortSha: '1234567', subject: 'remote history' }] }
+  }
+
   if (path.startsWith('/api/git/branches')) {
     return {
       branches: [{ checkedOut: false, isDefault: false, isRemote: true, name: 'origin/feature', worktreePath: null }]
     }
   }
 
-  if (path.startsWith('/api/git/review/history-diff')) {
-    return { diff: 'remote-history-diff' }
+  if (path.startsWith('/api/git/tags')) {
+    return { tags: [{ name: 'v1.0', sha: 'abc1234' }] }
   }
 
-  if (path.startsWith('/api/git/review/history')) {
-    return {
-      commits: [
-        {
-          author: 'Hermes',
-          authoredAt: '2026-08-10T12:00:00+00:00',
-          parents: [],
-          sha: '1234567890abcdef1234567890abcdef12345678',
-          shortSha: '1234567',
-          subject: 'remote history'
-        }
-      ]
-    }
+  if (path.startsWith('/api/git/stashes')) {
+    return { stashes: [{ index: 0, id: 'stash@{0}', sha: 'def5678', message: 'wip' }] }
   }
+
+  return { ok: true }
 
   return { ok: true }
 })
@@ -127,6 +126,91 @@ describe('desktop git facade', () => {
       path: '/api/git/review/stage'
     })
     expect(localGit.review.stage).not.toHaveBeenCalled()
+  })
+
+  it('routes the SCM rail reads through the backend mirror on a remote gateway', async () => {
+    $connection.set({ mode: 'remote' } as never)
+
+    await expect(desktopGit()?.tagList('/srv/work')).resolves.toEqual([{ name: 'v1.0', sha: 'abc1234' }])
+    expect(api).toHaveBeenCalledWith({ path: '/api/git/tags?path=%2Fsrv%2Fwork' })
+
+    await expect(desktopGit()?.stashList('/srv/work')).resolves.toEqual([
+      { index: 0, id: 'stash@{0}', sha: 'def5678', message: 'wip' }
+    ])
+    expect(api).toHaveBeenCalledWith({ path: '/api/git/stashes?path=%2Fsrv%2Fwork' })
+  })
+
+  it('routes the SCM rail mutations as POST bodies on a remote gateway', async () => {
+    $connection.set({ mode: 'remote' } as never)
+
+    await desktopGit()?.branchCreate('/srv/work', 'feature/one', null)
+    await desktopGit()?.branchCreate('/srv/work', 'feature/two', 'main')
+    await desktopGit()?.branchRename('/srv/work', 'feature/two', 'feature/renamed')
+    await desktopGit()?.branchDelete('/srv/work', 'feature/renamed', false)
+    await desktopGit()?.tagCreate('/srv/work', 'v1.0', null)
+    await desktopGit()?.tagDelete('/srv/work', 'v1.0')
+    await desktopGit()?.stashCreate('/srv/work', 'wip', true)
+    await desktopGit()?.stashApply('/srv/work', 0)
+    await desktopGit()?.stashDrop('/srv/work', 1)
+    await desktopGit()?.fetch('/srv/work', 'origin')
+    await desktopGit()?.pull('/srv/work', false)
+
+    expect(api).toHaveBeenCalledWith({
+      body: { base: null, name: 'feature/one', path: '/srv/work' },
+      method: 'POST',
+      path: '/api/git/branch/create'
+    })
+    expect(api).toHaveBeenCalledWith({
+      body: { base: 'main', name: 'feature/two', path: '/srv/work' },
+      method: 'POST',
+      path: '/api/git/branch/create'
+    })
+    expect(api).toHaveBeenCalledWith({
+      body: { name: 'feature/two', newName: 'feature/renamed', path: '/srv/work' },
+      method: 'POST',
+      path: '/api/git/branch/rename'
+    })
+    expect(api).toHaveBeenCalledWith({
+      body: { force: false, name: 'feature/renamed', path: '/srv/work' },
+      method: 'POST',
+      path: '/api/git/branch/delete'
+    })
+    expect(api).toHaveBeenCalledWith({
+      body: { name: 'v1.0', path: '/srv/work', target: null },
+      method: 'POST',
+      path: '/api/git/tag/create'
+    })
+    expect(api).toHaveBeenCalledWith({
+      body: { name: 'v1.0', path: '/srv/work' },
+      method: 'POST',
+      path: '/api/git/tag/delete'
+    })
+    expect(api).toHaveBeenCalledWith({
+      body: { includeUntracked: true, message: 'wip', path: '/srv/work' },
+      method: 'POST',
+      path: '/api/git/stash/create'
+    })
+    expect(api).toHaveBeenCalledWith({
+      body: { index: 0, path: '/srv/work' },
+      method: 'POST',
+      path: '/api/git/stash/apply'
+    })
+    expect(api).toHaveBeenCalledWith({
+      body: { index: 1, path: '/srv/work' },
+      method: 'POST',
+      path: '/api/git/stash/drop'
+    })
+    expect(api).toHaveBeenCalledWith({
+      body: { path: '/srv/work', remote: 'origin' },
+      method: 'POST',
+      path: '/api/git/fetch'
+    })
+    expect(api).toHaveBeenCalledWith({
+      body: { path: '/srv/work', rebase: false },
+      method: 'POST',
+      path: '/api/git/pull'
+    })
+    expect(localGit.worktreeList).not.toHaveBeenCalled()
   })
 
   // The ⌘⇧B "convert a branch into a worktree" flow (#81724): on a remote

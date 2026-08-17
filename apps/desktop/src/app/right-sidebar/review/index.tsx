@@ -1,4 +1,5 @@
 import { useStore } from '@nanostores/react'
+import { useEffect, useState } from 'react'
 
 import { FileDiffPanel } from '@/components/chat/diff-lines'
 import { DiffSkeleton, TreeSkeleton } from '@/components/chat/skeletons'
@@ -14,11 +15,13 @@ import {
 } from '@/components/ui/dialog'
 import { DiffCount } from '@/components/ui/diff-count'
 import { SegmentedControl } from '@/components/ui/segmented-control'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tip } from '@/components/ui/tooltip'
 import { useDelayedTrue } from '@/hooks/use-delayed-true'
 import { useI18n } from '@/i18n'
 import { displayPath } from '@/lib/display-path'
 import { cn } from '@/lib/utils'
+import { desktopGit } from '@/lib/desktop-git'
 import { $panesFlipped } from '@/store/layout'
 import { notifyError } from '@/store/notifications'
 import {
@@ -29,6 +32,7 @@ import {
   $reviewIsRepo,
   $reviewLoading,
   $reviewRevertTarget,
+  $reviewScopeCwd,
   $reviewSelectedPath,
   $reviewTreeMode,
   $reviewView,
@@ -36,6 +40,7 @@ import {
   clearReviewSelection,
   closeReview,
   confirmRevert,
+  openReview,
   refreshReview,
   refreshReviewHistory,
   requestRevert,
@@ -44,12 +49,15 @@ import {
   toggleReviewTreeMode,
   unstageReviewFile
 } from '@/store/review'
+import { $scmBranchesLoading, $scmStashesLoading, $scmTagsLoading, refreshScmRefs } from '@/store/scm-refs'
+import { $currentCwd } from '@/store/session'
 
 import { SidebarPanelLabel } from '../../shell/sidebar-label'
 import { PaneEmptyState, RightSidebarSectionHeader } from '../index'
 
 import { ReviewFileTree } from './file-tree'
 import { ReviewHistory } from './history'
+import { ReviewScmRail } from './scm-rail'
 import { ReviewShipBar } from './ship-bar'
 
 // Compact header/diff action buttons — micro hit targets packed tight, matching
@@ -70,6 +78,32 @@ export function ReviewPane() {
   const revertTarget = useStore($reviewRevertTarget)
   const treeMode = useStore($reviewTreeMode)
   const view = useStore($reviewView)
+  const branchesLoading = useStore($scmBranchesLoading)
+  const tagsLoading = useStore($scmTagsLoading)
+  const stashesLoading = useStore($scmStashesLoading)
+  const scmLoading = branchesLoading || tagsLoading || stashesLoading
+  const currentCwd = useStore($currentCwd)
+  const scopeCwd = useStore($reviewScopeCwd)
+
+  // Worktree switcher
+  const [worktrees, setWorktrees] = useState<Array<{ path: string; branch: string }>>([])
+  const [worktreesLoading, setWorktreesLoading] = useState(false)
+
+  useEffect(() => {
+    const cwd = scopeCwd?.trim() || currentCwd?.trim()
+    if (!cwd || !desktopGit()?.worktreeList) {
+      setWorktrees([])
+      return
+    }
+    setWorktreesLoading(true)
+    desktopGit()!.worktreeList(cwd).then(wts => {
+      setWorktrees(wts.map(wt => ({ path: wt.path, branch: wt.branch ?? '' })))
+      setWorktreesLoading(false)
+    }).catch(() => {
+      setWorktrees([])
+      setWorktreesLoading(false)
+    })
+  }, [scopeCwd, currentCwd])
 
   const selectedFile = files.find(file => file.path === selectedPath)
   const hasFiles = files.length > 0
@@ -79,6 +113,16 @@ export function ReviewPane() {
   // instead of flashing a jarring loading state.
   const showTreeSkeleton = useDelayedTrue(loading && !hasFiles)
   const showDiffSkeleton = useDelayedTrue(diffLoading)
+
+  // Repo switcher options
+  const repoOptions = worktrees.map(wt => ({
+    value: wt.path,
+    label: `${wt.branch} (${wt.path.split(/[\\/]+/).filter(Boolean).pop()})`
+  }))
+  const isScoped = Boolean(scopeCwd)
+  const currentRepoLabel = isScoped
+    ? repoOptions.find(o => o.value === scopeCwd)?.label || scopeCwd
+    : currentCwd?.split(/[\\/]+/).filter(Boolean).pop() || 'Session'
 
   return (
     <aside
@@ -90,7 +134,7 @@ export function ReviewPane() {
           : 'border-l shadow-[inset_0.0625rem_0_0_color-mix(in_srgb,white_18%,transparent)]'
       )}
     >
-      {(loading || historyLoading || isRepo) && (
+      {(loading || historyLoading || isRepo || view === 'scm') && (
         <RightSidebarSectionHeader data-suppress-pane-reveal-side="">
           <div className="flex min-w-0 flex-1">
             {/* Pure self-naming label — redundant under a zone tab that already
@@ -102,10 +146,36 @@ export function ReviewPane() {
             onChange={setReviewView}
             options={[
               { id: 'changes', label: c.changes },
-              { id: 'history', label: c.history }
+              { id: 'history', label: c.history },
+              { id: 'scm', label: c.scm }
             ]}
             value={view}
           />
+          <div className="ml-2 mr-1 flex min-w-0 flex-1">
+            <Tip label="Switch repository / worktree">
+              <Select value={isScoped ? scopeCwd || '' : currentCwd || ''} onValueChange={path => path ? openReview(path) : openReview(null)}>
+                <SelectTrigger className="w-full min-w-[160px] max-w-[280px]">
+                  <SelectValue placeholder={currentRepoLabel} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">
+                    <span className="flex items-center gap-2">
+                      <Codicon name="sync" size="0.8rem" className="text-(--ui-text-tertiary)" />
+                      Session: {currentCwd?.split(/[\\/]+/).filter(Boolean).pop() || 'default'}
+                    </span>
+                  </SelectItem>
+                  {repoOptions.map(option => (
+                    <SelectItem key={option.value} value={option.value}>
+                      <span className="flex items-center gap-2">
+                        <Codicon name="branch" size="0.8rem" className="text-(--ui-text-tertiary)" />
+                        {option.label}
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Tip>
+          </div>
           {view === 'changes' && (
             <>
               <Tip label={treeMode === 'tree' ? c.viewAsList : c.viewAsTree}>
@@ -170,6 +240,19 @@ export function ReviewPane() {
               </Button>
             </Tip>
           )}
+          {view === 'scm' && (
+            <Tip label={t.rightSidebar.refreshTree}>
+              <Button
+                aria-label={t.rightSidebar.refreshTree}
+                className={ACTION_BTN}
+                onClick={() => void refreshScmRefs()}
+                size="icon-xs"
+                variant="ghost"
+              >
+                <Codicon name="refresh" size="0.8125rem" spinning={scmLoading} />
+              </Button>
+            </Tip>
+          )}
           <Button aria-label={c.close} className={ACTION_BTN} onClick={closeReview} size="icon-xs" variant="ghost">
             <Codicon name="close" size="0.8125rem" />
           </Button>
@@ -178,6 +261,8 @@ export function ReviewPane() {
 
       {view === 'history' ? (
         <ReviewHistory />
+      ) : view === 'scm' ? (
+        <ReviewScmRail />
       ) : loading || isRepo ? (
         hasFiles ? (
           <ReviewFileTree />
