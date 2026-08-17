@@ -117,6 +117,7 @@ from typing import Any, Coroutine, Dict, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
 from tools.registry import tool_error
+from tools.ansi_strip import strip_unicode_tags
 
 logger = logging.getLogger(__name__)
 
@@ -883,6 +884,39 @@ def _wrap_command_with_watchdog(command: str, args: list) -> tuple[str, list]:
 # ---------------------------------------------------------------------------
 
 
+def _is_reserved_mcp_meta_key(key: str) -> bool:
+    """Return True if an MCP ``_meta`` key uses a protocol-reserved prefix.
+
+    Per the MCP spec's key-name rules, a prefix is reserved when a
+    ``modelcontextprotocol`` or ``mcp`` label is followed by at least one
+    more label (``modelcontextprotocol.io/...``, ``tools.mcp.com/...``).
+    A trailing reserved word (``com.example.mcp/...``) is a legitimate
+    vendor namespace and passes through. Ported from
+    MoonshotAI/kimi-code#2600.
+    """
+    slash = key.find("/")
+    if slash <= 0:
+        return False
+    labels = key[:slash].split(".")
+    return any(
+        label in ("modelcontextprotocol", "mcp") and i < len(labels) - 1
+        for i, label in enumerate(labels)
+    )
+
+
+def _strip_reserved_meta_keys(meta) -> "Optional[Dict[str, Any]]":
+    """Drop protocol-reserved keys from a tool result's ``_meta`` mapping.
+
+    Returns the filtered dict, or ``None`` when there is nothing
+    model-facing left (or the input wasn't a mapping).
+    """
+    if not isinstance(meta, dict):
+        return None
+    out = {k: v for k, v in meta.items()
+           if isinstance(k, str) and not _is_reserved_mcp_meta_key(k)}
+    return out or None
+
+
 def _mcp_image_extension_for_mime_type(mime_type: str) -> str:
     """Return a reasonable file extension for an MCP image MIME type."""
     import mimetypes
@@ -1066,7 +1100,7 @@ def _render_mcp_resource_block(block, server_name: str = "") -> str:
 
     text = getattr(resource, "text", None)
     if text is not None:
-        return str(text)
+        return strip_unicode_tags(str(text))
 
     blob = getattr(resource, "blob", None)
     if blob is None:
@@ -5469,7 +5503,7 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
             parts: List[str] = []
             for block in (result.content or []):
                 if hasattr(block, "text") and block.text:
-                    parts.append(block.text)
+                    parts.append(strip_unicode_tags(block.text))
                     continue
                 image_tag = _cache_mcp_image_block(block)
                 if image_tag:
@@ -5508,14 +5542,39 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
             # MCP spec: content is model-oriented (text), structuredContent
             # is machine-oriented (JSON metadata).  For an AI agent, content
             # is the primary payload; structuredContent supplements it.
+            #
+            # Server-level `_meta` is also surfaced (ported from
+            # MoonshotAI/kimi-code#2596): servers return namespaced metadata
+            # there (validated contracts, browser-handoff payloads, ...) that
+            # was previously invisible to the agent. Protocol-reserved keys
+            # are dropped first (kimi-code#2600) — per the MCP spec's key-name
+            # rules a prefix is reserved when a `modelcontextprotocol` or
+            # `mcp` label is followed by at least one more label (e.g.
+            # `modelcontextprotocol.io/...`, `tools.mcp.com/...`); those carry
+            # host/protocol plumbing, not model-facing data. Unprefixed and
+            # vendor-namespaced keys (`com.example.mcp/...`) pass through —
+            # their semantics belong to the server.
             structured = getattr(result, "structuredContent", None)
-            if structured is not None:
+            meta = _strip_reserved_meta_keys(getattr(result, "meta", None))
+            if structured is not None or meta is not None:
+                payload: Dict[str, Any] = {}
                 if text_result:
-                    return json.dumps({
-                        "result": text_result,
-                        "structuredContent": structured,
-                    }, ensure_ascii=False)
-                return json.dumps({"result": structured}, ensure_ascii=False)
+                    payload["result"] = text_result
+                if structured is not None:
+                    if text_result:
+                        payload["structuredContent"] = structured
+                    else:
+                        payload["result"] = structured
+                if meta is not None:
+                    payload["_meta"] = meta
+                if "result" not in payload:
+                    payload["result"] = text_result
+                try:
+                    return json.dumps(payload, ensure_ascii=False)
+                except (TypeError, ValueError):
+                    # Non-serializable metadata: drop the extras rather than
+                    # failing the whole tool call.
+                    return json.dumps({"result": text_result}, ensure_ascii=False)
             return json.dumps({"result": text_result}, ensure_ascii=False)
 
         def _call_once():
@@ -5645,7 +5704,7 @@ def _make_read_resource_handler(server_name: str, tool_timeout: float):
             contents = result.contents if hasattr(result, "contents") else []
             for block in contents:
                 if getattr(block, "text", None) is not None:
-                    parts.append(block.text)
+                    parts.append(strip_unicode_tags(block.text))
                 elif getattr(block, "blob", None) is not None:
                     # Materialize binary resource contents into the document
                     # cache instead of discarding them (same contract as
@@ -5772,11 +5831,11 @@ def _make_get_prompt_handler(server_name: str, tool_timeout: float):
                 if hasattr(msg, "content"):
                     content = msg.content
                     if hasattr(content, "text"):
-                        entry["content"] = content.text
+                        entry["content"] = strip_unicode_tags(content.text)
                     elif isinstance(content, str):
-                        entry["content"] = content
+                        entry["content"] = strip_unicode_tags(content)
                     else:
-                        entry["content"] = str(content)
+                        entry["content"] = strip_unicode_tags(str(content))
                 messages.append(entry)
             resp = {"messages": messages}
             if hasattr(result, "description") and result.description:
@@ -6032,7 +6091,9 @@ def _convert_mcp_schema(server_name: str, mcp_tool) -> dict:
     prefixed_name = mcp_prefixed_tool_name(server_name, mcp_tool.name)
     return {
         "name": prefixed_name,
-        "description": mcp_tool.description or f"MCP tool {mcp_tool.name} from {server_name}",
+        "description": strip_unicode_tags(
+            mcp_tool.description or f"MCP tool {mcp_tool.name} from {server_name}"
+        ),
         "parameters": _normalize_mcp_input_schema(getattr(mcp_tool, "inputSchema", None)),
     }
 

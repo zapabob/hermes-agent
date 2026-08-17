@@ -182,6 +182,9 @@ def cron_list(show_all: bool = False):
                 status_display = color("ok", Colors.GREEN)
             else:
                 status_display = color(f"{last_status}: {job.get('last_error', '?')}", Colors.RED)
+                streak = int(job.get("failure_streak") or 0)
+                if streak >= 2:
+                    status_display += color(f"  ({streak} failures in a row)", Colors.RED)
             print(f"    Last run:  {last_run}  {status_display}")
 
         latest_execution = job.get("latest_execution")
@@ -364,6 +367,7 @@ def cron_create(args):
         no_agent=getattr(args, "no_agent", False) or None,
         monitor_script=getattr(args, "monitor_script", None),
         monitor_url=getattr(args, "monitor_url", None),
+        continuity=getattr(args, "continuity", None),
     )
     if not result.get("success"):
         print(color(f"Failed to create job: {result.get('error', 'unknown error')}", Colors.RED))
@@ -382,6 +386,8 @@ def cron_create(args):
         print(f"  Monitor: {job_data['monitor_url']} (agent runs only on output change)")
     if job_data.get("no_agent"):
         print("  Mode: no-agent (script stdout delivered directly)")
+    if job_data.get("continuity"):
+        print("  Continuity: on (each run sees the previous run's output)")
     if job_data.get("workdir"):
         print(f"  Workdir: {job_data['workdir']}")
     print(f"  Next run: {result['next_run_at']}")
@@ -435,6 +441,7 @@ def cron_edit(args):
         no_agent=getattr(args, "no_agent", None),
         monitor_script=getattr(args, "monitor_script", None),
         monitor_url=getattr(args, "monitor_url", None),
+        continuity=getattr(args, "continuity", None),
     )
     if not result.get("success"):
         print(color(f"Failed to update job: {result.get('error', 'unknown error')}", Colors.RED))
@@ -456,6 +463,8 @@ def cron_edit(args):
         print(f"  Monitor: {updated['monitor_url']} (agent runs only on output change)")
     if updated.get("no_agent"):
         print("  Mode: no-agent (script stdout delivered directly)")
+    if updated.get("continuity"):
+        print("  Continuity: on (each run sees the previous run's output)")
     if updated.get("workdir"):
         print(f"  Workdir: {updated['workdir']}")
     return 0

@@ -153,6 +153,48 @@ def _fallback_chain_phrase() -> str:
     )
 
 
+def _failure_streak_nudge(job: dict) -> str:
+    """Return a review nudge when a recurring job keeps failing, else "".
+
+    Inspired by Poke (poke.com), which "encourages users to review recurring
+    automations that haven't been acted upon": once a recurring job has failed
+    several runs in a row, the per-run failure ping stops being information and
+    starts being noise — the useful message is "this automation needs your
+    attention (fix, pause, or remove it)".
+
+    The streak counter (``failure_streak``) is persisted by
+    ``cron.jobs.mark_job_run`` and reset on any successful run. Because the
+    failure message is delivered BEFORE ``mark_job_run`` records this run, the
+    prospective streak for the current failure is stored+1.
+
+    Threshold config: ``cron.failure_nudge_threshold`` (default 3, ``0``
+    disables the nudge). One-shot jobs never nudge — they don't recur.
+    """
+    schedule_kind = (job.get("schedule") or {}).get("kind")
+    if schedule_kind not in {"cron", "interval"}:
+        return ""
+    try:
+        cfg = load_config() or {}
+        threshold = int(
+            ((cfg.get("cron") or {}) if isinstance(cfg, dict) else {}).get(
+                "failure_nudge_threshold", 3
+            )
+        )
+    except Exception:
+        threshold = 3
+    if threshold <= 0:
+        return ""
+    streak = int(job.get("failure_streak") or 0) + 1  # +1 = this run
+    if streak < threshold:
+        return ""
+    job_ref = job.get("name") or job.get("id") or "this job"
+    return (
+        f"\nThis job has failed {streak} runs in a row — worth a review. "
+        f"Fix its prompt/config, or pause it with `hermes cron pause {job_ref}` "
+        "(resume/remove also available) to stop the noise."
+    )
+
+
 def _summarize_cron_failure_for_delivery(job: dict, error: str | None) -> str:
     """Return a compact one-line failure message for chat delivery.
 
@@ -3645,6 +3687,16 @@ def _build_job_prompt(
         if isinstance(context_from, str):
             context_from = [context_from]
         for source_job_id in context_from:
+            # "self" resolves to the job's own id: the job wakes up with its
+            # most recent output injected, giving recurring jobs continuity
+            # across runs (dedupe against what was already reported, continue
+            # where the last run left off) without touching session history.
+            is_self = False
+            if isinstance(source_job_id, str) and source_job_id.strip().lower() == "self":
+                source_job_id = str(job.get("id") or "")
+                is_self = True
+            elif source_job_id == job.get("id"):
+                is_self = True
             # Guard against path traversal — valid job IDs are 12-char hex strings
             if not source_job_id or not all(c in "0123456789abcdef" for c in source_job_id):
                 logger.warning(
@@ -3672,13 +3724,24 @@ def _build_job_prompt(
                 if len(latest_output) > _MAX_CONTEXT_CHARS:
                     latest_output = latest_output[:_MAX_CONTEXT_CHARS] + "\n\n[... output truncated ...]"
                 if latest_output:
-                    prompt = (
-                        f"## Output from job '{source_job_id}'\n"
-                        "The following is the most recent output from a preceding "
-                        "cron job. Use it as context for your analysis.\n\n"
-                        f"```\n{latest_output}\n```\n\n"
-                        f"{prompt}"
-                    )
+                    if is_self:
+                        prompt = (
+                            "## Your previous run's output\n"
+                            "The following is this job's most recent output from its "
+                            "previous run. Use it for continuity: avoid repeating what "
+                            "was already reported, and continue where the last run "
+                            "left off.\n\n"
+                            f"```\n{latest_output}\n```\n\n"
+                            f"{prompt}"
+                        )
+                    else:
+                        prompt = (
+                            f"## Output from job '{source_job_id}'\n"
+                            "The following is the most recent output from a preceding "
+                            "cron job. Use it as context for your analysis.\n\n"
+                            f"```\n{latest_output}\n```\n\n"
+                            f"{prompt}"
+                        )
                     has_injected_data = True
                 else:
                     continue  # silent skip — empty output
@@ -6230,7 +6293,10 @@ def _run_one_job_body(
                     "the configuration is fixed."
                 )
             else:
-                deliver_content = final_response if success else _summarize_cron_failure_for_delivery(job, error)
+                deliver_content = final_response if success else (
+                    _summarize_cron_failure_for_delivery(job, error)
+                    + _failure_streak_nudge(job)
+                )
                 if drift_skip and not success:
                     # Drift-skip alert: bypass the generic summarizer's
                     # 180-char truncation (it would eat the remediation
