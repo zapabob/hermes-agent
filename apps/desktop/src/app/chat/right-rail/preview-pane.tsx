@@ -558,7 +558,11 @@ export function PreviewPane({ embedded = false, onRestartServer, reloadRequest =
     webview.className = 'flex h-full w-full flex-1 bg-transparent'
     webview.setAttribute('partition', 'persist:hermes-preview')
     webview.setAttribute('src', target.url)
-    webview.setAttribute('webpreferences', 'contextIsolation=yes,nodeIntegration=no,sandbox=yes')
+    webview.setAttribute(
+      'useragent',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'
+    )
+    webview.setAttribute('webpreferences', 'contextIsolation=yes,nodeIntegration=no')
 
     const onConsole = (event: Event) => {
       const detail = event as Event & {
