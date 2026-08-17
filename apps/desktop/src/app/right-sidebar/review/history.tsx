@@ -1,9 +1,11 @@
 import { useStore } from '@nanostores/react'
 
+import { buildCommitGraph } from './history-graph'
 import { FileDiffPanel } from '@/components/chat/diff-lines'
 import { DiffSkeleton, TreeSkeleton } from '@/components/chat/skeletons'
 import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useDelayedTrue } from '@/hooks/use-delayed-true'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
@@ -12,10 +14,13 @@ import {
   $reviewHistoryDiff,
   $reviewHistoryDiffLoading,
   $reviewHistoryLoading,
+  $reviewRefFilter,
   $reviewSelectedCommit,
   clearReviewCommitSelection,
-  selectReviewCommit
+  selectReviewCommit,
+  setReviewRefFilter
 } from '@/store/review'
+import { $scmBranches, $scmTags } from '@/store/scm-refs'
 
 import { PaneEmptyState } from '../index'
 
@@ -41,18 +46,49 @@ export function ReviewHistory() {
   const selectedSha = useStore($reviewSelectedCommit)
   const diff = useStore($reviewHistoryDiff)
   const diffLoading = useStore($reviewHistoryDiffLoading)
+  const scmBranches = useStore($scmBranches)
+  const scmTags = useStore($scmTags)
   const selectedCommit = commits.find(commit => commit.sha === selectedSha)
+  const rows = buildCommitGraph(commits)
+  const maxLane = rows.reduce((m, r) => Math.max(m, r.lane), 0)
+  const gutterWidth = 8 + maxLane * 12
+  const refFilter = useStore($reviewRefFilter)
   const showListSkeleton = useDelayedTrue(loading && commits.length === 0)
   const showDiffSkeleton = useDelayedTrue(diffLoading)
+  const remoteNames = Array.from(new Set(scmBranches.filter(b => b.isRemote).map(b => b.name.split('/')[0])))
+  const filterOptions = ['all', 'local', ...remoteNames]
 
   return (
     <>
       <div aria-label={c.commitHistory} className="min-h-0 flex-1 overflow-auto" role="region">
         {commits.length > 0 ? (
           <div className="py-1">
+            <div className="px-2.5 pb-2">
+              <Select value={refFilter} onValueChange={setReviewRefFilter}>
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Ref filter" />
+                </SelectTrigger>
+                <SelectContent>
+                  {filterOptions.map(option => (
+                    <SelectItem key={option} value={option}>
+                      {option === 'all' ? 'All' : option === 'local' ? 'Local' : option}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             {commits.map(commit => {
               const selected = commit.sha === selectedSha
-
+              const matchingBranches =
+                refFilter === 'all'
+                  ? scmBranches.filter(b => b.sha === commit.sha).map(b => b.name)
+                  : refFilter === 'local'
+                  ? scmBranches.filter(b => !b.isRemote && b.sha === commit.sha).map(b => b.name)
+                  : remoteNames.includes(refFilter)
+                    ? scmBranches.filter(b => b.sha === commit.sha && b.name.startsWith(refFilter + '/')).map(b => b.name)
+                    : []
+              const matchingTags = scmTags.filter(t => t.sha === commit.sha).map(t => t.name)
+              
               return (
                 <button
                   aria-current={selected ? 'true' : undefined}
@@ -76,6 +112,21 @@ export function ReviewHistory() {
                       {formatCommitTime(commit.authoredAt)}
                     </time>
                   </span>
+                  {/* ref markers: branch pills (accent) and tag pills (neutral) */}
+                  {matchingBranches.length > 0 || matchingTags.length > 0 && (
+                    <span className="flex min-w-0 items-center gap-1 pt-1 text-[0.55rem]">
+                      {matchingBranches.map(name => (
+                        <span key={name} className="shrink-0 rounded-full border border-(--ui-accent)/40 px-1 py-1 text-[0.55rem] leading-none text-(--ui-accent)">
+                          {name}
+                        </span>
+                      ))}
+                      {matchingTags.length > 0 && (
+                        <span className="shrink-0 rounded-full border border-(--ui-stroke-secondary) px-1 py-1 text-[0.55rem] leading-none text-(--ui-text-secondary)">
+                          {matchingTags.join(' ')}
+                        </span>
+                      )}
+                    </span>
+                  )}
                 </button>
               )
             })}

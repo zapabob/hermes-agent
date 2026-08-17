@@ -270,6 +270,63 @@ class GitBranchSwitchBody(BaseModel):
     branch: str
 
 
+# --- SCM rail bodies (mirror of the Electron git-ref-ops, #82793) ---
+
+class GitBranchCreateBody(BaseModel):
+    path: str
+    name: str
+    base: Optional[str] = None
+
+
+class GitBranchRenameBody(BaseModel):
+    path: str
+    name: str
+    newName: str
+
+
+class GitBranchDeleteBody(BaseModel):
+    path: str
+    name: str
+    force: bool = False
+
+
+class GitTagCreateBody(BaseModel):
+    path: str
+    name: str
+    target: Optional[str] = None
+
+
+class GitTagDeleteBody(BaseModel):
+    path: str
+    name: str
+
+
+class GitStashCreateBody(BaseModel):
+    path: str
+    message: Optional[str] = None
+    includeUntracked: bool = False
+
+
+class GitStashApplyBody(BaseModel):
+    path: str
+    index: int
+
+
+class GitStashDropBody(BaseModel):
+    path: str
+    index: int
+
+
+class GitFetchBody(BaseModel):
+    path: str
+    remote: Optional[str] = None
+
+
+class GitPullBody(BaseModel):
+    path: str
+    rebase: bool = False
+
+
 # --- from web_server.py (originally lines 3610-3611) ---
 
 class CuratorPause(BaseModel):

@@ -20,6 +20,16 @@ from hermes_cli.web_models import (
     GitWorktreeAddBody,
     GitWorktreeRemoveBody,
     GitBranchSwitchBody,
+    GitBranchCreateBody,
+    GitBranchRenameBody,
+    GitBranchDeleteBody,
+    GitTagCreateBody,
+    GitTagDeleteBody,
+    GitStashCreateBody,
+    GitStashApplyBody,
+    GitStashDropBody,
+    GitFetchBody,
+    GitPullBody,
 )
 
 router = APIRouter()
@@ -204,3 +214,70 @@ async def git_worktree_remove_route(body: GitWorktreeRemoveBody):
 @router.post("/api/git/branch/switch")
 async def git_branch_switch_route(body: GitBranchSwitchBody):
     return await _git_op(_web_git.branch_switch, _git_path(body.path), body.branch)
+
+
+# ─── SCM rail mirror (#82793) ────────────────────────────────────────────────
+# The desktop SCM rail runs as Electron-local git; these routes serve the same
+# rail on a remote gateway (see hermes_cli/web_git.py, "scm rail" section).
+
+
+@router.get("/api/git/tags")
+async def git_tags_route(path: str):
+    return {"tags": await _git_op(_web_git.tag_list, _git_path(path))}
+
+
+@router.get("/api/git/stashes")
+async def git_stashes_route(path: str):
+    return {"stashes": await _git_op(_web_git.stash_list, _git_path(path))}
+
+
+@router.post("/api/git/branch/create")
+async def git_branch_create_route(body: GitBranchCreateBody):
+    return await _git_op(_web_git.branch_create, _git_path(body.path), body.name, body.base)
+
+
+@router.post("/api/git/branch/rename")
+async def git_branch_rename_route(body: GitBranchRenameBody):
+    return await _git_op(_web_git.branch_rename, _git_path(body.path), body.name, body.newName)
+
+
+@router.post("/api/git/branch/delete")
+async def git_branch_delete_route(body: GitBranchDeleteBody):
+    return await _git_op(_web_git.branch_delete, _git_path(body.path), body.name, body.force)
+
+
+@router.post("/api/git/tag/create")
+async def git_tag_create_route(body: GitTagCreateBody):
+    return await _git_op(_web_git.tag_create, _git_path(body.path), body.name, body.target)
+
+
+@router.post("/api/git/tag/delete")
+async def git_tag_delete_route(body: GitTagDeleteBody):
+    return await _git_op(_web_git.tag_delete, _git_path(body.path), body.name)
+
+
+@router.post("/api/git/stash/create")
+async def git_stash_create_route(body: GitStashCreateBody):
+    return await _git_op(
+        _web_git.stash_create, _git_path(body.path), body.message, body.includeUntracked
+    )
+
+
+@router.post("/api/git/stash/apply")
+async def git_stash_apply_route(body: GitStashApplyBody):
+    return await _git_op(_web_git.stash_apply, _git_path(body.path), body.index)
+
+
+@router.post("/api/git/stash/drop")
+async def git_stash_drop_route(body: GitStashDropBody):
+    return await _git_op(_web_git.stash_drop, _git_path(body.path), body.index)
+
+
+@router.post("/api/git/fetch")
+async def git_fetch_route(body: GitFetchBody):
+    return await _git_op(_web_git.git_fetch, _git_path(body.path), body.remote)
+
+
+@router.post("/api/git/pull")
+async def git_pull_route(body: GitPullBody):
+    return await _git_op(_web_git.git_pull, _git_path(body.path), body.rebase)
