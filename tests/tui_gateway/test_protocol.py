@@ -7,6 +7,7 @@ import threading
 import time
 import types
 from unittest.mock import MagicMock, patch
+from pathlib import Path
 
 import pytest
 
@@ -583,6 +584,62 @@ def test_session_resume_guard_failure_fails_open(server, monkeypatch):
     assert reopened == ["transient-guard-session"]
 
 
+def test_session_resume_active_turn_payload_matches_desktop_fixture(server, monkeypatch):
+    """A live resume serializes the exact timer payload consumed by Desktop."""
+    fixture = json.loads(
+        (Path(__file__).parents[1] / "fixtures" / "session-resume-active-turn.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    class _DB:
+        def get_session(self, session_id):
+            return {"id": session_id}
+
+        def get_session_by_title(self, _title):
+            return None
+
+        def resolve_resume_session_id(self, session_id):
+            return session_id
+
+    active_turn = {
+        "assistant": "partial answer",
+        "started_at": fixture["turn_started_at"],
+        "streaming": True,
+        "user": "current prompt",
+    }
+    server._sessions[fixture["session_id"]] = {
+        "agent": types.SimpleNamespace(session_id=fixture["session_key"]),
+        "created_at": fixture["started_at"],
+        "history": [{"content": "earlier prompt", "role": "user"}],
+        "history_lock": threading.Lock(),
+        "inflight_turn": active_turn,
+        "running": True,
+        "session_key": fixture["session_key"],
+    }
+    monkeypatch.setattr(server, "_get_db", lambda: _DB())
+    monkeypatch.setattr(server, "_session_info", lambda _agent: fixture["info"])
+
+    # JSON round-trip the real RPC envelope: the desktop fixture must stay
+    # faithful to what the gateway actually serializes, not a copied shape.
+    response = json.loads(
+        json.dumps(
+            server.handle_request(
+                {
+                    "id": "resume-running",
+                    "method": "session.resume",
+                    "params": {"session_id": fixture["session_key"]},
+                }
+            )
+        )
+    )
+    result = response["result"]
+
+    assert result["running"] is True
+    assert result["turn_started_at"] == active_turn["started_at"]
+    assert result == fixture
+
+
 def test_enforce_session_cap_evicts_oldest_detached_only(server, monkeypatch):
     """The LRU cap frees the least-recently-active DETACHED sessions when over
     the limit, and never a live-transport / running / mid-build one."""
@@ -742,6 +799,59 @@ def test_slash_exec_rejects_skill_commands(server):
         })
 
     # Should return an error so the TUI's .catch() fires command.dispatch
+    assert "error" in resp
+    assert resp["error"]["code"] == 4018
+    assert "skill command" in resp["error"]["message"]
+
+
+def test_slash_exec_scopes_skill_lookup_to_session_profile(server, tmp_path):
+    """slash.exec must resolve get_skill_commands() against the session's own
+    profile_home rather than the gateway process's ambient HERMES_HOME
+    (#88023). A Desktop session that switches profiles mid-session shares
+    the same gateway process, so a skill declared only under the new
+    profile's skills.external_dirs must still be recognized here — else the
+    command falls through to the slash-worker dead path instead of routing
+    to command.dispatch.
+    """
+    import agent.skill_commands as sc_mod
+
+    empty_local_dir = tmp_path / "no-local-skills"
+    empty_local_dir.mkdir()
+
+    profile_b = tmp_path / "profile_b"
+    external_b = tmp_path / "external_b"
+    profile_b.mkdir()
+    skill_dir = external_b / "b-only"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: b-only\ndescription: Only in profile b.\n---\n\n# b-only\n\nDo the thing.\n"
+    )
+    (profile_b / "config.yaml").write_text(
+        f"skills:\n  external_dirs:\n    - {external_b}\n"
+    )
+
+    sid = "test-session-profile-b"
+    server._sessions[sid] = {
+        "session_key": sid,
+        "agent": None,
+        "profile_home": str(profile_b),
+    }
+
+    with (
+        patch("tools.skills_tool.SKILLS_DIR", empty_local_dir),
+        patch.object(sc_mod, "_skill_commands", {}),
+        patch.object(sc_mod, "_skill_commands_platform", None),
+        patch.object(sc_mod, "_skill_commands_home", None),
+    ):
+        resp = server.handle_request({
+            "id": "r1",
+            "method": "slash.exec",
+            "params": {"command": "b-only", "session_id": sid},
+        })
+
+    # The gateway's own HERMES_HOME (the test-isolation tempdir, no
+    # skills.external_dirs) has no "b-only" skill — the only way this
+    # resolves is by scoping the lookup to the session's profile_home.
     assert "error" in resp
     assert resp["error"]["code"] == 4018
     assert "skill command" in resp["error"]["message"]

@@ -15,6 +15,7 @@ import {
   backendScopeKey,
   backendScopePrefix,
   buildAgentRoster,
+  connectionDialFieldsChanged,
   connectionIdForLabel,
   labelKey,
   labelSlug,
@@ -25,6 +26,7 @@ import {
   normalizeRegistry,
   REGISTRY_VERSION,
   removeConnection,
+  resolveRegistryLocalRoute,
   setPrimaryConnection,
   uniqueLabel,
   updateEligibility,
@@ -125,6 +127,36 @@ test('backendScopeKey: non-local connections get an unambiguous composite', () =
   assert.ok(backendScopeKey('homelab', 'research').startsWith(backendScopePrefix('homelab')))
   assert.ok(!backendScopeKey('homelab-2', 'research').startsWith(backendScopePrefix('homelab')))
   assert.ok(!'research'.startsWith(backendScopePrefix('homelab')))
+})
+
+// --- resolveRegistryLocalRoute (registry 'local' entry vs the v1 route) ---
+
+test('registry local route: delegates to the legacy path when v1 is local (single-source users byte-identical)', () => {
+  assert.deepEqual(resolveRegistryLocalRoute('research', {}), { delegate: true, poolKey: 'research' })
+  assert.deepEqual(resolveRegistryLocalRoute('', {}), { delegate: true, poolKey: 'default' })
+  assert.deepEqual(resolveRegistryLocalRoute(null, { globalRemote: false }), { delegate: true, poolKey: 'default' })
+})
+
+test('registry local route: v1 REMOTE global mode forces a genuinely-local backend (migration scenario)', () => {
+  // The migration keeps the mandatory 'local' entry AND makes the v1 remote
+  // the registry primary. If 'local' delegated to the v1 route here, the
+  // roster's "This device" rows would enumerate + dial the REMOTE primary —
+  // every profile duplicated and local agents talking to the remote box.
+  const route = resolveRegistryLocalRoute('default', { globalRemote: true })
+
+  assert.equal(route.delegate, false)
+  // The forced-local child must NOT pool under the bare profile key: that
+  // slot is where the v1 route caches the REMOTE descriptor. The composite
+  // form is prefix-owned by the local connection and collision-free.
+  assert.equal(route.poolKey, 'conn:local::default')
+  assert.ok(route.poolKey.startsWith(backendScopePrefix(LOCAL_CONNECTION_ID)))
+  assert.notEqual(route.poolKey, backendScopeKey(LOCAL_CONNECTION_ID, 'default'))
+})
+
+test('registry local route: a per-profile remote override also forces local', () => {
+  const route = resolveRegistryLocalRoute('research', { profileRemoteOverride: true })
+
+  assert.deepEqual(route, { delegate: false, poolKey: 'conn:local::research' })
 })
 
 // --- buildAgentRoster (union roster + @name-device rule) ---
@@ -522,4 +554,179 @@ test('upsertConnection replaces by id and appends new ids', () => {
 
   assert.equal(registry.connections.filter(c => c.id === a.id).length, 1)
   assert.equal(registry.connections.find(c => c.id === a.id)?.url, 'http://a:2')
+})
+
+// --- connectionDialFieldsChanged (edit → recycle decision) ---
+
+test('connectionDialFieldsChanged: label-only edits do not recycle', () => {
+  const before = {
+    id: 'homelab',
+    kind: 'remote',
+    label: 'Homelab',
+    url: 'http://10.0.0.5:9119',
+    authMode: 'token',
+    token: { encoding: 'safeStorage', value: 'abc' }
+  } as const
+
+  assert.equal(connectionDialFieldsChanged(before, { ...before, label: 'Home lab (renamed)' }), false)
+  // Identity edit is also a no-op.
+  assert.equal(connectionDialFieldsChanged(before, { ...before }), false)
+})
+
+test('connectionDialFieldsChanged: url / auth / token changes recycle', () => {
+  const before = {
+    id: 'homelab',
+    kind: 'remote',
+    label: 'Homelab',
+    url: 'http://10.0.0.5:9119',
+    authMode: 'token',
+    token: { encoding: 'safeStorage', value: 'abc' }
+  } as const
+
+  assert.equal(connectionDialFieldsChanged(before, { ...before, url: 'http://10.0.0.9:9119' }), true)
+  assert.equal(connectionDialFieldsChanged(before, { ...before, authMode: 'oauth', token: undefined }), true)
+  assert.equal(
+    connectionDialFieldsChanged(before, { ...before, token: { encoding: 'safeStorage', value: 'NEW' } }),
+    true
+  )
+})
+
+test('connectionDialFieldsChanged: ssh routing fields recycle, kind change recycles', () => {
+  const before = { id: 'box', kind: 'ssh', label: 'Box', host: 'box.lan', user: 'me', port: 22 } as const
+
+  assert.equal(connectionDialFieldsChanged(before, { ...before, label: 'Box 2' }), false)
+  assert.equal(connectionDialFieldsChanged(before, { ...before, host: 'other.lan' }), true)
+  assert.equal(connectionDialFieldsChanged(before, { ...before, port: 2222 }), true)
+  assert.equal(connectionDialFieldsChanged(before, { ...before, remoteProfile: 'work' }), true)
+  assert.equal(
+    connectionDialFieldsChanged(before, { id: 'box', kind: 'remote', label: 'Box', url: 'http://x:1' }),
+    true
+  )
+})
+
+// --- remote gateway headers (Cloudflare Access etc., #74466 / PR #74468) ---
+
+test('normalizeConnectionInput keeps filtered headers on remote/cloud, drops them elsewhere', () => {
+  const registry = emptyRegistry()
+
+  const remote = normalizeConnectionInput(
+    {
+      kind: 'remote',
+      label: 'CF box',
+      url: 'https://hermes.example.com',
+      authMode: 'token',
+      token: { enc: 'x' },
+      headers: {
+        'CF-Access-Client-Id': { encoding: 'safeStorage', value: 'id' },
+        Authorization: { encoding: 'plain', value: 'blocked' }
+      }
+    },
+    registry
+  )
+
+  assert.deepEqual(remote.headers, {
+    'CF-Access-Client-Id': { encoding: 'safeStorage', value: 'id' }
+  })
+
+  const ssh = normalizeConnectionInput(
+    {
+      kind: 'ssh',
+      label: 'Box',
+      host: 'box.lan',
+      headers: { 'CF-Access-Client-Id': { encoding: 'plain', value: 'id' } }
+    } as any,
+    registry
+  )
+
+  assert.equal((ssh as any).headers, undefined)
+})
+
+test('mergeConnectionInput inherits stored headers when the editor payload omits them', () => {
+  const stored = {
+    id: 'cf',
+    kind: 'remote' as const,
+    label: 'CF box',
+    url: 'https://hermes.example.com',
+    authMode: 'token' as const,
+    headers: { 'CF-Access-Client-Id': { encoding: 'safeStorage', value: 'id' } }
+  }
+
+  const renamed = mergeConnectionInput({ id: 'cf', kind: 'remote', label: 'Renamed' }, stored)
+
+  assert.deepEqual(renamed.headers, stored.headers)
+
+  // An explicit headers payload (even empty) is authoritative — clearing works.
+  const cleared = mergeConnectionInput({ id: 'cf', kind: 'remote', label: 'CF box', headers: {} }, stored)
+
+  assert.deepEqual(cleared.headers, {})
+})
+
+test('connectionDialFieldsChanged: a header change recycles live backends', () => {
+  const before = {
+    id: 'cf',
+    kind: 'remote',
+    label: 'CF box',
+    url: 'https://hermes.example.com',
+    authMode: 'token',
+    token: { enc: 'x' },
+    headers: { 'CF-Access-Client-Id': { encoding: 'safeStorage', value: 'id' } }
+  } as const
+
+  assert.equal(connectionDialFieldsChanged(before, { ...before }), false)
+  assert.equal(
+    connectionDialFieldsChanged(before, {
+      ...before,
+      headers: { 'CF-Access-Client-Id': { encoding: 'safeStorage', value: 'OTHER' } }
+    }),
+    true
+  )
+  assert.equal(connectionDialFieldsChanged(before, { ...before, headers: undefined }), true)
+})
+
+test('normalizeRegistry preserves stored headers on remote entries (v2 additive field)', () => {
+  const registry = normalizeRegistry({
+    version: REGISTRY_VERSION,
+    primary: 'cf',
+    connections: [
+      { id: 'local', kind: 'local', label: 'This device' },
+      {
+        id: 'cf',
+        kind: 'remote',
+        label: 'CF box',
+        url: 'https://hermes.example.com',
+        authMode: 'token',
+        token: { enc: 'x' },
+        headers: {
+          'CF-Access-Client-Id': { encoding: 'safeStorage', value: 'id' },
+          Cookie: { encoding: 'plain', value: 'blocked' }
+        }
+      }
+    ]
+  })
+
+  const remote = registry.connections.find(c => c.id === 'cf')
+
+  assert.ok(remote)
+  assert.deepEqual(remote.headers, {
+    'CF-Access-Client-Id': { encoding: 'safeStorage', value: 'id' }
+  })
+})
+
+test('migrateV1ToRegistry carries v1 remote headers into the registry entry', () => {
+  const registry = migrateV1ToRegistry({
+    mode: 'remote',
+    remote: {
+      url: 'https://hermes.example.com',
+      authMode: 'token',
+      token: { enc: 'x' },
+      headers: { 'CF-Access-Client-Id': { encoding: 'safeStorage', value: 'id' } }
+    }
+  })
+
+  const remote = registry.connections.find(c => c.kind === 'remote')
+
+  assert.ok(remote)
+  assert.deepEqual(remote.headers, {
+    'CF-Access-Client-Id': { encoding: 'safeStorage', value: 'id' }
+  })
 })

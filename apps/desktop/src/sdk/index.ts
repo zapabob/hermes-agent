@@ -18,21 +18,80 @@
  *  - `ui.*` — the design language, so plugin UI looks native by default.
  */
 
-import { atom, type ReadableAtom } from 'nanostores'
+import { atom, computed, type ReadableAtom } from 'nanostores'
 
+import { PRIMARY_SESSION_VIEW } from '@/app/chat/session-view'
 import { openSession, type OpenSessionIntent } from '@/app/open-session'
+import type { ClientSessionState } from '@/app/types'
 import { $narrowViewport } from '@/components/pane-shell/tree/store'
 import { onGatewayEvent } from '@/contrib/events'
-import { getLogs, getStatus, type HermesGateway } from '@/hermes'
-import { $gateway, ensureGatewayForAgent, openGatewayForAgent, openGatewayForProfile } from '@/store/gateway'
+import { deleteProfile, getLogs, getStatus, type HermesGateway } from '@/hermes'
+import {
+  $gateway,
+  openGatewayForAgent,
+  openGatewayForProfile,
+  requestGatewayForAgent,
+  requestGatewayForProfile
+} from '@/store/gateway'
 import { notify, notifyError } from '@/store/notifications'
-import { $activeGatewayProfile, ensureGatewayProfile, newSessionInProfile, setShowAllProfiles } from '@/store/profile'
-import { $activeSessionId, $currentCwd, $currentModel, $gatewayState } from '@/store/session'
+import {
+  $activeGatewayProfile,
+  $profiles,
+  ensureGatewayAgent,
+  ensureGatewayProfile,
+  newSessionInProfile,
+  normalizeProfileKey,
+  refreshProfiles,
+  selectProfile,
+  setActiveProfile,
+  setShowAllProfiles
+} from '@/store/profile'
+import { $activeSessionId, $currentCwd, $currentModel, $gatewayState, $selectedStoredSessionId } from '@/store/session'
+import {
+  $focusedRuntimeId,
+  $focusedSessionState,
+  $focusedStoredSessionId,
+  $sessionStates
+} from '@/store/session-states'
 import { runGatewayRestart } from '@/store/system-actions'
+import type { UsageStats } from '@/types/hermes'
 
 // -- state: readonly views over the app's live atoms -------------------------
 
 const readonlyAtom = <T>(atomLike: ReadableAtom<T>): ReadableAtom<T> => atomLike
+
+/**
+ * Turn flag for the FOCUSED chat — same semantics as the statusbar's busy
+ * pulse. While the focused surface is the primary workspace (or a draft with
+ * no runtime slice yet) this reads the primary view, which itself falls back
+ * to the global draft atoms. Once a session TILE holds focus, the tile's own
+ * state slice is authoritative — a background session can never leak in.
+ */
+const focusedTurnFlag = (
+  select: (state: ClientSessionState) => boolean,
+  $primary: ReadableAtom<boolean>
+): ReadableAtom<boolean> =>
+  computed(
+    [$focusedStoredSessionId, $selectedStoredSessionId, $focusedSessionState, $primary],
+    (focused, selected, state, primary) =>
+      !focused || focused === selected ? primary : Boolean(state && select(state))
+  )
+
+const $focusedBusy = focusedTurnFlag(state => state.busy, PRIMARY_SESSION_VIEW.$busy)
+
+const $focusedAwaitingResponse = focusedTurnFlag(
+  state => state.awaitingResponse,
+  PRIMARY_SESSION_VIEW.$awaitingResponse
+)
+
+export interface PluginProfileRoute {
+  connectionId: string
+  mode: 'local' | 'remote'
+  /** Desktop profile used to select the connection route. */
+  profile: string
+  /** Backend Hermes profile served by that route. */
+  targetProfile: string
+}
 
 /** Window geometry + the app's responsive posture, one readonly rect. */
 export interface ViewportRect {
@@ -48,7 +107,50 @@ const readViewport = (): ViewportRect => ({
   narrow: $narrowViewport.get()
 })
 
+/** Runtime session id → mid-turn. Not gateway socket state. */
+const $busyBySession = computed($sessionStates, states => {
+  const map: Record<string, boolean> = {}
+
+  for (const [id, state] of Object.entries(states)) {
+    map[id] = Boolean(state.busy)
+  }
+
+  return map
+})
+
 const $viewport = atom<ViewportRect>(readViewport())
+
+async function requestPluginProfile<T>(
+  route: PluginProfileRoute | string,
+  method: string,
+  params: Record<string, unknown>
+): Promise<T> {
+  if (typeof route !== 'string') {
+    return requestGatewayForAgent<T>(route.connectionId, route.profile, method, params)
+  }
+
+  const getAgentRoster = window.hermesDesktop?.getAgentRoster
+
+  if (!getAgentRoster) {
+    return requestGatewayForProfile<T>(route, method, params)
+  }
+
+  const roster = await getAgentRoster()
+  const profile = route.trim() || 'default'
+  const soleLocalSource = roster.sources.length === 1 && roster.sources[0]?.kind === 'local'
+
+  // The string overload is compatibility-only. A sole local registry is the
+  // one topology where a profile name is intrinsically unambiguous, even when
+  // its live enumeration transiently failed. Any additional source requires a
+  // descriptor because an undialed/unreachable source may expose the same name.
+  if (soleLocalSource) {
+    return requestGatewayForProfile<T>(profile, method, params)
+  }
+
+  throw new Error(
+    `Profile "${profile}" requires a route descriptor from host.profileRoutes(); profile-only routing is limited to legacy/local profiles.`
+  )
+}
 
 if (typeof window !== 'undefined') {
   const refresh = () => $viewport.set(readViewport())
@@ -56,13 +158,41 @@ if (typeof window !== 'undefined') {
   $narrowViewport.listen(refresh)
 }
 
+/** Live usage of the FOCUSED session, projected out of the streamed session
+ *  state — the same readout the core statusbar's context chip paints. */
+const $focusedUsage = computed($focusedSessionState, state => state?.usage ?? null)
+
 export const host = {
   state: {
     /** Runtime id of the active chat session (null on a fresh draft). */
     activeSessionId: readonlyAtom<null | string>($activeSessionId),
+    /** True from send until the first assistant payload on the focused chat. */
+    awaitingResponse: readonlyAtom<boolean>($focusedAwaitingResponse),
+    /**
+     * True while the focused chat is working after a send. Covers the wait
+     * for the first token and the stream that follows. Follows tile focus —
+     * same signal the statusbar's busy pulse reads. A draft with no runtime
+     * id uses the global flag.
+     */
+    busy: readonlyAtom<boolean>($focusedBusy),
+    /** Runtime session id → mid-turn. Not socket state; see `gateway`. */
+    busyBySession: readonlyAtom<Record<string, boolean>>($busyBySession),
     /** Active workspace cwd ('' when detached). */
     cwd: readonlyAtom<string>($currentCwd),
-    /** Gateway socket state: 'idle' | 'connecting' | 'open' | …. */
+    /** Runtime id of the FOCUSED chat session — the interacted tile, else the
+     *  primary. Prefer this over `activeSessionId` for any readout that
+     *  should follow the user between tiles (context, tokens, cost). */
+    focusedSessionId: readonlyAtom<null | string>($focusedRuntimeId),
+    /** Stored (durable) id of the focused session — for navigation and
+     *  session-list matching, where runtime ids don't survive reloads. */
+    focusedStoredSessionId: readonlyAtom<null | string>($focusedStoredSessionId),
+    /** Live usage snapshot of the focused session (`context_used` /
+     *  `context_max` / `context_percent`, token counts, `cost_usd`) —
+     *  streamed by the backend, no RPC needed. Null while unresolved.
+     *  The UsageStats-optional fields (context_*, cost_usd) arrive as the
+     *  backend reports them, so read them with a fallback. */
+    focusedUsage: readonlyAtom<null | UsageStats>($focusedUsage),
+    /** Gateway socket state: 'idle' | 'connecting' | 'open' | …. Not turn-busy. */
     gateway: readonlyAtom<string>($gatewayState),
     /** Current main model slug. */
     model: readonlyAtom<string>($currentModel),
@@ -113,6 +243,40 @@ export const host = {
     void openGatewayForProfile(name).catch(() => undefined)
   },
 
+  /** Delete a profile THROUGH the desktop's teardown-routed REST path — the
+   *  same door core surfaces use (DeleteProfileDialog). Electron intercepts
+   *  the DELETE, tears down that profile's pool/primary backend first, and
+   *  routes the follow-up request away from it, so a live (or hover-warmed)
+   *  backend can't hold the profile dir open or respawn mid-delete and
+   *  resurrect the directory (issue #52279). Plugins must prefer this over
+   *  `cli.exec ['profile','delete',…]`, which bypasses that interception
+   *  entirely. When the deleted profile was the live gateway's, the app is
+   *  re-homed to the default profile — same semantics as the core dialog.
+   *  Rejects with the backend's error when the delete fails. */
+  deleteProfile: async (profile: string): Promise<void> => {
+    const name = (profile ?? '').trim()
+
+    if (!name) {
+      throw new Error('deleteProfile: profile name required')
+    }
+
+    if (normalizeProfileKey(name) === 'default') {
+      throw new Error('The default profile cannot be deleted.')
+    }
+
+    // Capture before the delete; re-home after so our write is the last one
+    // (mirrors DeleteProfileDialog — a refreshActiveProfile racing the dying
+    // backend can't clobber the pill back to the deleted profile).
+    const wasActive = normalizeProfileKey(name) === normalizeProfileKey($activeGatewayProfile.get())
+
+    await deleteProfile(name)
+
+    if (wasActive) {
+      selectProfile('default')
+      setActiveProfile('default')
+    }
+  },
+
   // ── Multi-source agents (the Bot Mode door) ───────────────────────────────
 
   /** The registered connection list (labels, kinds, primary) — token bytes
@@ -148,11 +312,13 @@ export const host = {
   },
 
   /** Activate an agent's gateway (dialing it if needed) so subsequent
-   *  host.request calls hit that agent's backend. The local source falls
+   *  host.request calls hit that agent's backend. Goes through the store's
+   *  serialized activation path so $connection / $activeGatewayProfile follow
+   *  and rapid switches can't land out of order. The local source falls
    *  through to the profile path — single-source plugins keep working
    *  against older behavior unchanged. */
   ensureAgent: async (connectionId: null | string, profile: string): Promise<void> =>
-    ensureGatewayForAgent(connectionId, (profile ?? '').trim() || 'default'),
+    ensureGatewayAgent(connectionId, (profile ?? '').trim() || 'default'),
 
   openSession: async (
     storedSessionId: string,
@@ -201,6 +367,38 @@ export const host = {
 
   /** One-shot system status snapshot (platforms, versions, …). */
   status: async () => getStatus(),
+
+  /** Credential-free routes across every current registry source. Identity is
+   *  the (connectionId, profile) pair; endpoint/auth details stay in Electron. */
+  profileRoutes: async () => {
+    const desktop = window.hermesDesktop
+    const getProfileRoutes = desktop?.getProfileRoutes
+
+    if (!getProfileRoutes) {
+      throw new Error('Hermes Desktop connection routing unavailable')
+    }
+
+    let profiles = $profiles.get()
+
+    try {
+      profiles = await refreshProfiles()
+    } catch {
+      // Route inventory is a read: a transient backend failure falls back to
+      // the last cache. Electron always adds the primary Desktop profile.
+    }
+
+    return getProfileRoutes(profiles.map(profile => profile.name))
+  },
+
+  /** Gateway JSON-RPC through a credential-free route descriptor without
+   *  foregrounding it. Passing a bare profile is the v1/local compatibility
+   *  overload; registry callers must pass the descriptor so duplicate names
+   *  remain unambiguous. */
+  requestProfile: async <T>(
+    route: PluginProfileRoute | string,
+    method: string,
+    params: Record<string, unknown> = {}
+  ): Promise<T> => requestPluginProfile<T>(route, method, params),
 
   /** Gateway JSON-RPC — sessions, config, skills, cron, kanban, everything
    *  the app itself uses. Lazy: resolves the LIVE socket per call. */
@@ -253,6 +451,13 @@ export {
 export type { StatusbarItem } from '@/app/shell/statusbar-controls'
 
 export type { TitlebarTool } from '@/app/shell/titlebar-controls'
+/** THE whole Capabilities surface (Skills / Tools / MCP tabs, installed
+ *  lists, full-skill detail pane, embedded hub picker with one-click
+ *  installs). For plugin dialogs pass `embedded` (tab state stays local —
+ *  never touches the page router) and `fixedProfile` to pin every tab to one
+ *  bot's backend; the internal profile selector hides itself. Bot Mode's
+ *  Advanced section is the reference consumer. */
+export { SkillsView } from '@/app/skills'
 /** THE full MCP tab core Settings renders — per-server enable + OAuth sign-in
  *  + API-key setup + live probes, not a checkbox list. Route-decoupled so it
  *  renders anywhere (a plugin dialog); pass a live `gateway` (see

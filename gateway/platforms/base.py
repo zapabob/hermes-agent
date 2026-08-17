@@ -1972,11 +1972,17 @@ _MEDIA_PATH_RE = (
 # guard keeps multi-part extensions intact — for ``archive.tar.gz`` the
 # ``.`` after ``tar`` is followed by ``g``, so the match must extend to
 # ``.gz`` instead of stopping early at ``.tar``.
+# CJK full-width punctuation accepted as MEDIA path terminators, mirroring the
+# ASCII set in the looka below. Chinese-language agent output naturally writes
+# ``MEDIA:D:\path\早报.pdf（782.6 KB）`` or ``MEDIA:...pdf：内容`` — without
+# these, the lookahead fails and the attachment is silently dropped (#88038).
+_MEDIA_CJK_TERMINATORS = "（）〈〉《》：，。；！？、\u201c\u201d\u2018\u2019【】"
+
 MEDIA_TAG_CLEANUP_RE = re.compile(
     r'''[`"'*_]{0,3}MEDIA:\s*'''
     r'''(?P<path>`[^`\n]+?`|"[^"\n]+?"|'[^'\n]+?'|'''
     r'''(?:~/|/|[A-Za-z]:[/\\])\S+?(?:[^\S\n]+\S+?)*?\.(?:''' + _MEDIA_EXT_ALTERNATION + r'''))'''
-    r'''(?=[\s`"'*_,;:)\]}\[]|MEDIA:|\.(?:\s|$)|$)[`"'*_]{0,3}\.?''',
+    r'''(?=[\s`"'*_,;:)\]}\[''' + _MEDIA_CJK_TERMINATORS + r''']|MEDIA:|\.(?:\s|$)|$)[`"'*_]{0,3}\.?''',
     re.IGNORECASE,
 )
 
@@ -2012,7 +2018,7 @@ MEDIA_EXTENSIONLESS_TAG_RE = re.compile(
     r'''[`"'*_]{0,3}MEDIA:\s*'''
     r'''(?P<path>`[^`\n]+`|"[^"\n]+"|'[^'\n]+'|'''
     r'''(?:~/|/|[A-Za-z]:[/\\])[^\s\n`"']+?)'''
-    r'''(?=[`"'\s,;:)\]}]|MEDIA:|$)'''
+    r'''(?=[`"'\s,;:)\]}''' + _MEDIA_CJK_TERMINATORS + r''']|MEDIA:|$)'''
     r'''[`"'*_]{0,3}\s*''',
     re.IGNORECASE,
 )
@@ -3484,7 +3490,15 @@ class BasePlatformAdapter(ABC):
         """
         try:
             from gateway.status import write_runtime_status
-            write_runtime_status(platform=self.platform.value, **kwargs)
+            # Multiplexed secondary adapters share the process-level runtime
+            # status file with the primary adapter.  Their runner stamps a
+            # namespaced key (``<profile>:<platform>``) so one profile's fatal
+            # state cannot overwrite another profile's healthy entry.
+            platform_key = (
+                getattr(self, "_runtime_status_platform_key", None)
+                or self.platform.value
+            )
+            write_runtime_status(platform=platform_key, **kwargs)
         except Exception as exc:
             # Use getattr so object.__new__(...) test harnesses that skip __init__
             # don't blow up on attribute access.
@@ -3553,6 +3567,7 @@ class BasePlatformAdapter(ABC):
         """
         from gateway.status import (
             acquire_scoped_lock,
+            scoped_lock_owner_label,
             take_over_scoped_lock_holder,
         )
 
@@ -3600,11 +3615,21 @@ class BasePlatformAdapter(ABC):
                     return True
 
         owner_pid = existing.get('pid') if isinstance(existing, dict) else None
-        message = (
-            f'{resource_desc} already in use'
-            + (f' (PID {owner_pid})' if owner_pid else '')
-            + '. Stop the other gateway first.'
-        )
+        # OOF-3: scoped locks are machine-global, so the holder can be a
+        # different profile's gateway. A bare PID gives an operator no way to
+        # tell WHICH profile owns the credential — name it when we can.
+        owner_profile = scoped_lock_owner_label(existing)
+        if owner_profile:
+            holder = f" by the '{owner_profile}' profile gateway"
+            holder += f" (PID {owner_pid})" if owner_pid else ""
+            remedy = (
+                f" Stop that gateway first "
+                f"(hermes --profile {owner_profile} gateway stop)."
+            )
+        else:
+            holder = f" (PID {owner_pid})" if owner_pid else ""
+            remedy = " Stop the other gateway first."
+        message = f"{resource_desc} already in use{holder}.{remedy}"
         logger.error('[%s] %s', self.name, message)
         self._set_fatal_error(f'{scope}_lock', message, retryable=True)
         return False
@@ -6813,7 +6838,7 @@ class BasePlatformAdapter(ABC):
                 outcome = ProcessingOutcome.FAILURE
             await self._run_processing_hook("on_processing_complete", event, outcome)
             raise
-        except Exception as e:
+        except BaseException as e:
             await self._run_processing_hook("on_processing_complete", event, ProcessingOutcome.FAILURE)
             logger.error("[%s] Error handling message: %s", self.name, e, exc_info=True)
             # Send the error to the user so they aren't left with radio silence
@@ -6835,6 +6860,14 @@ class BasePlatformAdapter(ABC):
                     "[%s] Failed to send error notification to user: %s",
                     self.name, notify_err, exc_info=True,
                 )  # Last resort — don't let error reporting crash the handler
+            # Preserve shutdown semantics: SystemExit/KeyboardInterrupt must
+            # still propagate after the user-facing failure notification, so
+            # the loop's own signal handling can shut down cleanly. Other
+            # BaseExceptions (e.g. GeneratorExit) are contained like ordinary
+            # failures — this handler is fire-and-forget, so swallowing them
+            # here prevents "Task exception was never retrieved" radio silence.
+            if isinstance(e, (SystemExit, KeyboardInterrupt)):
+                raise
         finally:
             # Stop typing before any deferred callback work.  Post-delivery
             # callbacks may perform platform I/O; a stuck callback must not

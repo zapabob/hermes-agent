@@ -1,11 +1,18 @@
+import { useStore } from '@nanostores/react'
 import { act, cleanup, render, waitFor } from '@testing-library/react'
 import type { MutableRefObject } from 'react'
-import { useEffect } from 'react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { useEffect, useRef } from 'react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { $terminalTakeover, setTerminalTakeover } from '@/app/right-sidebar/store'
 import { noteActiveTreeGroup, revealTreePane } from '@/components/pane-shell/tree/store'
-import { getAllSessionMessages, getLatestSessionMessages, getSession, type SessionInfo } from '@/hermes'
+import {
+  getAllSessionMessages,
+  getLatestSessionMessages,
+  getSession,
+  type SessionInfo,
+  type SessionResumeResponse
+} from '@/hermes'
 import { createClientSessionState } from '@/lib/chat-runtime'
 import { clearSessionDraft, stashSessionDraft, takeSessionDraft } from '@/store/composer'
 import { $activeGatewayProfile, $newChatProfile, ensureGatewayProfile } from '@/store/profile'
@@ -22,8 +29,11 @@ import {
   $newChatWorkspaceTarget,
   $resumeFailedSessionId,
   $selectedStoredSessionId,
+  $turnStartedAt,
   setActiveSessionId,
   setActiveSessionStoredIdRotation,
+  setAwaitingResponse,
+  setBusy,
   setCurrentCwd,
   setCurrentFastMode,
   setCurrentModel,
@@ -33,14 +43,17 @@ import {
   setNewChatWorkspaceTarget,
   setResumeFailedSessionId,
   setSelectedStoredSessionId,
-  setSessions
+  setSessions,
+  setTurnStartedAt
 } from '@/store/session'
 import { $sessionTiles } from '@/store/session-states'
 
+import sessionResumeActiveTurn from '../../../../../../tests/fixtures/session-resume-active-turn.json'
 import { sessionRoute } from '../../routes'
 import type { ClientSessionState } from '../../types'
 
 import { useSessionActions } from './use-session-actions'
+import { useSessionStateCache } from './use-session-state-cache'
 
 vi.mock('@/hermes', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -631,8 +644,10 @@ function ResumeHarness({
     selectedStoredSessionIdRef: ref<string | null>(selectedStoredSessionId),
     sessionStateByRuntimeIdRef: stateMapRef,
     syncSessionStateToView: vi.fn(),
-    updateSessionState: (sessionId, updater) => {
-      const current = stateMapRef.current.get(sessionId) ?? ({} as ClientSessionState)
+    updateSessionState: (sessionId, updater, storedSessionId) => {
+      // Full default shape (not a bare {} cast) so seeded/derived fields like
+      // turnStartedAt behave as in production state updates.
+      const current = stateMapRef.current.get(sessionId) ?? createClientSessionState(storedSessionId ?? null)
       const next = updater(current)
 
       stateMapRef.current.set(sessionId, next)
@@ -640,6 +655,51 @@ function ResumeHarness({
 
       return next
     }
+  })
+
+  useEffect(() => {
+    onReady(actions.resumeSession)
+  }, [actions.resumeSession, onReady])
+
+  return null
+}
+
+function ResumeTimerHarness({
+  onReady,
+  requestGateway
+}: {
+  onReady: (resume: (storedSessionId: string, replaceRoute?: boolean) => Promise<unknown>) => void
+  requestGateway: <T>(method: string, params?: Record<string, unknown>) => Promise<T>
+}) {
+  const activeSessionId = useStore($activeSessionId)
+  const busyRef = useRef(false)
+
+  const cache = useSessionStateCache({
+    activeSessionId,
+    busyRef,
+    selectedStoredSessionId: null,
+    setAwaitingResponse,
+    setBusy,
+    setMessages
+  })
+
+  const actions = useSessionActions({
+    activeSessionId,
+    activeSessionIdRef: cache.activeSessionIdRef,
+    busyRef,
+    creatingSessionRef: useRef(false),
+    ensureSessionState: cache.ensureSessionState,
+    getRouteToken: () => 'timer-contract',
+    navigate: vi.fn() as never,
+    requestGateway,
+    resetViewSync: cache.resetViewSync,
+    runtimeIdByStoredSessionIdRef: cache.runtimeIdByStoredSessionIdRef,
+    selectedStoredSessionId: null,
+    selectedStoredSessionIdRef: cache.selectedStoredSessionIdRef,
+    sessionStateByRuntimeIdRef: cache.sessionStateByRuntimeIdRef,
+    syncSessionStateToView: cache.syncSessionStateToView,
+    getRoutedStoredSessionId: () => null,
+    updateSessionState: cache.updateSessionState
   })
 
   useEffect(() => {
@@ -793,6 +853,7 @@ describe('resumeSession failure recovery', () => {
           message_count: compressedRuntimeMessages.length,
           messages: compressedRuntimeMessages,
           running: true,
+          turn_started_at: 1_700_000_000,
           inflight: {
             user: 'current prompt',
             assistant: 'partial answer',
@@ -823,6 +884,7 @@ describe('resumeSession failure recovery', () => {
     expect(renderedMessages).toContain('current prompt')
     expect(renderedMessages).toContain('partial answer')
     expect(renderedMessages).toContain('newest prompt')
+    expect(resumedState?.turnStartedAt).toBe(1_700_000_000_000)
   })
 
   it('preserves a runtime-cache delta that arrives while cold resume waits for REST', async () => {
@@ -1072,6 +1134,7 @@ describe('resumeSession failure recovery', () => {
             storedSessionId: 'stored-1',
             streamId: null,
             turnStartedAt: null,
+            turnLive: false,
             usage: null,
             yolo: false
           }
@@ -1104,6 +1167,86 @@ describe('resumeSession failure recovery', () => {
     expect(sessionStateByRuntimeIdRef.current.has('runtime-stale')).toBe(false)
     expect($activeSessionId.get()).toBe('runtime-1')
     expect($messages.get().length).toBe(1)
+  })
+})
+
+describe('session.resume turn timer contract', () => {
+  beforeEach(() => {
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback: FrameRequestCallback) => {
+      callback(0)
+
+      return null as unknown as number
+    })
+    setActiveSessionId(null)
+    setAwaitingResponse(false)
+    setBusy(false)
+    setMessages([])
+    setSessions([])
+    setTurnStartedAt(null)
+  })
+
+  afterEach(() => {
+    cleanup()
+    setActiveSessionId(null)
+    setAwaitingResponse(false)
+    setBusy(false)
+    setMessages([])
+    setSessions([])
+    setTurnStartedAt(null)
+    vi.restoreAllMocks()
+  })
+
+  async function resumeFrom(response: unknown): Promise<void> {
+    const requestGateway = vi.fn(async (method: string) => {
+      if (method === 'session.resume') {
+        // Model the JSON-RPC serialization/deserialization boundary. The shared
+        // fixture is asserted against the real gateway response in Python.
+        return JSON.parse(JSON.stringify(response)) as never
+      }
+
+      return {} as never
+    })
+
+    vi.mocked(getAllSessionMessages).mockResolvedValue({ messages: [], session_id: 'stored-running' } as never)
+
+    let resume: ((storedSessionId: string, replaceRoute?: boolean) => Promise<unknown>) | null = null
+    render(<ResumeTimerHarness onReady={ready => (resume = ready)} requestGateway={requestGateway} />)
+    await waitFor(() => expect(resume).not.toBeNull())
+    await act(async () => {
+      await resume!('stored-running', true)
+    })
+  }
+
+  it('restores the canonical gateway turn timestamp in milliseconds', async () => {
+    await resumeFrom(sessionResumeActiveTurn)
+
+    expect($turnStartedAt.get()).toBe(sessionResumeActiveTurn.turn_started_at * 1000)
+  })
+
+  it('clears a stale timer when the gateway response is not running', async () => {
+    setTurnStartedAt(1_600_000_000_000)
+
+    await resumeFrom({ ...sessionResumeActiveTurn, running: false })
+
+    expect($turnStartedAt.get()).toBeNull()
+  })
+
+  it('clears a stale timer when the running gateway response omits its timestamp', async () => {
+    const missingTimestamp: Record<string, unknown> = JSON.parse(JSON.stringify(sessionResumeActiveTurn))
+    delete missingTimestamp.turn_started_at
+    setTurnStartedAt(1_600_000_000_000)
+
+    await resumeFrom(missingTimestamp)
+
+    expect($turnStartedAt.get()).toBeNull()
+  })
+
+  it('clears a stale timer when the running gateway response has a non-numeric timestamp', async () => {
+    setTurnStartedAt(1_600_000_000_000)
+
+    await resumeFrom({ ...sessionResumeActiveTurn, turn_started_at: 'not-a-timestamp' })
+
+    expect($turnStartedAt.get()).toBeNull()
   })
 })
 
@@ -1599,11 +1742,71 @@ describe('resumeSession warm-cache mapping integrity', () => {
     // resume RPC ran, for the session that was actually requested.
     const resumeCalls = requestGateway.mock.calls.filter(([method]) => method === 'session.resume')
     expect(resumeCalls.length).toBe(1)
-    expect(resumeCalls[0][1]).toMatchObject({ session_id: 'stored-A' })
+    expect(resumeCalls[0][1]).toMatchObject({
+      defer_history: true,
+      session_id: 'stored-A'
+    })
+    expect(getLatestSessionMessages).toHaveBeenCalledWith('stored-A', undefined)
 
     // The corrupt mapping was purged so it can't mis-resolve again.
     expect(runtimeIdByStoredSessionIdRef.current.has('stored-A')).toBe(false)
     expect(sessionStateByRuntimeIdRef.current.has('rt-recycled')).toBe(false)
+  })
+
+  it('paints the bounded latest transcript after the deferred resume acknowledgement', async () => {
+    const latestPage = Array.from({ length: 500 }, (_, index) => ({
+      content: `message-${index}`,
+      role: index % 2 === 0 ? ('user' as const) : ('assistant' as const),
+      timestamp: index + 1
+    }))
+
+    setSessions([storedSession({ id: 'stored-A', message_count: 50_000 })])
+    vi.mocked(getLatestSessionMessages).mockReset()
+    vi.mocked(getLatestSessionMessages).mockResolvedValue({
+      messages: latestPage,
+      pagination: { limit: 500, offset: 0, order: 'latest', returned: 500 },
+      session_id: 'stored-A'
+    })
+
+    const deferredResume = deferred<SessionResumeResponse>()
+
+    const requestGatewayMock = vi.fn((method: string, _params?: Record<string, unknown>) => {
+      if (method === 'session.resume') {
+        return deferredResume.promise
+      }
+
+      return Promise.resolve({})
+    })
+
+    const requestGateway = <T,>(method: string, params?: Record<string, unknown>): Promise<T> =>
+      requestGatewayMock(method, params) as Promise<T>
+
+    let resume: ((storedSessionId: string, replaceRoute?: boolean) => Promise<unknown>) | null = null
+    render(<ResumeHarness onReady={value => (resume = value)} requestGateway={requestGateway} />)
+    await waitFor(() => expect(resume).not.toBeNull())
+    const resumePromise = resume!('stored-A', true)
+
+    await waitFor(() => expect(getLatestSessionMessages).toHaveBeenCalledTimes(1))
+    expect(getLatestSessionMessages).toHaveBeenCalledWith('stored-A', undefined)
+    expect($messages.get()).toHaveLength(0)
+    expect(requestGatewayMock).toHaveBeenCalledWith(
+      'session.resume',
+      expect.objectContaining({
+        defer_history: true,
+        omit_messages: true,
+        session_id: 'stored-A'
+      })
+    )
+
+    deferredResume.resolve({
+      session_id: 'rt-A',
+      resumed: 'stored-A',
+      message_count: 500,
+      messages: [],
+      info: {}
+    })
+    await resumePromise
+    expect($messages.get()).toHaveLength(500)
   })
 
   it('honours a warm cache entry whose stored id matches and refreshes its persisted transcript', async () => {
@@ -1730,6 +1933,67 @@ describe('resumeSession warm-cache mapping integrity', () => {
     expect(requestGateway.mock.calls.map(([method]) => method)).toContain('session.activate')
     expect(getLatestSessionMessages).toHaveBeenCalledWith('stored-A', undefined)
     expect(resumedState?.messages[0]?.attachmentRefs).toEqual(['@image:/tmp/photo.png'])
+  })
+
+  it('restores the warm reconnect turn clock from session.activate', async () => {
+    const turnStartedAtSeconds = 1_700_000_123
+
+    const runtimeIdByStoredSessionIdRef: MutableRefObject<Map<string, string>> = {
+      current: new Map([['stored-A', 'rt-A']])
+    }
+
+    const cachedState = clientState('stored-A')
+    cachedState.busy = true
+    cachedState.turnStartedAt = null
+
+    const sessionStateByRuntimeIdRef: MutableRefObject<Map<string, ClientSessionState>> = {
+      current: new Map([['rt-A', cachedState]])
+    }
+
+    const requestGateway = vi.fn(async (method: string) => {
+      if (method === 'session.activate') {
+        return {
+          session_id: 'rt-A',
+          session_key: 'stored-A',
+          resumed: 'stored-A',
+          message_count: 0,
+          messages: [],
+          running: true,
+          turn_started_at: turnStartedAtSeconds,
+          inflight: {
+            user: 'current prompt',
+            assistant: 'partial answer',
+            streaming: true
+          },
+          info: {}
+        } as never
+      }
+
+      return {} as never
+    })
+
+    vi.mocked(getAllSessionMessages).mockResolvedValue({ messages: [], session_id: 'stored-A' } as never)
+
+    let resumedState: ClientSessionState | undefined
+    let resume: ((storedSessionId: string, replaceRoute?: boolean) => Promise<unknown>) | null = null
+    render(
+      <ResumeHarness
+        onReady={ready => (resume = ready)}
+        onStateUpdate={(_sessionId, state) => (resumedState = state)}
+        requestGateway={requestGateway}
+        runtimeIdByStoredSessionIdRef={runtimeIdByStoredSessionIdRef}
+        sessionStateByRuntimeIdRef={sessionStateByRuntimeIdRef}
+      />
+    )
+    await waitFor(() => expect(resume).not.toBeNull())
+    await resume!('stored-A', true)
+
+    expect(resumedState).toMatchObject({
+      awaitingResponse: true,
+      busy: true,
+      turnStartedAt: turnStartedAtSeconds * 1000
+    })
+    expect(JSON.stringify(resumedState?.messages)).toContain('partial answer')
   })
 
   it('repairs an idle warm cache from a divergent equal-length persisted transcript', async () => {

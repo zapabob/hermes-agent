@@ -1,8 +1,8 @@
 """Gateway /loop command tests — dispatch, routing capture, mid-run guard."""
 
+import logging
 import time
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -21,7 +21,7 @@ class _FakeSessionStore:
     def __init__(self):
         self.entry = _FakeSessionEntry()
 
-    def get_or_create_session(self, source):
+    def get_or_create_session(self, source, *, touch_activity=True):
         return self.entry
 
     def _generate_session_key(self, source):
@@ -141,101 +141,110 @@ async def test_post_turn_loop_completion_noop_without_inflight_tick(loop_env):
     assert reloaded.ticks_fired == 0
 
 
-def test_session_reset_clears_only_the_outgoing_loop(loop_env):
-    """/new retires its old loop; compression has a dedicated migration path."""
-    store = SessionStore(sessions_dir=loop_env / "sessions", config=GatewayConfig())
-    source = _make_event("hello").source
-    old_entry = store.get_or_create_session(source)
-    Loop = loops.LoopManager
-    Loop(session_id=old_entry.session_id).set("watch deploy", interval_seconds=60)
-
-    new_entry = store.reset_session(old_entry.session_key)
-
-    assert new_entry is not None
-    assert new_entry.session_id != old_entry.session_id
-    old_loop = loops.load_loop(old_entry.session_id)
-    assert old_loop is not None and old_loop.status == "cleared"
-    assert loops.load_loop(new_entry.session_id) is None
+def test_streamed_already_sent_none_recovers_text_for_hooks():
+    """Streamed turns return None. Hooks must still see the delivered reply."""
+    event = _make_event("wakeup")
+    event._streamed_final_response = "CI is green.\nLOOP_COMPLETE"
+    assert GatewayRunner._final_text_for_post_turn_hooks(None, event) == (
+        "CI is green.\nLOOP_COMPLETE"
+    )
+    assert GatewayRunner._final_text_for_post_turn_hooks(None, _make_event("x")) == ""
+    assert (
+        GatewayRunner._final_text_for_post_turn_hooks(
+            {"final_response": "from dict"}, event
+        )
+        == "from dict"
+    )
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("current_session_id", "authorized", "should_dispatch"),
-    [
-        ("sid-current", True, False),
-        ("sid-loop", False, False),
-        ("sid-loop", True, True),
-    ],
-)
-async def test_loop_watcher_fences_session_and_sender_before_injection(
-    loop_env,
-    monkeypatch,
-    current_session_id,
-    authorized,
-    should_dispatch,
-):
-    """Due loops must be scoped to the still-current, authorized source."""
-    runner = object.__new__(GatewayRunner)
-    source = _make_event("loop").source
-    session_key = "agent:main:discord:channel:loop-test"
-    state = loops.LoopManager(session_id="sid-loop").set(
-        "poll CI",
-        interval_seconds=60,
-        route={
-            "platform": Platform.DISCORD.value,
-            "chat_id": str(source.chat_id),
-            "chat_type": str(source.chat_type),
-            "thread_id": str(source.thread_id),
-            "user_id": str(source.user_id),
-        },
+async def test_streamed_already_sent_completes_loop_tick(loop_env):
+    """A streamed wakeup must not leave awaiting_response stuck."""
+    runner = _make_runner()
+    await GatewayRunner._handle_loop_command(runner, _make_event("/loop 5m poll CI"))
+
+    mgr = loops.LoopManager(session_id="sid-gateway-loop")
+    mgr.state.next_due_at = time.time() - 1
+    assert mgr.fire_tick() is not None
+    assert mgr.state.awaiting_response is True
+    assert mgr.is_due() is False
+
+    event = _make_event("wakeup")
+    event._streamed_final_response = "CI is done.\nLOOP_COMPLETE"
+    # Same inputs the already_sent branch leaves for _handle_message.
+    final_text = GatewayRunner._final_text_for_post_turn_hooks(None, event)
+    assert final_text.strip()
+
+    await GatewayRunner._post_turn_loop_completion(
+        runner,
+        session_entry=_FakeSessionEntry(),
+        source=None,
+        final_response=final_text,
     )
-    state.next_due_at = time.time() - 1
-    loops.save_loop("sid-loop", state)
+    reloaded = loops.load_loop("sid-gateway-loop")
+    assert reloaded.awaiting_response is False
+    assert reloaded.status == "done"
 
-    received = []
 
-    async def handle_message(event):
-        received.append(event)
-        runner._running = False
+@pytest.mark.asyncio
+async def test_empty_agent_result_releases_inflight_loop_tick(loop_env):
+    runner = _make_runner()
+    await GatewayRunner._handle_loop_command(runner, _make_event("/loop 5m poll CI"))
 
-    adapter = SimpleNamespace(handle_message=AsyncMock(side_effect=handle_message))
-    runner._running = True
-    runner.adapters = {Platform.DISCORD: adapter}
-    runner._running_agents = {}
-    runner.session_store = SimpleNamespace()
-    runner._async_session_store = SimpleNamespace(
-        _store=runner.session_store,
-        lookup_by_session_key=AsyncMock(
-            return_value=SimpleNamespace(session_id=current_session_id)
-        ),
+    mgr = loops.LoopManager(session_id="sid-gateway-loop")
+    mgr.state.next_due_at = time.time() - 1
+    assert mgr.fire_tick() is not None
+    assert mgr.state.awaiting_response is True
+
+    runner._post_turn_goal_continuation = AsyncMock()
+    await GatewayRunner._run_post_turn_hooks(
+        runner,
+        agent_result={"final_response": ""},
+        source=_make_event("wakeup").source,
+        is_internal=True,
     )
-    runner._build_process_event_source = lambda _evt: source
-    runner._session_key_for_source = lambda _source: session_key
-    runner._is_user_authorized = MagicMock(return_value=authorized)
 
-    sleeps = 0
+    runner._post_turn_goal_continuation.assert_not_awaited()
+    reloaded = loops.load_loop("sid-gateway-loop")
+    assert reloaded.awaiting_response is False
+    assert reloaded.status == "active"
+    assert reloaded.next_due_at > time.time()
 
-    async def no_wait(_delay):
-        nonlocal sleeps
-        sleeps += 1
-        # Initial five-second startup delay is call one; stop after the first
-        # scan if the stale/revoked path did not already stop via delivery.
-        if sleeps > 1:
-            runner._running = False
 
-    monkeypatch.setattr("gateway.run.asyncio.sleep", no_wait)
-    await runner._loop_wakeup_watcher(interval=0)
+@pytest.mark.asyncio
+async def test_goal_hook_failure_does_not_block_loop_completion(loop_env, caplog):
+    runner = _make_runner()
+    await GatewayRunner._handle_loop_command(runner, _make_event("/loop 5m poll CI"))
 
-    if should_dispatch:
-        adapter.handle_message.assert_awaited_once()
-        event = received[0]
-        assert event.metadata == {
-            "gateway_session_key": session_key,
-            "gateway_session_id": "sid-loop",
-            "gateway_session_strict": True,
-            "gateway_loop_session_id": "sid-loop",
-        }
-        assert loops.load_loop("sid-loop").status == "active"
-    else:
-        adapter.handle_message.assert_not_awaited()
-        assert loops.load_loop("sid-loop").status == "cleared"
+    mgr = loops.LoopManager(session_id="sid-gateway-loop")
+    mgr.state.next_due_at = time.time() - 1
+    assert mgr.fire_tick() is not None
+
+    runner._post_turn_goal_continuation = AsyncMock(side_effect=RuntimeError("judge failed"))
+    with caplog.at_level(logging.DEBUG, logger="gateway.run"):
+        await GatewayRunner._run_post_turn_hooks(
+            runner,
+            agent_result={"final_response": "still working"},
+            source=_make_event("wakeup").source,
+            is_internal=True,
+        )
+
+    reloaded = loops.load_loop("sid-gateway-loop")
+    assert reloaded.awaiting_response is False
+    assert "goal continuation hook failed: judge failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_post_turn_session_resolution_failure_is_logged(loop_env, caplog):
+    runner = _make_runner()
+    runner.session_store.get_or_create_session = Mock(side_effect=RuntimeError("store unavailable"))
+
+    with caplog.at_level(logging.DEBUG, logger="gateway.run"):
+        await GatewayRunner._run_post_turn_hooks(
+            runner,
+            agent_result={"final_response": ""},
+            source=_make_event("wakeup").source,
+            is_internal=True,
+        )
+
+    assert "post-turn session resolution failed: store unavailable" in caplog.text

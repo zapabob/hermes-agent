@@ -16,6 +16,7 @@
  * itself here as the delegate so tile UI stays dependency-light.
  */
 
+import { registryBackendScopeKey } from '@hermes/shared'
 import { atom, computed } from 'nanostores'
 
 import type { ClientSessionState } from '@/app/types'
@@ -33,6 +34,7 @@ import { readJson, writeJson } from '@/lib/storage'
 import type { SessionInfo } from '@/types/hermes'
 
 import { $activeGatewayProfile, normalizeProfileKey } from './profile'
+import { clearAllProviderWaits, clearSessionProviderWait } from './provider-wait'
 import {
   $activeSessionId,
   $lastReadAtBySessionId,
@@ -53,6 +55,45 @@ import { isSecondaryWindow } from './windows'
 // ---------------------------------------------------------------------------
 
 export const $sessionStates = atom<Record<string, ClientSessionState>>({})
+
+// ---------------------------------------------------------------------------
+// Event-source scopes: which registry connection's socket delivered a runtime
+// session's events. Working/attention membership alone is profile-blind — two
+// connected gateways can both expose a 'default' profile, so the gateway
+// keep-set (pruneSecondaryGateways) must key live work by the composite
+// (connectionId, profile) scope, not the bare profile name. Recorded at
+// event fan-in (use-gateway-boot); local/primary events carry no connectionId
+// and record nothing, so single-source behavior is untouched.
+// ---------------------------------------------------------------------------
+
+const sessionScopeByRuntimeId = new Map<string, string>()
+
+export function recordSessionEventScope(event: { connectionId?: string; profile?: string; session_id?: string }): void {
+  if (event.session_id && event.connectionId) {
+    sessionScopeByRuntimeId.set(event.session_id, registryBackendScopeKey(event.connectionId, event.profile))
+  }
+}
+
+/** Composite scopes of registry-sourced sessions that are live (busy or
+ * waiting on input) — the (connectionId, profile) half of the gateway
+ * keep-set. Local-source live work keeps flowing through profile names. */
+export function liveSessionScopes(): Set<string> {
+  const scopes = new Set<string>()
+
+  for (const [runtimeId, state] of Object.entries($sessionStates.get())) {
+    if (!state || (!state.busy && !state.needsInput)) {
+      continue
+    }
+
+    const scope = sessionScopeByRuntimeId.get(runtimeId)
+
+    if (scope) {
+      scopes.add(scope)
+    }
+  }
+
+  return scopes
+}
 
 // Stored session ids whose authoritative state is still busy, but whose
 // runtime has produced no state publish for the watchdog window. Silence is
@@ -300,6 +341,8 @@ export function dropSessionState(runtimeId: string) {
   // a just-finished session's row survives merge eviction even if its tile or
   // cached runtime is dropped in the meantime.
   clearWatchdog(runtimeId)
+  clearSessionProviderWait(runtimeId)
+  sessionScopeByRuntimeId.delete(runtimeId)
 
   const current = $sessionStates.get()
   setSessionStalled(current[runtimeId]?.storedSessionId, false)
@@ -324,6 +367,8 @@ export function clearAllSessionStates() {
 
   sessionWatchdogTimers.clear()
   settledExpiry.clear()
+  clearAllProviderWaits()
+  sessionScopeByRuntimeId.clear()
   $stalledSessionIds.set([])
   $sessionStates.set({})
 }

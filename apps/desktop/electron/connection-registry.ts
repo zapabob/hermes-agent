@@ -31,6 +31,7 @@ import {
   hostLabelFromBaseUrl,
   modeIsRemoteLike,
   normalizeRemoteBaseUrl,
+  normalizeRemoteHeaders,
   normalizeSshConfig,
   normAuthMode
 } from './connection-config'
@@ -55,6 +56,11 @@ export interface RegistryConnection {
   authMode?: 'oauth' | 'token'
   /** remote: encrypted token envelope (opaque here; main.ts encrypts/decrypts). */
   token?: unknown
+  /** remote/cloud: extra gateway headers (Cloudflare Access etc.). Secret
+   * envelopes, same shape as `token`; names pre-filtered through
+   * normalizeRemoteHeaders. Optional and additive — v2 registries written
+   * before this field keep loading unchanged. */
+  headers?: Record<string, unknown>
   /** cloud: portal org slug/id the instance was discovered under. */
   org?: string
   /** ssh fields (normalizeSshConfig shapes). */
@@ -164,6 +170,47 @@ export function backendScopePrefix(connectionId: string): string {
   return `conn:${String(connectionId).trim()}::`
 }
 
+export interface RegistryLocalRoute {
+  /** Reuse the legacy v1 ensureBackend path — it already resolves to the
+   * app's own local runtime, so single-source behavior stays byte-identical. */
+  delegate: boolean
+  /** Pool key for the forced-local child when not delegating. */
+  poolKey: string
+}
+
+/**
+ * How the registry's 'local' entry resolves a backend for `profile`.
+ *
+ * The 'local' entry means THIS machine's runtime — always. The legacy
+ * ensureBackend() path instead follows the v1 connection.json routing table,
+ * where a global remote mode (or a per-profile remote override) resolves to a
+ * REMOTE descriptor. A migrated user whose v1 global mode was remote gets that
+ * remote as the registry primary AND keeps the mandatory 'local' entry, so
+ * delegating 'local' to the v1 route made the roster's "This device" rows
+ * enumerate and dial the remote box: every profile appeared twice (forcing
+ * -slug handles) and "local" agents talked to the remote.
+ *
+ * When the v1 route is already local we delegate (legacy path, byte-identical
+ * pool keys). When v1 says remote, the local entry spawns its own genuinely
+ * local child under a composite pool key: backendScopeKey('local', p) maps to
+ * the BARE profile key by design, and that slot may already hold the v1
+ * route's REMOTE descriptor — so the forced-local child pools under the
+ * `conn:local::<profile>` form instead (colons are invalid in profile names,
+ * so it cannot collide).
+ */
+export function resolveRegistryLocalRoute(
+  profile: null | string | undefined,
+  opts: { globalRemote?: boolean; profileRemoteOverride?: boolean } = {}
+): RegistryLocalRoute {
+  const profileKey = String(profile ?? '').trim() || 'default'
+
+  if (opts.globalRemote || opts.profileRemoteOverride) {
+    return { delegate: false, poolKey: `${backendScopePrefix(LOCAL_CONNECTION_ID)}${profileKey}` }
+  }
+
+  return { delegate: true, poolKey: profileKey }
+}
+
 // ── Union agent roster ──────────────────────────────────────────────────────
 
 export interface ConnectionAgents {
@@ -268,6 +315,7 @@ export interface ConnectionInput {
   url?: string
   authMode?: string
   token?: unknown
+  headers?: Record<string, unknown>
   org?: string
   host?: string
   user?: string
@@ -358,6 +406,18 @@ export function normalizeConnectionInput(input: ConnectionInput, registry: Conne
       entry.token = input.token
     }
 
+    // Extra gateway headers (access-proxy credentials) apply to any
+    // remote-shaped entry regardless of auth mode — Cloudflare Access sits in
+    // front of both token- and OAuth-gated gateways. Normalization drops
+    // transport-/Hermes-managed names; an empty result stores nothing.
+    if (input.headers !== undefined) {
+      const headers = normalizeRemoteHeaders(input.headers)
+
+      if (Object.keys(headers).length > 0) {
+        entry.headers = headers
+      }
+    }
+
     const org = String(input.org || '').trim()
 
     if (kind === 'cloud' && org) {
@@ -399,6 +459,10 @@ export function mergeConnectionInput(input: ConnectionInput, existing?: null | R
   inherit('keyPath')
   inherit('remoteHermesPath')
   inherit('remoteProfile')
+  // Headers inherit like other dial fields: an edit payload that omits the
+  // field keeps the stored set; an explicit payload (even {}) is
+  // authoritative so the editor can clear them.
+  inherit('headers')
 
   // ssh user/port: the editor shows ONE composite host field (user@host:port),
   // and normalizeSshConfig gives explicit user/port fields precedence over the
@@ -412,6 +476,49 @@ export function mergeConnectionInput(input: ConnectionInput, existing?: null | R
   }
 
   return merged
+}
+
+/**
+ * True when an edit changes how a connection is DIALED — endpoint, auth, or
+ * ssh routing fields — as opposed to a cosmetic label rename. Callers use
+ * this to decide whether live pooled backends / renderer sockets for the
+ * connection must be recycled after a save: a label-only edit keeps traffic
+ * flowing, while a url/token/host change means everything currently open
+ * points at the OLD target and must be torn down and re-dialed.
+ */
+export function connectionDialFieldsChanged(before: RegistryConnection, after: RegistryConnection): boolean {
+  if (before.kind !== after.kind) {
+    return true
+  }
+
+  const fields: (keyof RegistryConnection)[] = [
+    'url',
+    'authMode',
+    'org',
+    'host',
+    'user',
+    'port',
+    'keyPath',
+    'remoteHermesPath',
+    'remoteProfile'
+  ]
+
+  for (const field of fields) {
+    if ((before[field] ?? null) !== (after[field] ?? null)) {
+      return true
+    }
+  }
+
+  // Token envelopes are opaque here (main.ts encrypts). An edit that carries
+  // no new token inherits the stored envelope verbatim, so structural
+  // equality is exact for the label-only case.
+  if (JSON.stringify(before.token ?? null) !== JSON.stringify(after.token ?? null)) {
+    return true
+  }
+
+  // Headers are dial material too: a changed access-proxy credential means
+  // every open socket/backend authenticated with the OLD set.
+  return JSON.stringify(before.headers ?? null) !== JSON.stringify(after.headers ?? null)
 }
 
 // ── Registry-level operations (all pure: return a new registry) ────────────
@@ -484,6 +591,12 @@ export function normalizeRegistry(raw: unknown): ConnectionRegistry {
 
       if (entry.token !== undefined) {
         clean.token = entry.token
+      }
+
+      const storedHeaders = normalizeRemoteHeaders(entry.headers)
+
+      if (Object.keys(storedHeaders).length > 0) {
+        clean.headers = storedHeaders
       }
 
       const org = String(entry.org || '').trim()
@@ -566,6 +679,12 @@ export function migrateV1ToRegistry(v1: unknown): ConnectionRegistry {
 
     if (block.token !== undefined) {
       entry.token = block.token
+    }
+
+    const v1Headers = normalizeRemoteHeaders(block.headers)
+
+    if (Object.keys(v1Headers).length > 0) {
+      entry.headers = v1Headers
     }
 
     const org = String(block.org || '').trim()

@@ -5,6 +5,10 @@
   "version": "0.17.0",
   "description": "Native desktop shell for Hermes Agent.",
   "author": "Nous Research",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NousResearch/hermes-agent.git"
+  },
   "type": "module",
   "main": "dist/electron-main.mjs",
   "engines": {
@@ -28,7 +32,7 @@
     "postbuild": "node scripts/assert-dist-built.mjs",
     "prebuilder": "node scripts/patch-electron-builder-mac-binary.mjs",
     "builder": "cross-env NODE_OPTIONS=--max-old-space-size=16384 node scripts/run-electron-builder.mjs",
-    "pack": "npm run build && npm run builder -- --dir",
+    "pack": "npm run build && npm run builder -- --dir --publish never",
     "dist": "npm run build && npm run builder",
     "dist:mac": "npm run build && npm run builder -- --mac",
     "dist:mac:dmg": "npm run build && npm run builder -- --mac dmg",
@@ -63,6 +67,7 @@
     "test": "vitest run",
     "preview": "node scripts/assert-root-install.mjs && vite preview --host 127.0.0.1 --port 4174",
     "check:test:desktop:platforms": "npm run test:desktop:platforms",
+    "check:test:plugins": "node --test src/plugins/*/tests/*.test.mjs",
     "check:test:ui:shard-1of3": "node scripts/run-ui-shard.mjs",
     "check:test:ui:shard-2of3": "node scripts/run-ui-shard.mjs",
     "check:test:ui:shard-3of3": "node scripts/run-ui-shard.mjs",

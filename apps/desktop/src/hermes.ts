@@ -1,6 +1,8 @@
 import { JsonRpcGatewayClient } from '@hermes/shared'
 
+import type { HermesConnection } from '@/global'
 import { reconnectBackoffDelayMs } from '@/lib/reconnect-backoff'
+import { recordTranscriptTail } from '@/store/transcript-tail'
 import type {
   ActionResponse,
   ActionStatusResponse,
@@ -285,6 +287,50 @@ export function getApiRequestProfile(): null | string {
   return _apiProfile
 }
 
+// Registry connection serving the active gateway (null → the local pool).
+// Pushed from store/gateway's setActive — the single seam BOTH
+// ensureGatewayProfile and ensureGatewayAgent funnel through — so WS calls
+// that dial their own backend (pluginSocket) resolve it through the SAME
+// source of truth those paths maintain for $connection. That makes the plugin
+// socket follow registry-agent activations too, not just profile switches.
+// Same no-store-import contract as _apiProfile (avoids a cycle).
+let _apiConnectionId: null | string = null
+
+export function setApiRequestConnection(connectionId: null | string): void {
+  _apiConnectionId = connectionId || null
+}
+
+// Registry connection scope for a REST request. A registered remote gateway
+// owns its own state.db — cron jobs and their run sessions live THERE — so
+// requests for gateway-owned data must carry the connection id for the main
+// process to route them to that host (hermes:api's registry branch). Null /
+// 'local' resolves to no tag, keeping single-source users byte-identical.
+function connectionScoped(): { connectionId?: string } {
+  return _apiConnectionId ? { connectionId: _apiConnectionId } : {}
+}
+
+/** Registry connection id that connection-scoped WS calls should target
+ *  (null → the local pool). Read-only twin of setApiRequestConnection. */
+export function getApiRequestConnection(): null | string {
+  return _apiConnectionId
+}
+
+/** Resolve the ACTIVE backend's connection descriptor, (connectionId,
+ *  profile)-scoped — mirroring how store/profile resolves $connection: a
+ *  registry agent's descriptor comes from getConnectionFor (its SOURCE
+ *  connection), everything else from the profile-keyed local pool. The
+ *  getConnectionFor bridge is optional (older Desktop mains); without it the
+ *  profile-scoped pool lookup is the best available answer. */
+async function activeConnection(): Promise<HermesConnection> {
+  const getConnectionFor = window.hermesDesktop.getConnectionFor
+
+  if (_apiConnectionId && getConnectionFor) {
+    return getConnectionFor({ connectionId: _apiConnectionId, profile: _apiProfile })
+  }
+
+  return window.hermesDesktop.getConnection(_apiProfile)
+}
+
 /** Options for a plugin REST call — mirrors the app's own `hermesDesktop.api`
  *  shape, minus the path (which is namespace-derived). */
 export interface PluginRestOptions {
@@ -346,7 +392,7 @@ export function pluginSocket(pluginId: string, path: string, onMessage: (data: u
   let attempt = 0
 
   const connect = async () => {
-    const connection = await window.hermesDesktop.getConnection().catch(() => null)
+    const connection = await activeConnection().catch(() => null)
 
     // No bridge / OAuth cookie auth (WS tickets are single-use, core-managed):
     // stay on the polling fallback rather than half-working.
@@ -558,16 +604,16 @@ function isEndpointMissingError(err: unknown): boolean {
 
 // Compatibility fallback: reassemble the three sidebar slices from the
 // per-slice endpoint, mirroring the batched route's semantics (min_messages=1,
-// archived excluded, recency order; recents scoped to the caller's profile,
-// cron + messaging cross-profile). Rides the same Electron remote-splice
+// archived excluded, recency order; every slice scoped to the caller's profile).
+// Rides the same Electron remote-splice
 // interception as the pre-batching desktop, so remote profiles stay correct.
 async function listSidebarSessionsLegacy(req: SidebarSessionsRequest): Promise<SidebarSessionsResponse> {
   const [recents, cron, messaging] = await Promise.all([
     listAllProfileSessions(req.recentsLimit, 1, 'exclude', 'recent', req.recentsProfile, {
       excludeSources: req.recentsExclude
     }),
-    listAllProfileSessions(req.cronLimit, 1, 'exclude', 'recent', 'all', { source: 'cron' }),
-    listAllProfileSessions(req.messagingLimit, 1, 'exclude', 'recent', 'all', {
+    listAllProfileSessions(req.cronLimit, 1, 'exclude', 'recent', req.recentsProfile, { source: 'cron' }),
+    listAllProfileSessions(req.messagingLimit, 1, 'exclude', 'recent', req.recentsProfile, {
       excludeSources: req.messagingExclude
     })
   ])
@@ -745,11 +791,58 @@ export function getSessionMessages(
   })
 }
 
+/**
+ * The initial hydration page: enough tail to fill the transcript window a few
+ * times over, small enough that opening a long session doesn't ship (and
+ * convert) hundreds of rows nobody has scrolled to. Older rows load on demand
+ * via `getOlderSessionMessages` when "Show earlier" exhausts the in-memory
+ * store (see app/chat/transcript-backfill).
+ */
+export const LATEST_SESSION_MESSAGES_LIMIT = 120
+
 export function getLatestSessionMessages(id: string, profile?: string | null): Promise<SessionMessagesResponse> {
   // includeCompacted: durable display history must include rows preserved by
   // in-place compaction (active=0, compacted=1); without them the transcript
   // silently ends at the compaction boundary and earlier turns are unreachable.
-  return getSessionMessages(id, profile, { limit: 500, order: 'latest', includeCompacted: true })
+  return getSessionMessages(id, profile, {
+    limit: LATEST_SESSION_MESSAGES_LIMIT,
+    order: 'latest',
+    includeCompacted: true
+  }).then(page => {
+    // Record whether the tail was truncated (page came back full) and where
+    // the next older page starts, so "Show earlier" can backfill over REST
+    // (app/chat/transcript-backfill). Keyed under both the requested id and
+    // the resolved id — callers hold either.
+    recordTranscriptTail(id, page, profile)
+
+    if (page.session_id && page.session_id !== id) {
+      recordTranscriptTail(page.session_id, page, profile)
+    }
+
+    return page
+  })
+}
+
+/**
+ * One page of messages OLDER than the `offset` newest rows.
+ *
+ * Backend semantics (`_handle_session_messages` → `SessionDB.get_messages`
+ * with `latest=True`): the offset is measured back from the NEWEST message
+ * and the selected page is returned in chronological order. So after a tail
+ * hydration of N rows, `getOlderSessionMessages(id, profile, N)` returns the
+ * page immediately preceding it, ready to prepend.
+ *
+ * Legacy backends without pagination support return the full transcript and
+ * no `pagination` metadata — callers detect that via the missing field and
+ * treat the response as the complete history (see transcript-backfill).
+ */
+export function getOlderSessionMessages(
+  id: string,
+  profile: string | null | undefined,
+  offset: number,
+  limit: number = LATEST_SESSION_MESSAGES_LIMIT
+): Promise<SessionMessagesResponse> {
+  return getSessionMessages(id, profile, { includeCompacted: true, limit, offset, order: 'latest' })
 }
 
 export async function getAllSessionMessages(
@@ -1079,10 +1172,22 @@ export function getMemoryProviderOAuthStatus(provider: string): Promise<MemoryPr
   })
 }
 
-export function getSkills(): Promise<SkillInfo[]> {
+export function getSkills(profile?: null | string): Promise<SkillInfo[]> {
   return window.hermesDesktop.api<SkillInfo[]>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     path: '/api/skills'
+  })
+}
+
+/** Raw SKILL.md text (frontmatter included) for ANY skill — bundled, hub, or
+ *  learned — backing the Capabilities detail pane's full-skill view. */
+export function getSkillContent(
+  name: string,
+  profile?: null | string
+): Promise<{ content: string; name: string; path: string }> {
+  return window.hermesDesktop.api<{ content: string; name: string; path: string }>({
+    ...profileScoped(profile),
+    path: `/api/skills/content?name=${encodeURIComponent(name)}`
   })
 }
 
@@ -1102,25 +1207,29 @@ export interface LearningNodeDetail {
   ok: boolean
 }
 
-export function getLearningNode(id: string): Promise<LearningNodeDetail> {
+export function getLearningNode(id: string, profile?: null | string): Promise<LearningNodeDetail> {
   return window.hermesDesktop.api<LearningNodeDetail>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     path: `/api/learning/node?id=${encodeURIComponent(id)}`
   })
 }
 
-export function deleteLearningNode(id: string): Promise<{ message: string; ok: boolean }> {
+export function deleteLearningNode(id: string, profile?: null | string): Promise<{ message: string; ok: boolean }> {
   return window.hermesDesktop.api<{ message: string; ok: boolean }>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     path: '/api/learning/node',
     method: 'DELETE',
     body: { id }
   })
 }
 
-export function editLearningNode(id: string, content: string): Promise<{ message: string; ok: boolean }> {
+export function editLearningNode(
+  id: string,
+  content: string,
+  profile?: null | string
+): Promise<{ message: string; ok: boolean }> {
   return window.hermesDesktop.api<{ message: string; ok: boolean }>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     path: '/api/learning/node',
     method: 'PUT',
     body: { content, id }
@@ -1129,10 +1238,11 @@ export function editLearningNode(id: string, content: string): Promise<{ message
 
 export function setSkillEnabled(
   name: string,
-  enabled: boolean
+  enabled: boolean,
+  profile?: null | string
 ): Promise<{ ok: boolean; name: string; enabled: boolean }> {
   return window.hermesDesktop.api<{ ok: boolean; name: string; enabled: boolean }>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     path: '/api/skills/toggle',
     method: 'PUT',
     body: { name, enabled }
@@ -1142,7 +1252,9 @@ export function setSkillEnabled(
 export interface McpTestResult {
   ok: boolean
   error?: string
-  tools: { name: string; description: string }[]
+  /** `schema_chars` (converted registry-schema size, chars) is additive —
+   *  older backends omit it and the cost overlay shows no token estimate. */
+  tools: { name: string; description: string; schema_chars?: number }[]
   /** Capability counts (absent on older backends / failed probes). */
   prompts?: number
   resources?: number
@@ -1470,6 +1582,7 @@ export function getCronJobs(profile?: string): Promise<CronJob[]> {
 
   return window.hermesDesktop.api<CronJob[]>({
     ...profileScoped(),
+    ...connectionScoped(),
     path: `/api/cron/jobs${suffix}`,
     timeoutMs: STARTUP_REQUEST_TIMEOUT_MS
   })
@@ -1478,6 +1591,7 @@ export function getCronJobs(profile?: string): Promise<CronJob[]> {
 export function getCronJob(jobId: string): Promise<CronJob> {
   return window.hermesDesktop.api<CronJob>({
     ...profileScoped(),
+    ...connectionScoped(),
     path: `/api/cron/jobs/${encodeURIComponent(jobId)}`
   })
 }
@@ -1485,6 +1599,7 @@ export function getCronJob(jobId: string): Promise<CronJob> {
 export async function getCronJobRuns(jobId: string, limit = 20): Promise<SessionInfo[]> {
   const { runs } = await window.hermesDesktop.api<{ runs: SessionInfo[] }>({
     ...profileScoped(),
+    ...connectionScoped(),
     path: `/api/cron/jobs/${encodeURIComponent(jobId)}/runs?limit=${limit}`
   })
 
@@ -1497,6 +1612,7 @@ export async function getCronJobRuns(jobId: string, limit = 20): Promise<Session
 export async function getCronDeliveryTargets(): Promise<CronDeliveryTarget[]> {
   const { targets } = await window.hermesDesktop.api<{ targets: CronDeliveryTarget[] }>({
     ...profileScoped(),
+    ...connectionScoped(),
     path: '/api/cron/delivery-targets'
   })
 
@@ -1506,6 +1622,7 @@ export async function getCronDeliveryTargets(): Promise<CronDeliveryTarget[]> {
 export function createCronJob(body: CronJobCreatePayload): Promise<CronJob> {
   return window.hermesDesktop.api<CronJob>({
     ...profileScoped(),
+    ...connectionScoped(),
     path: '/api/cron/jobs',
     method: 'POST',
     body
@@ -1515,6 +1632,7 @@ export function createCronJob(body: CronJobCreatePayload): Promise<CronJob> {
 export function updateCronJob(jobId: string, updates: CronJobUpdates): Promise<CronJob> {
   return window.hermesDesktop.api<CronJob>({
     ...profileScoped(),
+    ...connectionScoped(),
     path: `/api/cron/jobs/${encodeURIComponent(jobId)}`,
     method: 'PUT',
     body: { updates }
@@ -1524,6 +1642,7 @@ export function updateCronJob(jobId: string, updates: CronJobUpdates): Promise<C
 export function pauseCronJob(jobId: string): Promise<CronJob> {
   return window.hermesDesktop.api<CronJob>({
     ...profileScoped(),
+    ...connectionScoped(),
     path: `/api/cron/jobs/${encodeURIComponent(jobId)}/pause`,
     method: 'POST'
   })
@@ -1532,6 +1651,7 @@ export function pauseCronJob(jobId: string): Promise<CronJob> {
 export function resumeCronJob(jobId: string): Promise<CronJob> {
   return window.hermesDesktop.api<CronJob>({
     ...profileScoped(),
+    ...connectionScoped(),
     path: `/api/cron/jobs/${encodeURIComponent(jobId)}/resume`,
     method: 'POST'
   })
@@ -1540,6 +1660,7 @@ export function resumeCronJob(jobId: string): Promise<CronJob> {
 export function triggerCronJob(jobId: string): Promise<CronJob> {
   return window.hermesDesktop.api<CronJob>({
     ...profileScoped(),
+    ...connectionScoped(),
     path: `/api/cron/jobs/${encodeURIComponent(jobId)}/trigger`,
     method: 'POST',
     timeoutMs: CRON_TRIGGER_REQUEST_TIMEOUT_MS
@@ -1549,6 +1670,7 @@ export function triggerCronJob(jobId: string): Promise<CronJob> {
 export function deleteCronJob(jobId: string): Promise<{ ok: boolean }> {
   return window.hermesDesktop.api<{ ok: boolean }>({
     ...profileScoped(),
+    ...connectionScoped(),
     path: `/api/cron/jobs/${encodeURIComponent(jobId)}`,
     method: 'DELETE'
   })
@@ -1568,6 +1690,7 @@ export function deleteCronJob(jobId: string): Promise<{ ok: boolean }> {
 export function getAutomationBlueprints(): Promise<{ blueprints: AutomationBlueprint[] }> {
   return window.hermesDesktop.api<{ blueprints: AutomationBlueprint[] }>({
     ...profileScoped(),
+    ...connectionScoped(),
     path: '/api/cron/blueprints',
     timeoutMs: STARTUP_REQUEST_TIMEOUT_MS
   })
@@ -1579,6 +1702,7 @@ export function instantiateAutomationBlueprint(
 ): Promise<CronJob> {
   return window.hermesDesktop.api<CronJob>({
     ...profileScoped(),
+    ...connectionScoped(),
     path: `/api/cron/blueprints/instantiate?profile=${encodeURIComponent(profile)}`,
     method: 'POST',
     body
@@ -1665,9 +1789,9 @@ export function importProfileArchive(
   })
 }
 
-export function getUsageAnalytics(days = 30): Promise<AnalyticsResponse> {
+export function getUsageAnalytics(days = 30, profile?: null | string): Promise<AnalyticsResponse> {
   return window.hermesDesktop.api<AnalyticsResponse>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     path: `/api/analytics/usage?days=${Math.max(1, Math.floor(days))}`
   })
 }
@@ -1845,61 +1969,66 @@ export function getElevenLabsVoices(): Promise<ElevenLabsVoicesResponse> {
 
 const HUB_REQUEST_TIMEOUT_MS = 45_000
 
-export function getSkillHubSources(): Promise<SkillHubSourcesResponse> {
+export function getSkillHubSources(profile?: null | string): Promise<SkillHubSourcesResponse> {
   return window.hermesDesktop.api<SkillHubSourcesResponse>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     path: '/api/skills/hub/sources',
     timeoutMs: HUB_REQUEST_TIMEOUT_MS
   })
 }
 
-export function searchSkillsHub(query: string, source = 'all', limit = 20): Promise<SkillHubSearchResponse> {
+export function searchSkillsHub(
+  query: string,
+  source = 'all',
+  limit = 20,
+  profile?: null | string
+): Promise<SkillHubSearchResponse> {
   const params = new URLSearchParams({ q: query, source, limit: String(limit) })
 
   return window.hermesDesktop.api<SkillHubSearchResponse>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     path: `/api/skills/hub/search?${params.toString()}`,
     timeoutMs: HUB_REQUEST_TIMEOUT_MS
   })
 }
 
-export function previewSkillHub(identifier: string): Promise<SkillHubPreview> {
+export function previewSkillHub(identifier: string, profile?: null | string): Promise<SkillHubPreview> {
   return window.hermesDesktop.api<SkillHubPreview>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     path: `/api/skills/hub/preview?identifier=${encodeURIComponent(identifier)}`,
     timeoutMs: HUB_REQUEST_TIMEOUT_MS
   })
 }
 
-export function scanSkillHub(identifier: string): Promise<SkillHubScanResult> {
+export function scanSkillHub(identifier: string, profile?: null | string): Promise<SkillHubScanResult> {
   return window.hermesDesktop.api<SkillHubScanResult>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     path: `/api/skills/hub/scan?identifier=${encodeURIComponent(identifier)}`,
     timeoutMs: HUB_REQUEST_TIMEOUT_MS
   })
 }
 
-export function installSkillFromHub(identifier: string): Promise<ActionResponse> {
+export function installSkillFromHub(identifier: string, profile?: null | string): Promise<ActionResponse> {
   return window.hermesDesktop.api<ActionResponse>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     path: '/api/skills/hub/install',
     method: 'POST',
     body: { identifier }
   })
 }
 
-export function uninstallSkillFromHub(name: string): Promise<ActionResponse> {
+export function uninstallSkillFromHub(name: string, profile?: null | string): Promise<ActionResponse> {
   return window.hermesDesktop.api<ActionResponse>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     path: '/api/skills/hub/uninstall',
     method: 'POST',
     body: { name }
   })
 }
 
-export function updateSkillsFromHub(): Promise<ActionResponse> {
+export function updateSkillsFromHub(profile?: null | string): Promise<ActionResponse> {
   return window.hermesDesktop.api<ActionResponse>({
-    ...profileScoped(),
+    ...profileScoped(profile),
     path: '/api/skills/hub/update',
     method: 'POST',
     body: {}

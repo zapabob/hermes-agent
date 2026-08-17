@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
   getConnection: profile => ipcRenderer.invoke('hermes:connection', profile),
   // Registry-scoped backend resolution: { connectionId, profile } → descriptor.
   getConnectionFor: payload => ipcRenderer.invoke('hermes:connection:for', payload),
+  getProfileRoutes: profiles => ipcRenderer.invoke('hermes:plugin-profile-routes', profiles),
   revalidateConnection: () => ipcRenderer.invoke('hermes:connection:revalidate'),
   touchBackend: profile => ipcRenderer.invoke('hermes:backend:touch', profile),
   getGatewayWsUrl: profile => ipcRenderer.invoke('hermes:gateway:ws-url', profile),
@@ -138,7 +139,16 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
     setPrimary: id => ipcRenderer.invoke('hermes:connections:set-primary', id),
     test: id => ipcRenderer.invoke('hermes:connections:test', id),
     // Fan out `hermes update` to every eligible registered connection.
-    updateAll: () => ipcRenderer.invoke('hermes:connections:update-all')
+    updateAll: () => ipcRenderer.invoke('hermes:connections:update-all'),
+    // Registry lifecycle push (main → renderer): a connection was removed or
+    // materially edited, so secondaries scoped to it must be disposed (and,
+    // for edits, re-dialed at the new target).
+    onChanged: callback => {
+      const listener = (_event, payload) => callback(payload)
+      ipcRenderer.on('hermes:connections:changed', listener)
+
+      return () => ipcRenderer.removeListener('hermes:connections:changed', listener)
+    }
   },
   sshConfigHosts: () => ipcRenderer.invoke('hermes:ssh-config:hosts'),
   sshResolveHost: host => ipcRenderer.invoke('hermes:ssh-config:resolve', host),

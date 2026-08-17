@@ -405,6 +405,11 @@ export interface ModelOptionProvider {
   key_env?: string
   /** True for providers defined via the user's `providers:` config block. */
   is_user_defined?: boolean
+  /** User-defined providers only: every accepted identity for this endpoint
+   *  (bare config key, `custom:<key>`, normalized display name, …). A session's
+   *  `model.options` reports the canonical `custom:<key>` form, so "is this row
+   *  the current provider?" must check membership here, not slug equality. */
+  aliases?: string[]
   /** OpenAI-compatible endpoint for a user-defined provider. The backend
    *  exposes this as `api_url`; model assignments send it back as `base_url`
    *  so switching providers does not discard the selected local endpoint. */
@@ -452,6 +457,9 @@ export interface RpcEvent<T = unknown> {
   connectionId?: string
   payload?: T
   profile?: string
+  /** Registry connection whose socket delivered the event (renderer-side tag;
+   * absent for the local/legacy primary path). */
+  connectionId?: string
   session_id?: string
   type: string
 }
@@ -608,6 +616,7 @@ export interface SessionResumeResponse {
     attempt: number
     interrupted_at: number
   }
+  hydrating?: boolean
   inflight?: null | {
     assistant?: string
     /** Mid-turn redirect corrections, oldest first. The turn's original prompt
@@ -660,6 +669,8 @@ export interface SessionResumeResponse {
   session_key?: string
   started_at?: number
   status?: string
+  /** Epoch seconds the current turn started, or null when idle. */
+  turn_started_at?: number | null
 }
 
 export interface SessionRuntimeInfo {

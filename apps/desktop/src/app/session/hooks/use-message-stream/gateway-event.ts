@@ -1,4 +1,5 @@
 import type { BillingBlock } from '@hermes/shared'
+import { registryBackendScopeKey } from '@hermes/shared'
 import type { HermesSkin } from '@hermes/shared/skin'
 import type { QueryClient } from '@tanstack/react-query'
 import { type MutableRefObject, useCallback, useEffect, useRef } from 'react'
@@ -27,7 +28,7 @@ import { billingCtaLabel, clearBillingBlock, runBillingRecovery, setBillingBlock
 import { clearClarifyRequest, normalizeChoices, setClarifyRequest, warnDroppedChoices } from '@/store/clarify'
 import { setSessionCompacting } from '@/store/compaction'
 import { refreshBackgroundProcesses } from '@/store/composer-status'
-import { gatewayForScope, gatewayScope } from '@/store/gateway'
+import { $gateway, activeGatewayConnectionId } from '@/store/gateway'
 import { applyGoalStatusText } from '@/store/goals'
 import {
   notifyCronChanged,
@@ -53,6 +54,7 @@ import {
   setSecretRequest,
   setSudoRequest
 } from '@/store/prompts'
+import { providerWaitText, setSessionProviderWait } from '@/store/provider-wait'
 import { recordAgentReaction } from '@/store/reactions-local'
 import {
   $currentCwd,
@@ -213,6 +215,20 @@ const COMPACTION_RESUME_EVENT_TYPES = new Set([
   'tool.complete'
 ])
 
+const PROVIDER_WAIT_SUPERSEDING_EVENT_TYPES = new Set([
+  'error',
+  'message.complete',
+  'message.delta',
+  'message.interim',
+  'message.start',
+  'reasoning.available',
+  'reasoning.delta',
+  'tool.complete',
+  'tool.generating',
+  'tool.progress',
+  'tool.start'
+])
+
 interface GatewayEventDeps {
   activeGatewayProfile: string
   activeSessionIdRef: MutableRefObject<string | null>
@@ -231,8 +247,14 @@ interface GatewayEventDeps {
   failAssistantMessage: (sessionId: string, errorMessage: string, occurredAt?: number) => void
   flushQueuedDeltas: (sessionId?: string) => void
   finalizeInterimAssistantMessage: (sessionId: string, text: string, occurredAt?: number) => void
+  hydrateFromStoredSession: (
+    attempts?: number,
+    storedSessionId?: string | null,
+    runtimeSessionId?: string | null
+  ) => Promise<void>
   queryClient: QueryClient
   refreshHermesConfig: () => Promise<void>
+  scheduleSessionsRefresh: () => void
   sessionInterrupted: (sessionId: string) => boolean
   sessionStateByRuntimeIdRef: MutableRefObject<Map<string, ClientSessionState>>
   updateSessionState: (
@@ -263,8 +285,10 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
     failAssistantMessage,
     flushQueuedDeltas,
     finalizeInterimAssistantMessage,
+    hydrateFromStoredSession,
     queryClient,
     refreshHermesConfig,
+    scheduleSessionsRefresh,
     sessionInterrupted,
     sessionStateByRuntimeIdRef,
     updateSessionState,
@@ -311,6 +335,17 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
   return useCallback(
     (event: RpcEvent) => {
       const payload = event.payload as GatewayEventPayload | undefined
+
+      // "From the active profile" must mean "from the active SOURCE": every
+      // registered connection exposes a 'default' profile, so a bare profile
+      // comparison attributes gateway B's 'default' events to gateway A's
+      // 'default'. Compare the composite (connectionId, profile) scope with
+      // registryBackendScopeKey — untagged primary events keep the legacy
+      // bare-profile behavior byte-identical.
+      const fromActiveSource = (): boolean =>
+        (!event.profile || normalizeProfileKey(event.profile) === normalizeProfileKey($activeGatewayProfile.get())) &&
+        registryBackendScopeKey(event.connectionId ?? null, event.profile ?? null) ===
+          registryBackendScopeKey(activeGatewayConnectionId(), event.profile ?? null)
 
       const occurredAt =
         typeof payload?.timestamp === 'number' && Number.isFinite(payload.timestamp)
@@ -388,6 +423,10 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
         setSessionDraftingTool(sessionId, '')
       }
 
+      if (sessionId && PROVIDER_WAIT_SUPERSEDING_EVENT_TYPES.has(event.type)) {
+        setSessionProviderWait(sessionId, '')
+      }
+
       if (event.type === 'gateway.ready') {
         // Seed the active skin into the desktop theme registry without applying,
         // so a fresh connect never overrides the user's persisted desktop theme.
@@ -399,11 +438,8 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
         return
       } else if (event.type === 'skin.changed') {
         // A runtime skin switch (Hermes activating an authored skin, or `/skin`
-        // on another surface). Only the active profile's change repaints.
-        const fromActiveProfile =
-          !event.profile || normalizeProfileKey(event.profile) === normalizeProfileKey($activeGatewayProfile.get())
-
-        if (fromActiveProfile) {
+        // on another surface). Only the active source+profile's change repaints.
+        if (fromActiveSource()) {
           ingestBackendSkin(payload as HermesSkin | undefined, { apply: true })
         }
 
@@ -417,12 +453,10 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
       ) {
         // Change-watcher broadcasts (server._broadcast_watched_changes): the
         // backend's on-disk signature moved. Route to the live-sync ticks the
-        // former pollers now subscribe to. Only the active profile's changes
-        // apply — background profile sockets watch their own homes.
-        const fromActiveChangeProfile =
-          !event.profile || normalizeProfileKey(event.profile) === normalizeProfileKey($activeGatewayProfile.get())
-
-        if (fromActiveChangeProfile) {
+        // former pollers now subscribe to. Only the active source+profile's
+        // changes apply — background profile sockets (and other connections'
+        // gateways) watch their own homes.
+        if (fromActiveSource()) {
           if (event.type === 'pet.changed') {
             notifyPetChanged(payload as PetChangeMeta | undefined)
           } else if (event.type === 'cron.changed') {
@@ -482,12 +516,7 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
         // gateway may reconcile the foreground cache. Requiring the renderer's
         // source tag prevents an event queued before a profile swap from being
         // attributed to the newly active profile.
-        if (
-          isActiveEvent &&
-          typeof payload?.approval_mode === 'string' &&
-          event.profile &&
-          normalizeProfileKey(event.profile) === normalizeProfileKey($activeGatewayProfile.get())
-        ) {
+        if (isActiveEvent && typeof payload?.approval_mode === 'string' && event.profile && fromActiveSource()) {
           reconcileApprovalModeForProfile(event.profile, payload.approval_mode)
         }
 
@@ -575,7 +604,13 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
         // mutates the per-runtime cache entry, and syncSessionStateToView
         // guards the view publish to the active session, so this is safe.
         if (runningChanged && sessionId) {
-          updateSessionState(
+          // Set when THIS event released a turn that ended without ever
+          // producing an assistant payload, so the catch-up side effects below
+          // run on that edge only. The updater is invoked exactly once,
+          // synchronously, by updateSessionState.
+          let recoveredWithoutPayload = false
+
+          const nextState = updateSessionState(
             sessionId,
             state => {
               const busy = Boolean(payload!.running)
@@ -594,16 +629,49 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
                   return state
                 }
 
+                // Prefer the gateway-reported turn_started_at so the timer
+                // survives session switches and session.info heartbeats.
+                const gatewayTurnStartedAt =
+                  typeof payload!.turn_started_at === 'number' && payload!.turn_started_at > 0
+                    ? payload!.turn_started_at * 1000
+                    : null
+
                 return {
                   ...state,
                   busy,
-                  turnStartedAt: state.turnStartedAt ?? Date.now()
+                  // running=true from the backend is turn-live proof, same as
+                  // message.start (e.g. resuming an already-running session
+                  // that never replays its start event).
+                  turnLive: true,
+                  turnStartedAt: state.turnStartedAt ?? gatewayTurnStartedAt ?? Date.now()
                 }
               }
 
-              if (state.awaitingResponse && !state.sawAssistantPayload) {
+              // The turn has not started backend-side yet. submit arms
+              // busy/awaitingResponse optimistically, so a running=false
+              // heartbeat that lands in the gap before the turn spins up is a
+              // pre-start report, not a finished turn — settling on it would
+              // drop the spinner and re-open the send guard mid-flight.
+              // turnLive is stamped only once the backend reports the turn
+              // live (message.start, the running=true edge, or a resumed
+              // in-flight turn) and is cleared by every settle, so false
+              // here is exactly "no turn has been reported running yet".
+              // (turnStartedAt can't discriminate — it is optimistically
+              // seeded at submit so the visible timer starts at Enter.)
+              if (state.awaitingResponse && !state.sawAssistantPayload && !state.turnLive) {
                 return state
               }
+
+              // Past that gate the turn DID start and the backend now reports it
+              // finished. When no assistant payload ever arrived (gateway crash
+              // mid-stream, provider error before the first delta, agent-build
+              // failure) message.complete never fires, so this is the only event
+              // that can release the session. Bailing here instead left
+              // awaitingResponse/busy latched until app restart (#46517): the
+              // per-session busy flag is authoritative for isTargetSessionBusy,
+              // so submitPrompt and the slash dispatcher silently returned false
+              // and the session accepted no further input.
+              recoveredWithoutPayload = state.awaitingResponse && !state.sawAssistantPayload
 
               return {
                 ...state,
@@ -621,11 +689,31 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
                 messages: finalizeInterruptedMessages(state.messages, state.streamId, occurredAt),
                 pendingBranchGroup: null,
                 streamId: null,
-                turnStartedAt: null
+                turnStartedAt: null,
+                turnLive: false
               }
             },
             payload?.stored_session_id || undefined
           )
+
+          if (recoveredWithoutPayload) {
+            // Stays unscoped, like the settle above: a background session's
+            // sidebar row has to drop its working dot without the user opening
+            // it. This fires on the recovery edge only — once awaitingResponse
+            // is false the `state.busy === busy` guard above short-circuits
+            // every later heartbeat — so it costs one coalesced refresh per
+            // broken turn, not one per tick.
+            scheduleSessionsRefresh()
+
+            // The transcript catch-up IS scoped. The stream died, but the turn
+            // itself may have completed and been persisted, so refetch stored
+            // history for the session actually on screen; a background session
+            // reads its history when the user opens it, and hydrating every one
+            // of them here would fan a REST call out per idle session.
+            if (isActiveEvent) {
+              void hydrateFromStoredSession(3, nextState.storedSessionId, sessionId)
+            }
+          }
         }
 
         if (payload?.usage && (!explicitSid || isActiveEvent)) {
@@ -712,6 +800,9 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
             sawAssistantPayload: false,
             interrupted: false,
             interimBoundaryPending: false,
+            // Backend accepted the turn — the no-payload settle gate below may
+            // now treat a running=false heartbeat as a real turn end.
+            turnLive: true,
             // Keep the submit-time seed (submit.ts seedOptimistic) — resetting
             // here would hide the submit→accept round trip from the timer.
             // Backend-originated turns (queue drain elsewhere, goal follow-up)
@@ -746,10 +837,13 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
           }
         }
       } else if (event.type === 'thinking.delta') {
-        // thinking.delta carries the kawaii spinner status (face + verb from
-        // KawaiiSpinner), not real reasoning. The bottom-of-thread loading
-        // indicator already covers that UX, so we ignore these events to
-        // avoid a duplicative "Thinking" disclosure showing spinner text.
+        // Most thinking.delta frames are kawaii spinner rewrites and stay out
+        // of the transcript. Explained provider waits are different: the core
+        // emits them after prolonged silence, so name that wait in the existing
+        // bottom-of-thread status row instead of leaving only an unlabeled timer.
+        if (sessionId) {
+          setSessionProviderWait(sessionId, providerWaitText(coerceGatewayText(payload?.text)))
+        }
       } else if (event.type === 'reaction') {
         // Core-detected affection (ily / <3 / good bot) on the user's message.
         // Play hearts only for the visible session so background turns stay quiet.
@@ -1480,10 +1574,12 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
       failAssistantMessage,
       finalizeInterimAssistantMessage,
       flushQueuedDeltas,
+      hydrateFromStoredSession,
       lastCwdInfoSessionRef,
       nativeSubagentSessionsRef,
       queryClient,
       scheduleConfigRefresh,
+      scheduleSessionsRefresh,
       sessionInterrupted,
       sessionStateByRuntimeIdRef,
       updateSessionState,
