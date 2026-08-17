@@ -605,6 +605,10 @@ export const ar = defineLocale({
       heading: 'حول Hermes',
       version: value => `الإصدار ${value}`,
       versionUnavailable: 'الإصدار غير متاح',
+      bundleOutOfSync: 'إصدار التطبيق قديم',
+      bundleOutOfSyncDesc:
+        'تم تحديث وقت تشغيل Hermes، لكن تطبيق سطح المكتب نفسه لا يزال إصدارًا قديمًا — لن تظهر ميزات الواجهة الجديدة (مثل Bot Mode) حتى يتم تحديث التطبيق. شغّل التحديث أدناه لإعادة بناء التطبيق. إذا لم يختفِ هذا التحذير، فأعد التثبيت من أحدث مثبّت لسطح المكتب.',
+      bundleOutOfSyncAction: 'الحصول على المثبّت',
       updates: 'التحديثات',
       checkNow: 'التحقق الآن',
       checking: 'جار التحقق...',

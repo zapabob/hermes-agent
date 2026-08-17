@@ -26,7 +26,7 @@ All of this is available to Hermes itself through the `cronjob` tool, so you can
 
 - **Per-job pin** — set by *you* via the dashboard, `hermes cron create/edit --model … --provider …`, or by editing `~/.hermes/cron/jobs.json`. Once set, it sticks until you change it. The agent's `cronjob` tool cannot set or change per-job models — inference pins are user-owned.
 - **`cron.model` / `cron.model_provider`** — a cron-fleet default: every unpinned job runs on this model, independent of your chat model. Set it once (`hermes config set cron.model <name>`) and switching your chat model with `hermes model` or `/model` never touches your cron fleet.
-- **Global default** — only when neither of the above is set does a job follow `hermes model`. In this case Hermes **snapshots** the provider and model at creation, and if the global default later changes the job **fails closed**: it skips the run, makes no inference call, and alerts you **once** — the job stays skipped (and silent) on subsequent ticks until you act or the config is restored (#44585). For recurring or otherwise repeatable jobs, pin the provider/model explicitly (`cronjob action=update job_id=… provider=… model=…`) to proceed. A consumed finite one-shot cannot be updated; create a new future one-shot with an explicit provider and model instead. This prevents an unattended job from silently inheriting a switch to a paid provider/model. Setting `cron.model` (or a per-job pin) is the deliberate way to route cron spend, and the drift guard does not engage for an axis covered by it. Operators who instead want unpinned jobs to track the changing global default can [disable the drift guard](#letting-unpinned-jobs-track-global-defaults).
+- **Global default** — only when neither of the above is set does a job follow `hermes model`. In this case Hermes **snapshots** the provider and model at creation, and if the global default later changes the job **fails closed**: it skips the run, makes no inference call, and alerts you **once** — the job stays skipped (and silent) on subsequent ticks until you act or the config is restored (#44585). For recurring or otherwise repeatable jobs, pin the provider/model explicitly (`hermes cron edit <job_id> --provider <provider> --model <model>`) to proceed. A consumed finite one-shot cannot be updated; create a new future one-shot with an explicit provider and model instead. This prevents an unattended job from silently inheriting a switch to a paid provider/model. Setting `cron.model` (or a per-job pin) is the deliberate way to route cron spend, and the drift guard does not engage for an axis covered by it. Operators who instead want unpinned jobs to track the changing global default can [disable the drift guard](#letting-unpinned-jobs-track-global-defaults).
 
 `hermes setup --portal` is the lowest-friction option for unattended runs since OAuth refresh is automatic. See [Nous Portal](/integrations/nous-portal).
 :::
@@ -665,6 +665,30 @@ Cron jobs inherit your configured fallback providers and credential pool rotatio
 - **Rotate to the next credential** in your [credential pool](/user-guide/configuration#credential-pool-strategies) for the same provider
 
 This means cron jobs that run at high frequency or during peak hours are more resilient — a single rate-limited key won't fail the entire run.
+
+## Missed scheduled fires (`last_fire_error`)
+
+On hosted (managed-cron) deployments, a scheduled fire travels from the platform scheduler through the dashboard to the gateway's internal API server. If that final hand-off fails — the gateway process is down, or its API-server listener never started — the run never begins, so there is no execution record and no `last_status` to inspect. The tell-tale shape: the job works every time you trigger it manually, but never auto-fires.
+
+These misses are stamped on the job record as `last_fire_error` (timestamp + reason) and surfaced by:
+
+- `cronjob` tool → `action: "list"` — the `last_fire_error` field
+- `hermes cron list` — a red `⚠ Missed scheduled fire:` line under the job
+- The dashboard job view
+
+The stamp always reflects **current** auto-fire health: it is overwritten by newer misses and cleared automatically by the next successful run. If you see it, the job and its schedule are fine — the gateway side of the fire path needs attention (most commonly, restart the gateway through its supervisor so it loads the full profile environment: `hermes gateway restart`).
+
+### Misfire catch-up
+
+When an external scheduler provider is active (managed cron on hosted deployments), the gateway also runs a catch-up sweep: a job whose scheduled time passed with no fire delivered — and whose grace window has elapsed — is claimed and run locally, so an outage in the fire hand-off costs minutes instead of the whole day. The sweep is de-duplicated against late scheduler retries by the same store claim used for normal fires.
+
+```yaml
+cron:
+  misfire_grace_minutes: 10   # wait this long for the scheduler's own retries
+                              # before catching up locally; 0 disables catch-up
+```
+
+Local (built-in ticker) deployments don't need this — the ticker already picks up past-due jobs on its next tick.
 
 ## Schedule formats
 

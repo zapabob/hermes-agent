@@ -198,6 +198,13 @@ def cron_list(show_all: bool = False):
         if delivery_err:
             print(f"    {color('⚠ Delivery failed:', Colors.YELLOW)} {delivery_err}")
 
+        fire_err = job.get("last_fire_error")
+        if isinstance(fire_err, dict) and fire_err.get("detail"):
+            print(
+                f"    {color('⚠ Missed scheduled fire:', Colors.RED)} "
+                f"{fire_err.get('at', '?')}  {fire_err['detail']}"
+            )
+
         print()
 
     _warn_if_gateway_not_running()
@@ -206,7 +213,17 @@ def cron_list(show_all: bool = False):
 def cron_tick():
     """Run due jobs once and exit."""
     from cron.scheduler import tick
-    tick(verbose=True)
+    try:
+        tick(verbose=True)
+    except OSError as exc:
+        # tick() now propagates real lock-acquisition failures (EMFILE,
+        # EACCES on open, ...) instead of swallowing them as contention
+        # (#87644). For the one-shot CLI surface, report cleanly instead of
+        # dumping a traceback; the gateway ticker loop handles its own retry.
+        print(color(f"✗ Cron tick failed: {exc}", Colors.RED))
+        print("  Check `hermes cron status` and the gateway log for details.")
+        return 1
+    return 0
 
 
 def cron_runs(job_id: Optional[str] = None, limit: int = 20):
@@ -271,6 +288,7 @@ def cron_status():
             get_ticker_success_age,
             TICKER_INTERVAL_SECONDS,
         )
+        from cron.scheduler import _is_fd_exhaustion_text as _cron_is_fd_exhaustion_text
 
         # Allow ~3 missed ticker iterations (+ a little slack) before declaring
         # trouble. Derived from the shared interval constant so this threshold
@@ -301,7 +319,9 @@ def cron_status():
             if last_error:
                 # Show WHY ticks fail — e.g. a root-rewritten jobs.json
                 # (PermissionError) that silently locked out the ticker's
-                # uid for ~14h in the field (#68483).
+                # uid for ~14h in the field (#68483), or fd exhaustion
+                # (EMFILE) that used to stall the scheduler invisibly
+                # (#87644).
                 print(color(f"  Last tick error: {last_error}", Colors.RED))
                 if "Permission denied" in last_error:
                     print(color(
@@ -309,6 +329,14 @@ def cron_status():
                         "(e.g. rewritten by a root `docker exec hermes "
                         "hermes cron ...`). Fix ownership to match the "
                         "gateway user, and prefer `docker exec -u <uid>:<gid>`.",
+                        Colors.YELLOW,
+                    ))
+                elif _cron_is_fd_exhaustion_text(last_error):
+                    print(color(
+                        "  Hint: the ticker hit file-descriptor exhaustion "
+                        "(EMFILE). The scheduler now retries with backoff and "
+                        "attempts fd reclamation, but if the leak persists, "
+                        "restart the gateway to recover scheduling.",
                         Colors.YELLOW,
                     ))
             print("  Check the gateway log for 'Cron tick error'.")
@@ -607,8 +635,7 @@ def cron_command(args):
         return 0
 
     if subcmd == "tick":
-        cron_tick()
-        return 0
+        return cron_tick()
 
     if subcmd in {"runs", "history"}:
         cron_runs(getattr(args, "job_id", None), getattr(args, "limit", 20))

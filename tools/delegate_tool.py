@@ -2508,8 +2508,35 @@ def _run_single_child(
                 subagent_worktree.finalize_subagent_worktree(_worktree_info)
             )
         except Exception as e:
-            logger.debug("worktree finalize failed: %s", e)
-            entry_dict["worktree"] = dict(_worktree_info)
+            # finalize is written hard not to raise, but if it ever does the
+            # state is unknown — emit the SAME schema the parent expects,
+            # flagged, via the shared factory so the two producers of this
+            # payload can never drift.
+            logger.warning("worktree finalize failed: %s", e)
+            try:
+                from tools import subagent_worktree as _sw
+
+                entry_dict["worktree"] = _sw.unproven_worktree_payload(
+                    _worktree_info, f"finalize raised: {e}"
+                )
+            except Exception:
+                # Import itself failed — inline the same shape rather than
+                # dropping the flag (the parent must still see the warning).
+                entry_dict["worktree"] = {
+                    "path": _worktree_info.get("path", ""),
+                    "branch": _worktree_info.get("branch", ""),
+                    "commits": 0,
+                    "dirty": False,
+                    "pruned": False,
+                    "inspection_failed": True,
+                    "note": (
+                        f"worktree finalize raised ({e}) and the reporting "
+                        "helper was unavailable: 'commits' and 'dirty' are "
+                        "UNKNOWN, not zero/clean. Inspect "
+                        f"{_worktree_info.get('path', '')} before assuming "
+                        "no work."
+                    ),
+                }
 
     try:
         _heartbeat_thread.start()

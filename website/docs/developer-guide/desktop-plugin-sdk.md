@@ -349,6 +349,61 @@ ctx.register({ id: 'noir', area: THEMES_AREA, data: myDesktopTheme })
 attachment source, or transform a draft before it is sent (`ComposerMiddleware`
 with a `handler(draft) => draft | null`).
 
+### Transcript directives — inline components the model addresses
+
+`TRANSCRIPT_DIRECTIVE_AREA` makes the transcript itself a contribution area.
+Register a named directive and the agent can render your component inline in
+an assistant message by emitting a paragraph of the form `::name{key="value"}`:
+
+```javascript
+import { TRANSCRIPT_DIRECTIVE_AREA } from '@hermes/plugin-sdk'
+
+ctx.register({
+  id: 'task-card',
+  area: TRANSCRIPT_DIRECTIVE_AREA,
+  data: {
+    name: 'task', // the model writes ::task{id="BB-12"}
+    render: ({ attrs, streaming }) => jsx(TaskCard, { taskId: attrs.id, streaming })
+  }
+})
+```
+
+Rules the host enforces so the surface stays safe:
+
+- The directive must be the **entire paragraph** — `::name` mid-prose stays
+  prose, so plugin components can never hijack running text.
+- Attributes are **untrusted model output** (`key="value"` pairs, string-only).
+  Validate your own fields; render nothing on garbage rather than guessing.
+- An **unclaimed** directive (no plugin registered for the name) renders as
+  the plain paragraph it always was — nothing breaks when a plugin is off.
+- Renders are wrapped in the contribution error boundary: a throw degrades to
+  an inline error chip, never a dead message.
+- First registration wins on a name collision; namespace adventurous names
+  with your slug (`myplugin-board`, not `board`).
+
+Core ships one directive as the reference consumer: `::preview{file="…"}`
+renders the workspace HTML file **live inside the message** — a sandboxed
+`srcdoc` iframe with an opaque origin (scripts run and the widget is fully
+interactive; no reach into the app, its storage, or the bridge). The frame
+sizes itself to the content (height live, width adopted from the content's
+intrinsic span, flush left in the message flow), and a theme prelude hands
+the document the app's resolved tokens (`--foreground`, `--muted-foreground`,
+`--accent`, `--border`, `--card`), the app font, and a transparent
+background — so widget-shaped HTML reads as native while a full page keeps
+its own design. Non-HTML targets and remote gateways fall back to the
+classic preview card. Tell the agent about your directive in a skill (that's
+how it learns to emit it).
+
+Previewed widgets can also **talk back**. Inside the frame,
+`window.hermes.send('get-price eth')` (or a declarative
+`<button data-hermes-send="get-price eth">` — no script needed) hands that
+prompt to the agent as a user turn, off-screen: no bubble takes up the
+transcript, the widget updating is the visible response. The turn is still
+real — it wakes the agent, rides the composer's steer/queue rules, and
+persists (typed `hidden`) so resume and the session DB keep the full record.
+Prompts are trimmed, capped at 500 chars, and throttled to one per second
+per frame.
+
 ### Mount-scoped chrome (`Contribute`)
 
 `ctx.register` is for **permanent** contributions. When chrome should live and

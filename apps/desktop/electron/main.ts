@@ -59,6 +59,7 @@ import {
 } from './bootstrap-platform'
 import { decideBootstrapRepair } from './bootstrap-repair-guard'
 import { runBootstrap } from './bootstrap-runner'
+import { detectBundleSkew } from './bundle-skew'
 import { applyConnectionChange, resolveTerminalConnection } from './connection-apply'
 import {
   apiRequestRegistryConnectionId,
@@ -87,6 +88,7 @@ import {
   remoteRequestMatchesBaseUrl,
   resolveAuthMode,
   resolveProfileBackendRoute,
+  resolveRemoteSshDashboardProfile,
   resolveTestWsUrl,
   savedProfileSsh,
   tokenPreview,
@@ -101,9 +103,12 @@ import {
   migrateV1ToRegistry,
   normalizeConnectionInput,
   normalizeRegistry,
+  rememberSshEnumeration,
   removeConnection,
   resolveRegistryLocalRoute,
   setPrimaryConnection,
+  shouldDeferLocalEnumeration,
+  shouldRetrySshInventory,
   updateEligibility,
   upsertConnection
 } from './connection-registry'
@@ -242,7 +247,14 @@ import { poolTouchKeys } from './pool-touch-scope'
 import { createKeepAwake } from './power-save'
 import { FirstRunSetupResetError, runPrimaryBackendStartup } from './primary-backend-startup'
 import { rehomePrimaryConnection } from './primary-connection-rehome'
-import { decideProfileDeleteAction, profileNameFromDeleteRequest, resolveRouteProfile } from './profile-delete-routing'
+import {
+  assertLocalProfileCanStart,
+  decideProfileDeleteAction,
+  localProfilePoolKeys,
+  ProfileDeletionGate,
+  profileNameFromDeleteRequest,
+  resolveRouteProfile
+} from './profile-delete-routing'
 import {
   buildSidebarSessionSliceParams,
   fetchPrimaryProfileSessions,
@@ -1213,6 +1225,7 @@ let softRehomeInProgress = false
 // with no named profiles never populates this map, so their experience is
 // byte-for-byte the single-backend behavior.
 const backendPool = new Map() // profile -> { process, port, token, connectionPromise, lastActiveAt }
+const profileDeletionGate = new ProfileDeletionGate()
 // Keep the pool light: cap concurrent profile backends (LRU eviction) and reap
 // idle ones. A user idles at exactly the primary backend; pool backends only
 // exist while a non-primary profile is actively being chatted through.
@@ -8821,7 +8834,7 @@ async function bootstrapSshConnectionInner(profile, sshConfig, reuseToken, sourc
     const lifecycle = platform.os === 'Windows' ? connectWindowsRemote : remoteLifecycle.connect
     result = await lifecycle({
       ssh,
-      profile: sshConfig.remoteProfile || connectionScopeKey(profile) || '',
+      profile: resolveRemoteSshDashboardProfile(sshConfig.remoteProfile, profile),
       remoteHermesPath: sshConfig.remoteHermesPath || '',
       ownershipId: sshOwnershipKey(profile),
       reuseToken: reuseToken || '',
@@ -9460,6 +9473,7 @@ function primaryProfileKey() {
 function profileRouteOptions(profile) {
   const config = readDesktopConnectionConfig()
   const sshOverride = profileSshOverride(config, profile)
+  const key = connectionScopeKey(profile) || primaryProfileKey()
 
   return {
     // A desktop profile can be only a client-side routing alias. Keep backend
@@ -9467,7 +9481,14 @@ function profileRouteOptions(profile) {
     backendProfile: sshOverride?.remoteProfile,
     globalRemote: globalRemoteActive(),
     primaryProfile: primaryProfileKey(),
-    profileRemoteOverride: Boolean(profileRemoteOverride(config, profile) || sshOverride)
+    profileRemoteOverride: Boolean(profileRemoteOverride(config, profile) || sshOverride),
+    // The primary profile's own backend resolves to a remote host (its
+    // per-profile override, env, or global). Unknown sub-profiles on that
+    // gateway must route THROUGH it, not spawn local backends (#88296).
+    primaryRemoteActive: primaryBackendIsRemote(),
+    // A stored per-profile entry (local or remote) — pins this profile to
+    // its own backend; absent entries inherit the primary's remote.
+    ownEntry: Boolean((readDesktopConnectionConfig().profiles || {})[key])
   }
 }
 
@@ -9476,6 +9497,9 @@ function profileRouteOptions(profile) {
 // primary, so legacy callers are unchanged.
 async function ensureBackend(profile) {
   const key = profile && String(profile).trim() ? String(profile).trim() : primaryProfileKey()
+
+  profileDeletionGate.assertCanStart(key)
+
   const route = resolveProfileBackendRoute(key, profileRouteOptions(key))
 
   if (route.backend === 'primary') {
@@ -9551,6 +9575,8 @@ async function ensureRegistryBackend(connectionId, profile) {
     // child pooled under the composite 'conn:local::<profile>' key so it
     // can't collide with the v1 remote descriptor cached at the bare key.
     const profileKey = String(profile ?? '').trim() || 'default'
+
+    profileDeletionGate.assertCanStart(profileKey)
 
     const localRoute = resolveRegistryLocalRoute(profileKey, {
       globalRemote: globalRemoteActive(),
@@ -9804,6 +9830,8 @@ async function spawnPoolBackend(profile, entry, opts: { forceLocal?: boolean; po
   const poolKey = opts.poolKey || profile
 
   await reapOrphanedBackendsOnce()
+  profileDeletionGate.assertCanStart(profile)
+
   // A profile may point at its OWN remote backend (connection.json
   // `profiles[name]`), or inherit the app-wide remote (env / global settings).
   // In either case there is no local child to spawn — we just verify the
@@ -9811,6 +9839,7 @@ async function spawnPoolBackend(profile, entry, opts: { forceLocal?: boolean; po
   // entry keeps `entry.process === null`, which stopPoolBackend/evict already
   // tolerate.
   const remote = opts.forceLocal ? null : await resolveRemoteBackend(profile)
+  profileDeletionGate.assertCanStart(profile)
 
   if (remote) {
     await waitForHermes(remote.baseUrl, remote.token, undefined, remote.authMode, remote.headers)
@@ -9849,6 +9878,8 @@ async function spawnPoolBackend(profile, entry, opts: { forceLocal?: boolean; po
     })
   }
 
+  profileDeletionGate.assertCanStart(profile)
+
   // --profile wins over the inherited HERMES_HOME env (see _apply_profile_override
   // step 3 in hermes_cli/main.py), so the child re-homes to this profile.
   // --port 0: the OS assigns an ephemeral port; the child announces it on stdout.
@@ -9863,6 +9894,9 @@ async function spawnPoolBackend(profile, entry, opts: { forceLocal?: boolean; po
   rememberLog(`Starting Hermes backend for profile "${profile}" via ${backend.label}`)
 
   const parentStartMarker = await desktopParentStartMarker()
+  assertLocalProfileCanStart(profile, profileDeletionGate, key =>
+    directoryExists(path.join(HERMES_HOME, 'profiles', key))
+  )
   const backendNonce = crypto.randomBytes(16).toString('hex')
   const parentIdentityEnv = parentWatchdogEnv(process.pid, parentStartMarker, backendNonce)
 
@@ -9984,17 +10018,16 @@ function stopPoolBackend(profile) {
 }
 
 async function teardownPoolBackendAndWait(profile) {
-  const entry = backendPool.get(profile)
+  const entries = localProfilePoolKeys(profile)
+    .map(key => ({ entry: backendPool.get(key), key }))
+    .filter(item => item.entry)
 
-  if (!entry) {
-    return
+  for (const { entry, key } of entries) {
+    backendPool.delete(key)
+    stopBackendChild(entry.process)
   }
 
-  backendPool.delete(profile)
-
-  stopBackendChild(entry.process)
-
-  await waitForBackendExit(entry.process)
+  await Promise.all(entries.map(({ entry }) => waitForBackendExit(entry.process)))
 }
 
 function stopAllPoolBackends() {
@@ -10047,7 +10080,7 @@ async function prepareProfileDeleteRequest(request) {
 
   if (decision.action === 'teardown-primary') {
     writeActiveDesktopProfile('default')
-    await teardownPrimaryBackendAndWait()
+    await Promise.all([teardownPrimaryBackendAndWait(), teardownPoolBackendAndWait(decision.profile)])
 
     return decision.profile
   }
@@ -12411,7 +12444,7 @@ ipcMain.handle('hermes:connections:test', async (_event, id) => {
   // The ssh probe path in testDesktopConnectionConfig never consults v1
   // connection state, so mapping the entry onto it is safe.
   if (entry.kind === 'ssh') {
-    return testDesktopConnectionConfig({
+    const result = await testDesktopConnectionConfig({
       mode: 'ssh',
       sshHost: entry.host,
       sshUser: entry.user,
@@ -12419,6 +12452,14 @@ ipcMain.handle('hermes:connections:test', async (_event, id) => {
       sshKeyPath: entry.keyPath,
       sshRemoteHermesPath: entry.remoteHermesPath
     })
+
+    if (result?.reachable) {
+      sshInventoryAttemptedAt.delete(entry.id)
+      sshRosterCache.delete(entry.id)
+      await probeSshProfileInventory(entry)
+    }
+
+    return result
   }
 
   // Remote/cloud/local probe built DIRECTLY from the registry entry. Routing
@@ -12482,44 +12523,138 @@ ipcMain.handle('hermes:connections:test', async (_event, id) => {
 // instead of failing the whole roster. ssh sources that have never been dialed
 // are SKIPPED (connect-on-demand — dialing every ssh box just to list agents
 // would spawn tunnels the user never asked for); once dialed, their pooled
-// descriptor serves the enumeration like any remote.
+// descriptor serves the enumeration like any remote. Last-known SSH profile
+// lists are reused so switching the window back to local does not empty Bot Mode.
+const sshRosterCache = new Map<string, string[]>()
+const sshInventoryAttemptedAt = new Map<string, number>()
+const SSH_INVENTORY_RETRY_MS = 60_000
+
+async function probeSshProfileInventory(connection) {
+  if (
+    !shouldRetrySshInventory(
+      sshRosterCache.has(connection.id),
+      sshInventoryAttemptedAt.get(connection.id),
+      Date.now(),
+      SSH_INVENTORY_RETRY_MS
+    )
+  ) {
+    return
+  }
+
+  sshInventoryAttemptedAt.set(connection.id, Date.now())
+
+  const sshConfig = normalizeSshConfig({
+    mode: 'ssh',
+    host: connection.host,
+    user: connection.user,
+    port: connection.port,
+    keyPath: connection.keyPath,
+    remoteHermesPath: connection.remoteHermesPath
+  })
+
+  if (!sshConfig) {
+    return
+  }
+
+  const ssh = createSshProbeConnection(
+    { host: sshConfig.host, user: sshConfig.user, port: sshConfig.port, keyPath: sshConfig.keyPath },
+    { rememberLog: sshRememberLog }
+  )
+
+  try {
+    await ssh.open()
+    const profiles = await remoteLifecycle.listRemoteHermesProfiles(ssh)
+
+    if (profiles.length > 0) {
+      sshRosterCache.set(connection.id, profiles)
+    }
+  } catch (error: any) {
+    sshRememberLog(`[ssh] profile inventory failed for ${connection.id}: ${error?.message || error}`)
+  } finally {
+    try {
+      await ssh.close()
+    } catch {
+      void 0
+    }
+  }
+}
+
 async function enumerateRegistryAgentSources(registry = readDesktopConnectionsRegistry()) {
   return Promise.all(
     registry.connections.map(async connection => {
+      let raw: { connection: typeof connection; error?: string; profiles: null | string[] }
+
       try {
-        if (
-          connection.kind === 'ssh' &&
-          ![...sshConnections.keys()].some(scope => String(scope).startsWith(backendScopePrefix(connection.id)))
-        ) {
-          return { connection, profiles: null, error: 'connect-on-demand' }
+        // SSH roster listing must never spawn a dashboard. A stale
+        // sshConnections key used to fall into ensureRegistryBackend and
+        // respawn Spark/Mini every Bot Mode poll (~5s), then the mux died
+        // (ECONNRESET / liveness probe drop).
+        if (connection.kind === 'ssh') {
+          await probeSshProfileInventory(connection)
+          raw = { connection, profiles: null, error: 'connect-on-demand' }
+        } else {
+          // Same connect-on-demand courtesy for the forced-local path: when
+          // the primary route is remote, enumerating "This device" would
+          // SPAWN a local backend this user has never asked for — a phantom
+          // `default` agent that also forces -device handle disambiguation
+          // onto the real one (remote-gateway-only desktops showed their main
+          // agent twice, Aug 17 2026). Enumerate the local source only when
+          // it is the delegate route (local-primary desktops, unchanged
+          // behavior) or a forced-local child is ALREADY pooled (the user
+          // opened one).
+          if (connection.kind === 'local') {
+            const localRoute = resolveRegistryLocalRoute('default', {
+              globalRemote: globalRemoteActive(),
+              profileRemoteOverride: Boolean(profileHasRemoteOverride(primaryProfileKey()))
+            })
+
+            if (shouldDeferLocalEnumeration(localRoute, backendPool.keys(), connection.id)) {
+              return { connection, profiles: null, error: 'connect-on-demand' }
+            }
+          }
+
+          const descriptor: any = await ensureRegistryBackend(connection.id, null)
+          const body: any = await getJsonForBackend(descriptor, '/api/profiles', { timeoutMs: 8_000 })
+
+          const profiles = Array.isArray(body?.profiles)
+            ? body.profiles.map(p => String(p?.name || '').trim()).filter(Boolean)
+            : []
+
+          // The root HERMES_HOME is an agent too; enumerations that omit it
+          // (older backends list only named profiles) still get a default row.
+          if (!profiles.includes('default')) {
+            profiles.unshift('default')
+          }
+
+          raw = { connection, profiles }
         }
-
-        const descriptor: any = await ensureRegistryBackend(connection.id, null)
-        const body: any = await getJsonForBackend(descriptor, '/api/profiles', { timeoutMs: 8_000 })
-
-        const profiles = Array.isArray(body?.profiles)
-          ? body.profiles.map(p => String(p?.name || '').trim()).filter(Boolean)
-          : []
-
-        // The root HERMES_HOME is an agent too; enumerations that omit it
-        // (older backends list only named profiles) still get a default row.
-        if (!profiles.includes('default')) {
-          profiles.unshift('default')
-        }
-
-        return { connection, profiles }
       } catch (error: any) {
-        return { connection, profiles: null, error: String(error?.message || error) }
+        raw = { connection, profiles: null, error: String(error?.message || error) }
       }
+
+      if (raw.profiles && raw.profiles.length > 0) {
+        sshRosterCache.set(connection.id, raw.profiles)
+      }
+
+      const remembered = rememberSshEnumeration(raw, sshRosterCache.get(connection.id), connection.kind)
+
+      return { connection, ...remembered }
     })
   )
 }
 
 ipcMain.handle('hermes:agents:roster', async () => {
-  const enumerations = await enumerateRegistryAgentSources()
+  const registry = readDesktopConnectionsRegistry()
+  const enumerations = await enumerateRegistryAgentSources(registry)
 
   return {
     agents: buildAgentRoster(enumerations),
+    // The active gateway owns the renderer's profiles.list — union agents
+    // that report THIS connection are the same identities, not extra rows.
+    // Expose the primary id so the plugin merger can annotate them in place
+    // instead of appending duplicates (remote-only desktops doubled every
+    // bot otherwise; see #88344).
+    primaryConnectionId: registry.primary,
     sources: enumerations.map(({ connection, profiles, error }) => ({
       connectionId: connection.id,
       label: connection.label,
@@ -13079,7 +13214,7 @@ async function mergeRemoteProfileSessions(searchParams, remoteProfiles) {
   }
 }
 
-ipcMain.handle('hermes:api', async (_event, request) => {
+async function handleHermesApiRequest(request) {
   // Registry-pinned request (request.connectionId): the renderer is working
   // against a REGISTERED gateway connection, so the data — cron jobs and their
   // run sessions included — lives in THAT host's state.db, not any local
@@ -13188,6 +13323,18 @@ ipcMain.handle('hermes:api', async (_event, request) => {
     upload: request?.upload,
     timeoutMs
   })
+}
+
+ipcMain.handle('hermes:api', async (_event, request) => {
+  const deletingProfile = profileNameFromDeleteRequest(request)
+
+  if (!deletingProfile) {
+    return handleHermesApiRequest(request)
+  }
+
+  const releaseProfileDeletion = profileDeletionGate.acquire(deletingProfile)
+
+  return handleHermesApiRequest(request).finally(releaseProfileDeletion)
 })
 
 // One deduper per cross-window cue — the choke point every window shares. Main
@@ -14396,26 +14543,49 @@ function resolveHermesVersion() {
   return app.getVersion()
 }
 
+// Renderer-bundle skew: `hermes update` moves the SOURCE TREE, but the UI
+// (including bundled plugins like Bot Mode) is compiled into this binary at
+// build time. A terminal-side update — or an in-app update whose bundle-swap
+// leg failed — leaves the new runtime running under an old renderer, so About
+// shows the new version while the sidebar is missing that version's desktop
+// features. Compare the build stamp's commit against the tree, scoped to
+// apps/desktop/, and warn when the running renderer is provably behind.
+// Fail-quiet: dev runs (no stamp), non-git builds, and shallow-clone gaps all
+// report in-sync rather than risk a false "your install is torn" warning.
+async function detectRendererSkew() {
+  return detectBundleSkew(INSTALL_STAMP, runGit, resolveUpdateRoot())
+}
+
 // Re-resolve the live Hermes version and push it into the native About panel
 // just before showing it, so an in-place `hermes update` is reflected without
 // an app restart. macOS only — `showAboutPanel()` is a no-op elsewhere, and the
 // other platforms don't use this menu item.
 function showAboutPanelFresh() {
-  app.setAboutPanelOptions({
-    applicationName: APP_NAME,
-    applicationVersion: resolveHermesVersion(),
-    copyright: 'Copyright © 2026 Nous Research'
+  void detectRendererSkew().then(skew => {
+    app.setAboutPanelOptions({
+      applicationName: APP_NAME,
+      applicationVersion: skew.outOfSync
+        ? `${resolveHermesVersion()} — app build out of date, update the desktop app`
+        : resolveHermesVersion(),
+      copyright: 'Copyright © 2026 Nous Research'
+    })
+    app.showAboutPanel()
   })
-  app.showAboutPanel()
 }
 
-ipcMain.handle('hermes:version', async () => ({
-  appVersion: resolveHermesVersion(),
-  electronVersion: process.versions.electron,
-  nodeVersion: process.versions.node,
-  platform: process.platform,
-  hermesRoot: resolveUpdateRoot()
-}))
+ipcMain.handle('hermes:version', async () => {
+  const skew = await detectRendererSkew()
+
+  return {
+    appVersion: resolveHermesVersion(),
+    electronVersion: process.versions.electron,
+    nodeVersion: process.versions.node,
+    platform: process.platform,
+    hermesRoot: resolveUpdateRoot(),
+    bundleOutOfSync: skew.outOfSync,
+    bundleCommitsBehind: skew.desktopCommitsBehind
+  }
+})
 
 // ===========================================================================
 // Uninstall — remove the Chat GUI (and optionally the agent / user data).

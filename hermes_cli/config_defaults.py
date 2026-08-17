@@ -2007,6 +2007,16 @@ DEFAULT_CONFIG = {
     # always goes to ~/.hermes/skills/.
     "skills": {
         "external_dirs": [],   # e.g. ["~/.agents/skills", "/shared/team-skills"]
+        # Project-local skill discovery: when a session starts inside a git
+        # checkout, ``<root>/.hermes/skills/`` and ``<root>/.agents/skills/``
+        # are sourced as the highest-precedence skill tier — but ONLY when the
+        # project root is listed in trusted_project_dirs below. Trust a repo
+        # with ``hermes skills trust`` (run from inside it). Set to false to
+        # disable discovery entirely (no scan, no untrusted-skills notice).
+        "project_discovery": True,
+        # Absolute paths of project roots whose repo-local skills may load.
+        # Managed by ``hermes skills trust`` / ``hermes skills untrust``.
+        "trusted_project_dirs": [],
         # Substitute ${HERMES_SKILL_DIR} and ${HERMES_SESSION_ID} in SKILL.md
         # content with the absolute skill directory and the active session id
         # before the agent sees it.  Lets skill authors reference bundled
@@ -2573,6 +2583,19 @@ DEFAULT_CONFIG = {
         # assignee to any installed profile. When unset, falls back to the
         # default profile. A task never ends up with assignee=None.
         "default_assignee": "",
+        # Global concurrency cap (#33488): when set to a positive int, the
+        # HOST never has more than N tasks in 'running' at once — counted
+        # across every active board and across both the ready and review
+        # dispatch lanes (workers are OS processes sharing one machine's
+        # memory, so the cap bounds the machine, not each board; OOF-30).
+        # Unset (None) means
+        # "derive from system memory" (OOF-30/OOF-77): the dispatcher caps
+        # concurrency at roughly MemTotal / 512 MiB, clamped to [2, 8] —
+        # e.g. 2 workers on a 1 GiB VM. On hosts where total memory can't
+        # be read (macOS/Windows), unset falls back to no cap. Set an
+        # explicit value to override the derived default in either
+        # direction.
+        "max_in_progress": None,
         # Per-profile concurrency cap (#21582). When set to a positive int,
         # no single profile can have more than N workers running at once,
         # even if the global max_in_progress / max_spawn caps would allow
@@ -3871,6 +3894,14 @@ OPTIONAL_ENV_VARS = {
         "description": "OpenCode Zen API key (pay-as-you-go access to curated models)",
         "prompt": "OpenCode Zen API key",
         "url": "https://opencode.ai/auth",
+        "password": True,
+        "category": "provider",
+        "advanced": True,
+    },
+    "COMMANDCODE_API_KEY": {
+        "description": "CommandCode API key (GOAT/Pro/Max/Provider plans — 30+ models via one key)",
+        "prompt": "CommandCode API key",
+        "url": "https://commandcode.ai/studio/",
         "password": True,
         "category": "provider",
         "advanced": True,

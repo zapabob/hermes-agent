@@ -35,6 +35,10 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
   EmptyState,
   GlyphSpinner,
   haptic,
@@ -63,6 +67,10 @@ import { jsx, jsxs } from 'react/jsx-runtime'
 const { McpTab, ToolsetConfigPanel } = sdk
 // Keep optional exports feature-detected; test harnesses may strip the SDK namespace.
 const SkillsView = typeof sdk === 'undefined' ? undefined : sdk.SkillsView
+const Streamdown = typeof sdk === 'undefined' ? undefined : sdk.Streamdown
+// Budgeted render loop (fps cap + observability pause + dormancy + teardown).
+// Feature-detected: older desktops fall back to the hand-rolled clock below.
+const createBudgetedLoop = typeof sdk === 'undefined' ? undefined : sdk.createBudgetedLoop
 
 const ID = 'hermes-bots'
 const ROSTER_KEY = [ID, 'roster']
@@ -1100,35 +1108,185 @@ function walkMathFaces(root, acc) {
 }
 
 function startFaceClock() {
-  if (typeof window === 'undefined' || window.__hbFaceClock) {
+  if (typeof window === 'undefined') {
     return
   }
 
-  window.__hbFaceClock = true
-  const t0 = performance.now()
-  // The shadow-root walk over the whole document is the expensive part —
-  // do it at ~1Hz and paint the cached list per frame. Skip paints while
-  // the window is hidden; rAF is throttled there anyway, but be explicit.
-  let faces = []
-  let lastScan = -Infinity
+  if (window.__hbFaceClock) {
+    // Already initialized (possibly parked) — make sure it's awake. BotFace
+    // renders route here, so a face mounting is what wakes a dormant clock.
+    window.__hbFaceClock.wake()
 
-  const tick = now => {
-    if (!document.hidden) {
-      if (now - lastScan > 1000) {
-        faces = walkMathFaces(document, [])
-        lastScan = now
-      }
-      const t = (now - t0) / 1000
-      for (const svg of faces) {
-        if (svg.isConnected) {
-          paintMathFace(svg, t)
-        }
-      }
-    }
-    window.requestAnimationFrame(tick)
+    return
   }
 
-  window.requestAnimationFrame(tick)
+  const t0 = performance.now()
+  // A large roster can mount hundreds of faces. Observe the cached nodes so
+  // off-screen cards do not consume a full animation frame by themselves.
+  let faces = []
+  let lastScan = -Infinity
+  const visibleFaces = new Set()
+  const observedFaces = new Set()
+  const observer =
+    typeof IntersectionObserver === 'function'
+      ? new IntersectionObserver(entries => {
+          let becameVisible = false
+
+          for (const entry of entries) {
+            if (entry.isIntersecting) {
+              visibleFaces.add(entry.target)
+              becameVisible = true
+            } else {
+              visibleFaces.delete(entry.target)
+            }
+          }
+
+          // A parked clock (no visible faces) resumes when one scrolls in.
+          if (becameVisible) {
+            window.__hbFaceClock?.wake()
+          }
+        })
+      : null
+
+  const scanFaces = () => {
+    faces = walkMathFaces(document, [])
+
+    if (!observer) {
+      return
+    }
+
+    const currentFaces = new Set(faces)
+
+    for (const svg of observedFaces) {
+      if (!currentFaces.has(svg)) {
+        observer.unobserve(svg)
+        observedFaces.delete(svg)
+        visibleFaces.delete(svg)
+      }
+    }
+
+    for (const svg of faces) {
+      if (!observedFaces.has(svg)) {
+        observedFaces.add(svg)
+        observer.observe(svg)
+      }
+    }
+  }
+
+  // Shared painting body for both scheduling paths: 1Hz document rescans,
+  // paint only visible faces (all cached faces when IO is unavailable).
+  const paint = now => {
+    if (now - lastScan > 1000) {
+      scanFaces()
+      lastScan = now
+    }
+    const t = (now - t0) / 1000
+    const facesToPaint = observer ? visibleFaces : faces
+
+    for (const svg of facesToPaint) {
+      if (svg.isConnected) {
+        paintMathFace(svg, t)
+      }
+    }
+  }
+
+  // Nothing worth animating: no faces mounted (BotFace wakes us on the next
+  // mount) or none visible (the observer wakes us when one scrolls in).
+  const idle = () => faces.length === 0 || (observer && visibleFaces.size === 0)
+
+  const teardownCaches = () => {
+    if (observer) {
+      observer.disconnect()
+    }
+
+    visibleFaces.clear()
+    observedFaces.clear()
+    faces = []
+    delete window.__hbFaceClock
+  }
+
+  // Newer desktops: the SDK's budgeted loop owns scheduling (15fps budget,
+  // hidden/minimized/unfocused pause, dormancy, teardown). typeof-guarded so
+  // older shells and the vm test harness use the hand-rolled path below.
+  if (typeof createBudgetedLoop === 'function' && createBudgetedLoop) {
+    const loop = createBudgetedLoop(paint, { fps: 15, idleWhen: idle })
+
+    window.__hbFaceClock = {
+      stop: () => {
+        loop.dispose()
+        teardownCaches()
+      },
+      wake: () => {
+        // Faces may have mounted/unmounted while parked — rescan on wake.
+        lastScan = -Infinity
+        loop.wake()
+      }
+    }
+
+    return
+  }
+
+  // Fallback scheduling for desktops whose SDK predates createBudgetedLoop.
+  let lastPaint = -Infinity
+  let rafId = 0
+  let dormant = false
+  let stopped = false
+
+  const tick = now => {
+    if (stopped) {
+      return
+    }
+
+    rafId = 0
+    // 15fps is smooth at avatar scale and bounds SVG/DOM churn. The clock
+    // still uses rAF so Chromium can pause it when the window is occluded.
+    if (!document.hidden && now - lastPaint >= 1000 / 15) {
+      paint(now)
+      lastPaint = now
+    }
+
+    // Park instead of burning frames + 1Hz whole-document shadow walks.
+    if (idle()) {
+      dormant = true
+
+      return
+    }
+
+    rafId = window.requestAnimationFrame(tick)
+  }
+
+  const wake = () => {
+    if (stopped || !dormant) {
+      return
+    }
+
+    dormant = false
+    // Faces may have mounted/unmounted while parked — rescan on first tick.
+    lastScan = -Infinity
+    rafId = window.requestAnimationFrame(tick)
+  }
+
+  const stop = () => {
+    stopped = true
+
+    if (rafId) {
+      window.cancelAnimationFrame(rafId)
+      rafId = 0
+    }
+
+    teardownCaches()
+  }
+
+  window.__hbFaceClock = { stop, wake }
+  rafId = window.requestAnimationFrame(tick)
+}
+
+/** Tear the face clock down (plugin disable/reload) — cancels the animation
+ *  frame, disconnects the visibility observer, and drops all cached nodes. */
+function stopFaceClock() {
+  if (typeof window !== 'undefined' && window.__hbFaceClock) {
+    window.__hbFaceClock.stop()
+  }
 }
 
 /**
@@ -2032,8 +2190,10 @@ function PetTab({ image, onImage }) {
 let serverInjectsProtocol = false
 
 function useRoster() {
+  const activeConnectionId = useValue(host.state.connectionId)
+
   return useQuery({
-    queryKey: ROSTER_KEY,
+    queryKey: [...ROSTER_KEY, activeConnectionId],
     queryFn: async () => {
       // Rich rows (last_session, ui_meta, has_avatar) come from the ACTIVE
       // gateway's profiles.list — unchanged single-source behavior.
@@ -2051,7 +2211,7 @@ function useRoster() {
       if (typeof host.agents === 'function') {
         try {
           const union = await host.agents()
-          return mergeMultiSourceRoster(local, union)
+          return mergeMultiSourceRoster(local, union, activeConnectionId, $lastRoster.get())
         } catch {
           /* older build or roster failure — single-source list stands */
         }
@@ -2069,47 +2229,140 @@ function useRoster() {
 }
 
 /** Merge the union agent roster (host.agents) over the active gateway's
- *  profiles.list. Local-source rows are matched by profile name and only
- *  ANNOTATED (handle, connectionId) — their rich fields stay authoritative.
+ *  profiles.list. Active-source rows — matched by the LIVE connection id,
+ *  falling back to the roster's primaryConnectionId, then the legacy
+ *  kind==='local' rule on older desktops — are the agents profiles.list
+ *  already returned: they only ANNOTATE the rich rows (handle, connection
+ *  fields); rich fields stay authoritative and they are NOT duplicated.
  *  Rows from other sources become new roster entries tagged with their
  *  source label so BotRow can badge them and route open/warm through
  *  ensureAgent/warmAgent. Pure — exercised directly by the tests. */
-function mergeMultiSourceRoster(local, union) {
-  const profiles = Array.isArray(local?.profiles) ? local.profiles.slice() : []
+function mergeMultiSourceRoster(local, union, activeConnectionId, previous = []) {
+  const localProfiles = Array.isArray(local?.profiles) ? local.profiles : []
   const agents = Array.isArray(union?.agents) ? union.agents : []
+  // A live id of null/'' means the window is on the unscoped local backend
+  // (legacy hosts reported null for mode:'local'; the SDK now reports
+  // 'local'). Do NOT fall back to registry primary when the third argument
+  // was passed — primary can still say "spark" after the user clicked a
+  // local bot, which skipped every Spark row as "active" and invented a
+  // This-device shadow of default.
+  const liveProvided = arguments.length >= 3
+  const liveId = String(activeConnectionId || '').trim()
+  const activeId = liveId || (liveProvided ? '' : String(union?.primaryConnectionId || '').trim())
+  const activeByName = new Map()
 
-  if (!agents.length) {
-    return { ...local, profiles }
+  // Treat the rich list as one row per active-source profile. Clone every
+  // row: some gateway clients reuse response objects, and annotating those in
+  // place made each five-second refresh feed the previous union back into the
+  // next merge, growing duplicate source rows indefinitely.
+  for (const profile of localProfiles) {
+    const name = String(profile?.name || '').trim()
+
+    if (!name || profile?.remoteSource) {
+      continue
+    }
+
+    if (profile?.sourceScoped && activeId && profile.connectionId !== activeId) {
+      continue
+    }
+
+    if (!activeByName.has(name)) {
+      activeByName.set(name, { ...profile, name })
+    }
   }
 
-  const localByName = new Map(profiles.map(p => [p.name, p]))
+  const profiles = [...activeByName.values()]
+
+  // host.agents is an Electron/main-process capability. Defend the plugin
+  // boundary too: older shells or reconnect races can still hand us repeated
+  // identities even after the core roster deduplicates them.
+  const seenSources = new Set()
 
   for (const agent of agents) {
-    const isLocalSource = agent.connectionKind === 'local'
-    const row = isLocalSource ? localByName.get(agent.profile) : null
+    const profile = String(agent?.profile || '').trim()
+    const connectionId = String(agent?.connectionId || '').trim()
+    const sourceKey = `${connectionId}::${profile || 'default'}`
+
+    if (!profile || seenSources.has(sourceKey)) {
+      continue
+    }
+
+    seenSources.add(sourceKey)
+
+    // The union enumerates EVERY registered connection, including the active
+    // gateway that already answered profiles.list. Without this the active
+    // gateway's own agents (connectionKind 'remote' on a remote-primary
+    // desktop) would be appended as phantom duplicates — every bot listed
+    // twice. Older Electron builds predate the connection ids; fall back to
+    // the legacy local-source rule so single-source behavior stays intact.
+    const isActiveSource = activeId ? connectionId === activeId : agent.connectionKind === 'local'
+    const row = isActiveSource ? activeByName.get(profile) : null
 
     if (row) {
       // Annotate in place: the @name-device handle only differs from the
       // bare name when the profile exists on several sources.
       row.handle = agent.handle
       row.connectionId = agent.connectionId
+      row.connectionKind = agent.connectionKind
+      row.connectionLabel = agent.connectionLabel
+      row.sourceScoped = true
       continue
     }
 
-    if (isLocalSource) {
-      // Union saw a local profile profiles.list didn't return (older
+    if (isActiveSource) {
+      // Union saw an active-source profile profiles.list didn't return (older
       // backend mid-refresh) — skip rather than invent a thin row.
       continue
     }
 
     profiles.push({
-      name: agent.profile,
+      name: profile,
       handle: agent.handle,
-      connectionId: agent.connectionId,
+      connectionId,
       connectionKind: agent.connectionKind,
       connectionLabel: agent.connectionLabel,
-      remoteSource: true
+      remoteSource: true,
+      sourceScoped: true
     })
+  }
+
+  // SSH sources drop to connect-on-demand the moment their tunnel is not
+  // the live gateway. Keep previously painted remote rows so clicking the
+  // local agent does not empty Bot Mode.
+  if (Array.isArray(previous) && previous.length > 0) {
+    const present = new Set(profiles.map(row => `${row.connectionId || ''}::${row.name}`))
+    const unionSourceIds = new Set(agents.map(agent => String(agent?.connectionId || '').trim()).filter(Boolean))
+    const omitted = new Set(
+      (Array.isArray(union?.sources) ? union.sources : [])
+        .filter(source => source?.error === 'connect-on-demand' || source?.reachable === false)
+        .map(source => String(source.connectionId || '').trim())
+        .filter(Boolean)
+    )
+
+    const registered = new Set(
+      (Array.isArray(union?.sources) ? union.sources : [])
+        .map(source => String(source?.connectionId || '').trim())
+        .filter(Boolean)
+    )
+
+    for (const row of previous) {
+      const connectionId = String(row?.connectionId || '').trim()
+      const name = String(row?.name || '').trim()
+      const key = `${connectionId}::${name || 'default'}`
+
+      if (!row?.remoteSource || !connectionId || !name || present.has(key)) {
+        continue
+      }
+
+      if (registered.size > 0 && !registered.has(connectionId)) {
+        continue
+      }
+
+      if (omitted.has(connectionId) || !unionSourceIds.has(connectionId)) {
+        profiles.push({ ...row, remoteSource: true, sourceScoped: true })
+        present.add(key)
+      }
+    }
   }
 
   return { ...local, profiles }
@@ -2126,6 +2379,191 @@ function botHandle(name, bot) {
   }
 
   return (name || '').trim().toLowerCase() === 'default' ? 'hermes' : name
+}
+
+function isActiveRosterBot(bot, active) {
+  const activeName = String(active?.name || 'default').trim() || 'default'
+  const activeId = String(active?.connectionId || '').trim()
+  const botId = String(bot?.connectionId || '').trim()
+  const botName = String(bot?.name || '').trim() || 'default'
+
+  if (bot?.remoteSource) {
+    return Boolean(activeId) && activeId === botId && botName === activeName
+  }
+
+  if (activeId && activeId !== 'local' && botId && activeId !== botId) {
+    return false
+  }
+
+  return botName === activeName
+}
+
+/** Resolve @handles in prose against the Bot Mode roster (local + Connections).
+ *  Skips the bot already speaking in this chat. Unique bare names match;
+ *  duplicate names require the @name-device handle. */
+function resolveRosterMentions(text, roster, active = {}) {
+  const members = Array.isArray(roster) ? roster : []
+  const prose = String(text || '').replace(/```[\s\S]*?```/g, ' ').replace(/`[^`\n]*`/g, ' ')
+  const byForm = new Map()
+
+  for (const bot of members) {
+    if (!bot?.name || isActiveRosterBot(bot, active)) {
+      continue
+    }
+
+    const handle = String(botHandle(bot.name, bot) || '').toLowerCase()
+    const name = String(bot.name || '').toLowerCase()
+    const forms = new Set([handle, name])
+
+    if (bot.handle) {
+      forms.add(String(bot.handle).toLowerCase())
+    }
+
+    for (const form of forms) {
+      if (!form) {
+        continue
+      }
+
+      const existing = byForm.get(form)
+
+      if (existing && existing !== bot) {
+        byForm.set(form, null)
+        continue
+      }
+
+      if (!existing) {
+        byForm.set(form, bot)
+      }
+    }
+  }
+
+  const mentioned = []
+  const seen = new Set()
+
+  for (const match of prose.matchAll(/(^|\s)@([a-z0-9][a-z0-9_-]*)/gi)) {
+    let token = match[2].toLowerCase()
+
+    if (token === 'hermes') {
+      token = byForm.has('hermes') ? 'hermes' : token
+    }
+
+    const bot = byForm.get(token)
+
+    if (!bot) {
+      continue
+    }
+
+    const key = botRosterKey(bot)
+
+    if (seen.has(key)) {
+      continue
+    }
+
+    seen.add(key)
+    mentioned.push(bot)
+  }
+
+  return mentioned
+}
+
+async function deliverRemoteRosterMentions(bots, userText) {
+  const text = String(userText || '').trim()
+
+  if (!text || typeof host.requestProfile !== 'function') {
+    return
+  }
+
+  for (const bot of bots) {
+    const connectionId = String(bot?.connectionId || '').trim()
+    const profile = String(bot?.name || '').trim() || 'default'
+
+    if (!connectionId || connectionId === 'local') {
+      continue
+    }
+
+    try {
+      const created = await host.requestProfile(
+        { connectionId, profile, mode: 'remote', targetProfile: profile },
+        'session.create',
+        { profile, title: 'Bot Chat', hidden: true }
+      )
+      const sessionId = created?.session_id
+
+      if (!sessionId) {
+        throw new Error('No remote session')
+      }
+
+      await host.requestProfile(
+        { connectionId, profile, mode: 'remote', targetProfile: profile },
+        'prompt.submit',
+        { session_id: sessionId, text }
+      )
+      host.notify?.({
+        kind: 'info',
+        title: displayName(bot),
+        message: `Messaged @${botHandle(profile, bot)} on ${bot.connectionLabel || connectionId} from this chat.`
+      })
+    } catch (error) {
+      host.notifyError?.(error, `Could not reach ${bot.connectionLabel || profile}`)
+    }
+  }
+}
+
+/** Source-qualified identity for a roster row — the React list key AND the
+ *  cross-surface roster identity. Names alone are NOT unique in a
+ *  multi-source roster (two connections can both expose 'default');
+ *  duplicate keys make React reconciliation repeat whole blocks of the list
+ *  on every poll repaint (the Aug 2026 dupe-bots smear). */
+function botRosterKey(bot) {
+  return `${bot?.connectionId || 'legacy'}::${bot?.name || 'default'}`
+}
+
+// ── cross-connection routing ─────────────────────────────────────────────────
+// A bot from another registered connection (remoteSource rows) is reached
+// through host.requestProfile with a route descriptor; local bots keep the
+// active-gateway door. Feature-detected: older desktops without
+// requestProfile simply have no remote routes (callers fall back / disable).
+
+/** Route descriptor for a bot on another connection, or null for the local /
+ *  active source (or when the desktop can't route). */
+function botConnectionRoute(bot) {
+  const id = String(bot?.connectionId || '').trim()
+
+  if (!bot?.remoteSource || !id || id === 'local' || typeof host.requestProfile !== 'function') {
+    return null
+  }
+
+  const profile = String(bot?.name || '').trim() || 'default'
+
+  return { connectionId: id, mode: 'remote', profile, targetProfile: profile }
+}
+
+/** Gateway RPC on the bot's OWN source: requestProfile for remote rows,
+ *  the active gateway for local ones. Never activates/foregrounds. */
+async function requestForBot(bot, method, params = {}) {
+  const route = botConnectionRoute(bot)
+
+  if (route) {
+    return host.requestProfile(route, method, params)
+  }
+
+  return host.request(method, params)
+}
+
+/** Stable per-member identity inside a group room. Local members keep their
+ *  bare name (compat with rooms persisted before cross-connection groups);
+ *  remote members get the source-qualified key so `dixie` on the Mini and a
+ *  local `dixie` never share watermarks or sessions. */
+function groupMemberKey(member) {
+  return member?.remoteSource ? botRosterKey(member) : member?.name
+}
+
+// Bot metadata is scoped to the active gateway until the server exposes a
+// union of rich profile rows. Never paint that metadata onto a thin row from
+// another source: two `default` agents must not borrow each other's title,
+// pin, avatar, group, unread state, or canonical-chat pointer.
+function botRosterMeta(bot, metaByName) {
+  return bot?.remoteSource ? null : metaByName?.[bot?.name]
 }
 
 function showsHandle(name, meta, bot) {
@@ -2221,13 +2659,18 @@ function createCanonicalChat(name) {
 async function openBotCanonicalChat(name, pinned) {
   let id = pinned
 
-  if (!id) {
-    return createCanonicalChat(name)
-  }
-
   try {
     const res = await host.request('session.list', { profile: name, limit: 100 })
     const rows = res?.sessions ?? []
+
+    if (!id && rows.length) {
+      // A CLI/A2A exchange may have created the canonical Bot Chat before the
+      // desktop saved ui_meta.chat. Reuse its explicit title first; for older
+      // bot installs retain the documented grandfathering behavior and adopt
+      // the most recent existing session rather than minting another one.
+      id = rows.find(session => session.title === 'Bot Chat')?.id || rows[0].id
+      saveBotMeta(name, { chat: id })
+    }
 
     if (!rows.length) {
       saveBotMeta(name, { chat: null })
@@ -2239,7 +2682,12 @@ async function openBotCanonicalChat(name, pinned) {
       saveBotMeta(name, { chat: id })
     }
   } catch {
-    // Gateway hiccup — try the stored pin as-is.
+    // Gateway hiccup — try the stored pin as-is. Without a pin we cannot
+    // safely discover a pre-existing canonical chat, so create one as the
+    // fallback rather than leaving the click inert.
+    if (!id) {
+      return createCanonicalChat(name)
+    }
   }
 
   try {
@@ -2253,7 +2701,52 @@ async function openBotCanonicalChat(name, pinned) {
   }
 }
 
+async function prepareBotSource(bot, pinnedChat) {
+  if (!bot.sourceScoped) {
+    return pinnedChat
+  }
+
+  if (typeof host.ensureAgent !== 'function') {
+    throw new Error('Update Hermes Desktop to chat with agents on other connections.')
+  }
+
+  await host.ensureAgent(bot.connectionId, bot.name)
+
+  if (!bot.remoteSource) {
+    return pinnedChat
+  }
+
+  const liveId = String(typeof host.activeConnectionId === 'function' ? host.activeConnectionId() || '' : '').trim()
+  const targetId = String(bot.connectionId || '').trim()
+
+  if (targetId && targetId !== 'local' && liveId !== targetId) {
+    throw new Error(`Still on ${liveId || 'this device'}, not ${bot.connectionLabel || targetId}`)
+  }
+
+  // Thin rows deliberately omit metadata from the active source. Once their
+  // owner is active, recover that source's canonical-chat pointer so
+  // same-named agents never reuse or overwrite each other's pin.
+  try {
+    const refreshed = await host.request('profiles.list', {})
+    const owner = refreshed?.profiles?.find(profile => profile.name === bot.name)
+
+    return owner?.ui_meta?.['hermes-bots']?.chat || null
+  } catch {
+    // Metadata refresh is best-effort; canonical creation remains the fallback.
+    return null
+  }
+}
+
 function displayName(bot, meta) {
+  // Only THIN rows from another source trade the friendly name for their
+  // connection label — the active gateway's own default must keep reading
+  // "Hermes". Annotated active rows carry sourceScoped too, and keying this
+  // off sourceScoped renamed the user's main agent to an IP-derived label
+  // (community report, Aug 17 2026).
+  if (bot?.remoteSource && (bot.name || '').trim().toLowerCase() === 'default' && bot.connectionLabel) {
+    return bot.connectionLabel
+  }
+
   if (meta?.title?.trim()) {
     return meta.title.trim()
   }
@@ -2280,7 +2773,7 @@ function filterBots(roster, metaByName, query) {
   }
 
   return roster.filter(bot => {
-    const display = displayName(bot, metaByName[bot.name]).toLowerCase()
+    const display = displayName(bot, botRosterMeta(bot, metaByName)).toLowerCase()
     const profile = (bot.name || '').toLowerCase()
     const handle = botHandle(bot.name, bot).toLowerCase()
     // Multi-source rows also match on their device name ("homelab" finds
@@ -2312,7 +2805,7 @@ function groupRoster(roster, metaByName) {
   const byGroup = new Map()
 
   for (const bot of roster) {
-    const group = (metaByName[bot.name]?.group || '').trim()
+    const group = (botRosterMeta(bot, metaByName)?.group || '').trim()
 
     if (!group) {
       ungrouped.push(bot)
@@ -2389,9 +2882,14 @@ function parseGroupChatMentions(text, members) {
 
   for (const member of members) {
     const title = String(member.title || '').trim()
+    // Cross-connection members are also addressable by their @name-device
+    // handle (the roster's disambiguated form) — same-named agents on two
+    // machines resolve to the right one.
+    const handle = String(member.handle || '').trim()
     const forms = new Set([
       member.name.toLowerCase(),
       member.name.toLowerCase().replace(/[\s_-]+/g, ''),
+      ...(handle ? [handle.toLowerCase(), handle.toLowerCase().replace(/[\s_-]+/g, '')] : []),
       ...(title
         ? [title.toLowerCase(), title.toLowerCase().replace(/[\s_-]+/g, ''), title.split(/\s+/)[0].toLowerCase()]
         : [])
@@ -2399,7 +2897,7 @@ function parseGroupChatMentions(text, members) {
 
     for (const form of forms) {
       if (form) {
-        handles.set(form, member.name)
+        handles.set(form, groupMemberKey(member))
       }
     }
   }
@@ -2459,7 +2957,7 @@ function resolveGroupResponders(log, members) {
     return members
   }
 
-  return members.filter(member => mentioned.has(member.name))
+  return members.filter(member => mentioned.has(groupMemberKey(member)))
 }
 
 /** Rotate the roster so a different member leads each round. */
@@ -2481,16 +2979,25 @@ function formatGroupChatLine(entry, viewerName) {
   }
 
   const suffix = entry.from.name === viewerName ? ' (you)' : ''
+  // Cross-connection speakers carry their device so same-named agents on
+  // two machines stay tellable apart in every member's transcript.
+  const source = entry.from.source ? ` [${entry.from.source}]` : ''
 
-  return `${entry.from.name}${suffix}: ${entry.text}`
+  return `${entry.from.name}${suffix}${source}: ${entry.text}`
 }
 
 /** The full per-turn payload for one member: participation rules + the room
  *  delta. Rules travel in the turn payload (not SOUL) so every existing bot
  *  can join a group chat without a profile migration. */
 function buildGroupChatTurnPrompt({ groupName, members, viewer, deltaLines }) {
-  const peers = members.filter(m => m.name !== viewer.name)
-  const peerNames = peers.map(m => (m.title ? `${m.title} (@${m.name})` : `@${m.name}`)).join(', ')
+  const viewerKey = groupMemberKey(viewer)
+  const peers = members.filter(m => groupMemberKey(m) !== viewerKey)
+  const peerNames = peers
+    .map(m => {
+      const handle = m.title ? `${m.title} (@${m.name})` : `@${m.name}`
+      return m.remoteSource ? `${handle} [on ${m.connectionLabel || m.connectionId}]` : handle
+    })
+    .join(', ')
 
   return [
     `[Group chat: "${groupName}"] You are @${viewer.name}, one participant in a group chat with ${peerNames || 'no one else yet'} and the user.`,
@@ -2539,7 +3046,14 @@ function updateGroupChat(group, mutate) {
     const durable = {}
 
     for (const [name, room] of Object.entries(all)) {
-      durable[name] = { log: room.log, watermarks: room.watermarks, sessions: room.sessions || {} }
+      durable[name] = {
+        log: room.log,
+        watermarks: room.watermarks,
+        sessions: room.sessions || {},
+        // Cross-connection member descriptors — remote bots can't ride
+        // bot-meta, so the room record carries who they are.
+        members: Array.isArray(room.members) ? room.members : []
+      }
     }
 
     Promise.resolve(pluginCtx?.storage?.set?.('group-chats', durable)).catch(() => undefined)
@@ -2548,6 +3062,61 @@ function updateGroupChat(group, mutate) {
   }
 
   return next
+}
+
+/** Soft-disband a group chat: clear every member's group assignment (the
+ *  grouping is bot-meta, so the disband syncs cross-machine via ui_meta),
+ *  drop the room log from the atom + plugin storage, and close the room view
+ *  if it's open. The members' per-group gateway sessions ("Group: <name>")
+ *  are intentionally KEPT — they stay reachable through each bot's session
+ *  browser. */
+async function disbandGroupChat(group, memberNames) {
+  // Invalidate any in-flight round-robin FIRST: bump the epoch so a running
+  // drive bails at its next member boundary instead of appending to a room
+  // the user just discarded.
+  const all = { ...$groupChats.get() }
+  const prior = all[group] || {}
+
+  delete all[group]
+  // Keep a runtime-only tombstone while a drive may still be mid-turn; it
+  // carries no log and is never persisted, so it can't rehydrate.
+  if (prior.running) {
+    all[group] = { log: [], watermarks: {}, sessions: {}, epoch: (prior.epoch || 0) + 1, running: false }
+  }
+
+  $groupChats.set(all)
+
+  if ($groupChatWorkspace.get() === group) {
+    $groupChatWorkspace.set(null)
+  }
+
+  const needs = { ...$groupNeedsYou.get() }
+
+  delete needs[group]
+  $groupNeedsYou.set(needs)
+
+  // Persist the room map WITHOUT the disbanded room so it can't come back
+  // on the next window load.
+  try {
+    const durable = {}
+
+    for (const [name, room] of Object.entries($groupChats.get())) {
+      if (name !== group && Array.isArray(room.log)) {
+        durable[name] = { log: room.log, watermarks: room.watermarks, sessions: room.sessions || {} }
+      }
+    }
+
+    await Promise.resolve(pluginCtx?.storage?.set?.('group-chats', durable))
+  } catch {
+    /* storage unavailable — the atom reset above still empties the room */
+  }
+
+  // Ungroup the members last. saveBotMeta never throws (local storage +
+  // best-effort profiles.configure per member), so a flaky gateway can't
+  // strand the disband halfway with the room log already gone.
+  for (const name of memberNames) {
+    await saveBotMeta(name, { group: null })
+  }
 }
 
 function appendGroupChatEntry(group, from, text) {
@@ -2570,11 +3139,13 @@ function appendGroupChatEntry(group, from, text) {
  *  session id for it. Gateway-native: session.create mints the session
  *  (lazy until its first message), session.resume by stored id — or by
  *  title, which also covers rehydrated rooms whose sid was lost — reopens
- *  it after restarts. */
-async function ensureGroupChatSession(group, memberName) {
+ *  it after restarts. Cross-connection members route to their OWN source
+ *  via requestForBot; the window's gateway never switches. */
+async function ensureGroupChatSession(group, member) {
   const title = `Group: ${group}`
   const room = $groupChats.get()[group] || {}
-  const known = room.sessions && room.sessions[memberName]
+  const key = groupMemberKey(member)
+  const known = room.sessions && room.sessions[key]
 
   // Try resuming what we know (stored sid first, then title lookup).
   for (const target of [known, title]) {
@@ -2583,9 +3154,9 @@ async function ensureGroupChatSession(group, memberName) {
     }
 
     try {
-      const res = await host.request('session.resume', {
+      const res = await requestForBot(member, 'session.resume', {
         session_id: target,
-        profile: memberName,
+        profile: member.name,
         omit_messages: true
       })
 
@@ -2597,8 +3168,8 @@ async function ensureGroupChatSession(group, memberName) {
     }
   }
 
-  const created = await host.request('session.create', {
-    profile: memberName,
+  const created = await requestForBot(member, 'session.create', {
+    profile: member.name,
     title,
     ...($hideBotChats.get() ? { hidden: true } : {})
   })
@@ -2606,7 +3177,7 @@ async function ensureGroupChatSession(group, memberName) {
 
   if (stored) {
     updateGroupChat(group, r => {
-      r.sessions = { ...(r.sessions || {}), [memberName]: stored }
+      r.sessions = { ...(r.sessions || {}), [key]: stored }
       return r
     })
   }
@@ -2621,7 +3192,7 @@ const GROUP_TURN_POLL_MS = 2000
  *  the member's per-group session, then poll the session until a NEW
  *  assistant message lands (or timeout → pass). No shell composition. */
 async function runGroupChatMemberTurn(group, member, prompt) {
-  const { runtime, stored } = await ensureGroupChatSession(group, member.name)
+  const { runtime, stored } = await ensureGroupChatSession(group, member)
 
   if (!runtime) {
     return null
@@ -2631,7 +3202,7 @@ async function runGroupChatMemberTurn(group, member, prompt) {
   let before = 0
 
   try {
-    const pre = await host.request('session.resume', {
+    const pre = await requestForBot(member, 'session.resume', {
       session_id: stored || runtime,
       profile: member.name
     })
@@ -2640,7 +3211,7 @@ async function runGroupChatMemberTurn(group, member, prompt) {
     /* lazy session — zero messages */
   }
 
-  await host.request('prompt.submit', { session_id: runtime, text: prompt })
+  await requestForBot(member, 'prompt.submit', { session_id: runtime, text: prompt })
 
   const deadline = Date.now() + GROUP_TURN_TIMEOUT_MS
 
@@ -2650,7 +3221,7 @@ async function runGroupChatMemberTurn(group, member, prompt) {
     let state = null
 
     try {
-      state = await host.request('session.resume', {
+      state = await requestForBot(member, 'session.resume', {
         session_id: stored || runtime,
         profile: member.name
       })
@@ -2703,7 +3274,8 @@ async function runGroupChatRounds(group, members) {
         }
 
         const room = $groupChats.get()[group] || { log: [], watermarks: {} }
-        const seen = room.watermarks[member.name] || 0
+        const memberKey = groupMemberKey(member)
+        const seen = room.watermarks[memberKey] || 0
         const delta = room.log.slice(seen)
 
         if (!delta.length) {
@@ -2727,15 +3299,19 @@ async function runGroupChatRounds(group, members) {
 
         // The member has now seen everything up to the pre-reply log length.
         updateGroupChat(group, r => {
-          r.watermarks[member.name] = r.log.length
+          r.watermarks[memberKey] = r.log.length
           return r
         })
 
         if (reply !== null && !isGroupPassText(reply)) {
-          appendGroupChatEntry(group, { kind: 'member', name: member.name }, reply)
+          appendGroupChatEntry(
+            group,
+            { kind: 'member', name: member.name, ...(member.remoteSource ? { source: member.connectionLabel || member.connectionId } : {}) },
+            reply
+          )
           // Its own message counts as seen too.
           updateGroupChat(group, r => {
-            r.watermarks[member.name] = r.log.length
+            r.watermarks[memberKey] = r.log.length
             return r
           })
           posted += 1
@@ -2837,21 +3413,20 @@ function messagingProtocolSection(name, roster) {
     'into it, like a DM. To message a teammate, run:',
     '',
     '```',
-    'hermes -p <agent-name> chat --in ~ -c "Bot Chat" -Q -q "Message from \uD83E\uDD16 ' + handle + ' (@' + handle + '): your message"',
+    'hermes -p <agent-name> chat --in ~ -c "Bot Chat" --create-if-missing -Q -q "Message from \uD83E\uDD16 ' + handle + ' (@' + handle + '): your message"',
     '',
     'Run the send with background=true and notify_on_complete=true on the',
     'terminal tool, then finish your turn — the reply arrives later as a',
     'background process notification. Never block waiting for it.',
     '```',
     '',
-    '(`--in ~ -c "Bot Chat"` resumes their canonical conversation in the home',
-    'workspace. `-Q` keeps output clean. Always open with the',
+    '(`--in ~ -c "Bot Chat" --create-if-missing` resumes their canonical',
+    'conversation in the home workspace, creating it if the target has no',
+    '"Bot Chat" yet. `-Q` keeps output clean. Always open with the',
     '"Message from \uD83E\uDD16 ' + handle + ' (@' + handle + '):" prefix so they know',
     'who is talking (the @handle lets the app show your avatar to them).',
     'Their reply prints to stdout — relay the relevant part back to the',
-    'user, and say which agent it came from. In the rare case the target',
-    'has no "Bot Chat" yet, send once WITHOUT -c, then',
-    '`hermes -p <agent-name> sessions rename <session-id> "Bot Chat"`.)',
+    'user, and say which agent it came from.)',
     '',
     'If a message in YOUR chat starts with "Message from \uD83E\uDD16 <name>", it is',
     'a teammate messaging you, not the user. Answer it directly — your reply',
@@ -3017,7 +3592,7 @@ const ACTIVE_WINDOW_S = 90
  *  presence never reorders or hides the normal list. */
 function activeBots(roster, activeProfile, gatewayState, now = Date.now()) {
   return (roster || []).filter(bot => {
-    const busyTurn = bot.name === activeProfile && gatewayState === 'busy'
+    const busyTurn = !bot.remoteSource && bot.name === activeProfile && gatewayState === 'busy'
     const last = bot.last_session?.last_active || 0
     const inWindow = Boolean(last && now / 1000 - last < ACTIVE_WINDOW_S)
 
@@ -3029,9 +3604,9 @@ function activeBots(roster, activeProfile, gatewayState, now = Date.now()) {
 
 function BotRow({ bot, onDelete, onEdit, onGroup }) {
   const activeProfile = useValue(host.state.profile)
-  const meta = useValue($botMeta)[bot.name]
+  const meta = botRosterMeta(bot, useValue($botMeta))
   const last = bot.last_session
-  const isActive = bot.name === activeProfile
+  const isActive = !bot.remoteSource && bot.name === activeProfile
   const { shape, color, image } = botAppearance(bot.name, meta)
   // Keep user photos/pets. Drop the 160px SVG backfill so the math face can move.
   const photo = Boolean(image && !isBackfilledFacePng(image))
@@ -3041,7 +3616,10 @@ function BotRow({ bot, onDelete, onEdit, onGroup }) {
   // profile while the gateway is busy, or a bot that wrote within the
   // liveness window. Not every bot whenever the gateway is busy.
   const botMood = (isActive && gatewayState === 'busy') || activeNow ? 'work' : 'idle'
-  const unread = Boolean(useValue($botUnread)[bot.name])
+  // Subscribe on every render. A source switch turns the same keyed row from
+  // thin to rich; conditionally calling useValue here breaks React hook order.
+  const unreadByName = useValue($botUnread)
+  const unread = !bot.remoteSource && Boolean(unreadByName[bot.name])
   // WHO sent the last message (bot-to-bot DM vs human) — the full stored
   // history lives in the Sessions workspace (context menu), not inline.
   const { fromBot } = previewKind(last?.preview)
@@ -3052,7 +3630,7 @@ function BotRow({ bot, onDelete, onEdit, onGroup }) {
 
   const warm = () => {
     // Multi-source row: pre-dial the agent's OWN source (feature-detected).
-    if (bot.remoteSource && typeof host.warmAgent === 'function') {
+    if (bot.sourceScoped && typeof host.warmAgent === 'function') {
       try {
         host.warmAgent(bot.connectionId, bot.name)
       } catch {
@@ -3077,37 +3655,36 @@ function BotRow({ bot, onDelete, onEdit, onGroup }) {
     haptic('tap')
     $selectedBot.set(bot.name)
 
-    if ($botUnread.get()[bot.name]) {
+    if (bot.remoteSource) {
+      const handle = botHandle(bot.name, bot)
+      host.notify?.({
+        kind: 'info',
+        title: displayName(bot),
+        message: `Stay in this chat and @${handle} to message them. Gateway stays on this device.`
+      })
+      return
+    }
+
+    let pinnedChat = meta?.chat
+
+    if (!bot.remoteSource && $botUnread.get()[bot.name]) {
       const next = { ...$botUnread.get() }
       delete next[bot.name]
       $botUnread.set(next)
     }
 
-    // Multi-source row: activate the agent's source gateway FIRST so the
-    // canonical-chat RPCs (session.list / session.create / openSession)
-    // land on the backend that actually owns this bot's state.db. Same
-    // canonical-chat flow after that — one forever chat per bot, per source.
-    if (bot.remoteSource) {
-      if (typeof host.ensureAgent !== 'function') {
-        host.notifyError?.(
-          new Error('Update Hermes Desktop to chat with agents on other connections.'),
-          bot.connectionLabel || 'Remote source'
-        )
+    // Activate the owner first so every canonical-chat RPC lands on the
+    // backend that owns this bot's state database.
+    try {
+      pinnedChat = await prepareBotSource(bot, pinnedChat)
+    } catch (error) {
+      host.notifyError?.(error, `Could not reach ${bot.connectionLabel || 'the remote source'}`)
 
-        return
-      }
-
-      try {
-        await host.ensureAgent(bot.connectionId, bot.name)
-      } catch (error) {
-        host.notifyError?.(error, `Could not reach ${bot.connectionLabel || 'the remote source'}`)
-
-        return
-      }
+      return
     }
 
     try {
-      const id = await openBotCanonicalChat(bot.name, meta?.chat)
+      const id = await openBotCanonicalChat(bot.name, pinnedChat)
 
       if (id) {
         return
@@ -3218,6 +3795,14 @@ function BotRow({ bot, onDelete, onEdit, onGroup }) {
     ]
   })
 
+  // Thin rows from another source are navigation targets only. Their profile
+  // metadata is not loaded yet, so edit/delete/pin/group actions would mutate
+  // whichever backend happens to be active. A normal click activates the
+  // owner; the refreshed rich row then exposes the full context menu.
+  if (bot.remoteSource) {
+    return row
+  }
+
   return jsxs(ContextMenu, {
     children: [
       jsx(ContextMenuTrigger, { asChild: true, children: row }),
@@ -3247,7 +3832,7 @@ function BotRow({ bot, onDelete, onEdit, onGroup }) {
           jsx(ContextMenuItem, {
             onSelect: () => {
               host.notify({ kind: 'info', message: `Duplicating ${displayName(bot, meta)}…` })
-              duplicateBot(bot, $lastRoster.get())
+              duplicateBot(bot, $lastRoster.get().filter(candidate => !candidate.remoteSource))
                 .then(name => {
                   queryClient.invalidateQueries({ queryKey: ROSTER_KEY })
                   host.notify({ kind: 'success', message: `Created ${name} — full copy of ${bot.name}` })
@@ -4315,6 +4900,43 @@ function CreateAgentDialog({ open, onClose, roster }) {
   const [noSkills, setNoSkills] = useState(false)
   const [shareAuth, setShareAuth] = useState(true)
   const [advTab, setAdvTab] = useState('general')
+  // Where the profile is created: '' = the active gateway (unchanged default),
+  // else a registry connection id — the profiles.create lands on THAT
+  // machine's backend via host.requestProfile, no gateway switch. Only
+  // rendered when the desktop has a multi-connection registry.
+  const [targetConnection, setTargetConnection] = useState('')
+  const [connections, setConnections] = useState(null)
+
+  useEffect(() => {
+    if (!open || connections !== null || typeof host.connections !== 'function' || typeof host.requestProfile !== 'function') {
+      return
+    }
+
+    host
+      .connections()
+      .then(value => setConnections(Array.isArray(value) ? value : []))
+      .catch(() => setConnections([]))
+  }, [open, connections])
+
+  const activeConnectionId = String(host.state?.connectionId?.get?.() || '').trim()
+  // Remote target = an explicitly picked registry connection that is not the
+  // one this window is already on.
+  const remoteTarget = Boolean(targetConnection) && targetConnection !== (activeConnectionId || 'local')
+  const targetLabel = remoteTarget
+    ? (connections || []).find(c => c.id === targetConnection)?.label || targetConnection
+    : ''
+
+  /** Gateway RPC on the create target: the picked connection's default
+   *  backend for remote targets, the active gateway otherwise. */
+  const requestForTarget = (method, params = {}) =>
+    remoteTarget
+      ? host.requestProfile(
+          { connectionId: targetConnection, mode: 'remote', profile: 'default', targetProfile: 'default' },
+          method,
+          params
+        )
+      : host.request(method, params)
+
   // Set once ensureAgentCreated() materializes the profile for the live
   // Capabilities tab (SkillsView needs a real backend to point at). State —
   // not just createdRef — because the render must flip when it lands.
@@ -4330,7 +4952,12 @@ function CreateAgentDialog({ open, onClose, roster }) {
   const valid = slug.length > 0 && NAME_RE.test(slug)
   // Once the draft profile is materialized (Capabilities tab / MCP setup) it
   // shows up in the roster — its OWN slug must not read as "taken".
-  const taken = roster.some(b => b.name === slug && b.name !== createdRef.current)
+  // A remote-target create is gated by the TARGET machine's roster: a local
+  // name clash is fine there, and the remote's own duplicate check rejects
+  // real collisions at profiles.create time.
+  const taken = remoteTarget
+    ? roster.some(b => b.remoteSource && b.connectionId === targetConnection && b.name === slug && b.name !== createdRef.current)
+    : roster.some(b => !b.remoteSource && b.name === slug && b.name !== createdRef.current)
 
   // Draft semantics for the lazily-created profile: opening the Capabilities
   // tab (or running MCP setup) materializes the profile so the LIVE config
@@ -4347,7 +4974,10 @@ function CreateAgentDialog({ open, onClose, roster }) {
 
     createdRef.current = null
     flightRef.current = null
-    void deleteBot({ name: draft })
+    const discard = remoteTarget
+      ? requestForTarget('cli.exec', { argv: ['profile', 'delete', draft, '--yes'] })
+      : deleteBot({ name: draft })
+    void Promise.resolve(discard)
       .then(() => host.notify({ kind: 'success', message: `Draft agent "${draft}" discarded` }))
       .catch(err => host.notifyError(err, `Could not clean up draft profile "${draft}"`))
   }
@@ -4375,6 +5005,7 @@ function CreateAgentDialog({ open, onClose, roster }) {
     setCapsFailed(false)
     setDirtyCaps({ skills: false, toolsets: false, mcp: false })
     setCapFilter('')
+    setTargetConnection('')
     setBusy(false)
     setError(null)
     createdRef.current = null
@@ -4390,8 +5021,8 @@ function CreateAgentDialog({ open, onClose, roster }) {
     }
 
     Promise.all([
-      host.request('profiles.describe', { name: capSource }),
-      host.request('mcp.catalog', {}).catch(() => null)
+      requestForTarget('profiles.describe', { name: remoteTarget ? 'default' : capSource }),
+      requestForTarget('mcp.catalog', {}).catch(() => null)
     ])
       .then(([res, cat]) => {
         // Full MCP menu = the profile's configured servers + the bundled
@@ -4455,10 +5086,14 @@ function CreateAgentDialog({ open, onClose, roster }) {
 
       const descriptionText = [title, description].filter(Boolean).join(' — ')
 
-      await host.request('profiles.create', {
+      await requestForTarget('profiles.create', {
         name: slug,
         description: descriptionText,
-        clone_from: cloneFrom === '__none__' ? null : cloneFrom,
+        // Clone sources are profiles of the TARGET backend. The picker's
+        // roster is the local one, so a remote create always starts from the
+        // remote machine's default (or fresh) — never a local profile name
+        // the remote box doesn't have.
+        clone_from: cloneFrom === '__none__' ? null : remoteTarget ? 'default' : cloneFrom,
         no_skills: noSkills,
         // Shared (not copied) auth keeps ONE OAuth/token pool with the main
         // profile, so refreshes can't invalidate each other. Older gateways
@@ -4487,13 +5122,39 @@ function CreateAgentDialog({ open, onClose, roster }) {
           capPayload.enabled_mcp_servers = caps.mcp.filter(m => m.enabled).map(m => m.name)
         }
         if (Object.keys(capPayload).length) {
-          await host.request('profiles.configure', { name: slug, ...capPayload })
+          await requestForTarget('profiles.configure', { name: slug, ...capPayload })
         }
       } catch {
         /* capability application is best-effort */
       }
 
-      saveBotMeta(slug, { shape, color, image, imageKind: image ? 'photo' : 'shape', title: title.trim(), created: Date.now() })
+      if (remoteTarget) {
+        // The bot lives on ANOTHER machine — local bot-meta is scoped to the
+        // active gateway, so write appearance/title into the remote
+        // profile's ui_meta (and asset store) directly. Best-effort: the
+        // profile exists either way.
+        const { image: avatarImage, ...look } = {
+          shape,
+          color,
+          image,
+          imageKind: image ? 'photo' : 'shape',
+          title: title.trim(),
+          created: Date.now()
+        }
+
+        try {
+          void requestForTarget('profiles.configure', { name: slug, ui_meta: { 'hermes-bots': look } }).catch(() => undefined)
+
+          if (avatarImage) {
+            void requestForTarget('profiles.set_asset', { name: slug, asset: 'avatar', data: avatarImage }).catch(() => undefined)
+          }
+        } catch {
+          /* older remote gateway */
+        }
+      } else {
+        saveBotMeta(slug, { shape, color, image, imageKind: image ? 'photo' : 'shape', title: title.trim(), created: Date.now() })
+      }
+
       queryClient.invalidateQueries({ queryKey: ROSTER_KEY })
       return slug
     })
@@ -4517,9 +5178,24 @@ function CreateAgentDialog({ open, onClose, roster }) {
         return
       }
 
-      host.notify({ kind: 'success', message: `Agent "${displayName({ name: slug, title })}" created` })
+      host.notify({
+        kind: 'success',
+        message: remoteTarget
+          ? `Agent "${displayName({ name: slug, title })}" created on ${targetLabel}`
+          : `Agent "${displayName({ name: slug, title })}" created`
+      })
+      const wasRemote = remoteTarget
       reset()
       onClose()
+
+      if (wasRemote) {
+        // The bot lives on another machine: it appears in the roster via the
+        // union enumeration; chat routes through its own source. No local
+        // canonical chat to birth here.
+        queryClient.invalidateQueries({ queryKey: ROSTER_KEY })
+        return
+      }
+
       $selectedBot.set(slug)
 
       // Birth the bot's forever chat right away: it introduces itself as
@@ -4598,7 +5274,56 @@ function CreateAgentDialog({ open, onClose, roster }) {
             taken
               ? jsx('div', {
                   className: 'text-xs text-(--ui-accent)',
-                  children: `An agent named "${slug}" already exists.`
+                  children: remoteTarget
+                    ? `An agent named "${slug}" already exists on ${targetLabel}.`
+                    : `An agent named "${slug}" already exists.`
+                })
+              : null,
+            // Multi-connection desktops choose WHERE the agent lives. Hidden
+            // on single-connection setups — the active gateway is the only
+            // possible home, exactly the old behavior.
+            Array.isArray(connections) && connections.length > 1
+              ? labeled(
+                  'Create on',
+                  jsxs(Select, {
+                    value: targetConnection || activeConnectionId || 'local',
+                    onValueChange: value => {
+                      setTargetConnection(value === (activeConnectionId || 'local') ? '' : value)
+                      // The capability catalog and clone list belong to the
+                      // target backend — refetch for the new home. The live
+                      // Capabilities tab only exists for the active gateway.
+                      setCaps(null)
+                      setCapsFailed(false)
+                      setAdvTab('general')
+                    },
+                    children: [
+                      jsx(SelectTrigger, {
+                        className: 'h-8 rounded-md',
+                        children: jsx(SelectValue, {})
+                      }),
+                      jsx(SelectContent, {
+                        children: connections.map(connection =>
+                          jsx(
+                            SelectItem,
+                            {
+                              value: connection.id,
+                              children:
+                                connection.id === (activeConnectionId || 'local')
+                                  ? `${connection.label || connection.id} (current)`
+                                  : connection.label || connection.id
+                            },
+                            connection.id
+                          )
+                        )
+                      })
+                    ]
+                  })
+                )
+              : null,
+            remoteTarget
+              ? jsx('div', {
+                  className: 'text-[0.7rem] leading-5 text-(--ui-text-tertiary)',
+                  children: `The agent is created on ${targetLabel} and appears in the roster as a Connections bot. Chat routes to that machine.`
                 })
               : null,
             labeled(
@@ -4643,7 +5368,11 @@ function CreateAgentDialog({ open, onClose, roster }) {
                       className: 'flex gap-1',
                       // Newer desktops export the whole Capabilities surface —
                       // one live tab replaces the three staged checklists.
-                      children: (SkillsView
+                      // The live Capabilities surface (SkillsView) binds to
+                      // the ACTIVE gateway's backend — a remote-target draft
+                      // lives elsewhere, so it keeps the staged checklists
+                      // (their catalog reads already route to the target).
+                      children: (SkillsView && !remoteTarget
                         ? [
                             ['general', 'General'],
                             ['capabilities', 'Capabilities']
@@ -4690,9 +5419,10 @@ function CreateAgentDialog({ open, onClose, roster }) {
                           className: 'grid gap-3.5',
                           children: [
                             labeled(
-                              'Clone from profile',
+                              remoteTarget ? `Clone from profile (on ${targetLabel})` : 'Clone from profile',
                               jsxs(Select, {
-                                value: cloneFrom,
+                                disabled: remoteTarget,
+                                value: remoteTarget ? 'default' : cloneFrom,
                                 onValueChange: value => {
                                   setCloneFrom(value)
                                   setCaps(null)
@@ -5930,7 +6660,7 @@ function ActiveNowStrip({ roster, activeProfile, gatewayState, metaByName, onOpe
               children: label
             })
           ]
-        }, bot.name)
+        }, botRosterKey(bot))
       })
     ]
   })
@@ -6021,6 +6751,198 @@ function GroupDialog({ bot, onClose }) {
   })
 }
 
+/** Discord-style group chat creation: pick 2+ bots via checkboxes (with
+ *  search), name the group, create. Assignment is the existing per-bot
+ *  `group` meta field, so the room appears in the roster and syncs
+ *  cross-machine via ui_meta exactly like Move-to-group. */
+function CreateGroupChatDialog({ open, roster, onClose, onCreated }) {
+  const allMeta = useValue($botMeta)
+  const [query, setQuery] = useState('')
+  const [checked, setChecked] = useState({})
+  const [name, setName] = useState('')
+
+  // Reset per open so a cancelled draft doesn't leak into the next one.
+  useEffect(() => {
+    if (open) {
+      setQuery('')
+      setChecked({})
+      setName('')
+    }
+  }, [open])
+
+  const selected = roster.filter(bot => checked[botRosterKey(bot)])
+  const visible = filterBots(roster, allMeta, query)
+  const atCap = selected.length >= GROUP_CHAT_MAX_MEMBERS
+  const placeholder = selected.length
+    ? selected.map(bot => displayName(bot, botRosterMeta(bot, allMeta))).join(', ')
+    : 'Group name'
+  const canCreate = selected.length >= 2 && Boolean(name.trim() || selected.length)
+
+  const create = () => {
+    const groupName = (name.trim() || placeholder).slice(0, 64)
+
+    if (selected.length < 2 || !groupName) {
+      return
+    }
+
+    for (const bot of selected) {
+      if (!bot.remoteSource) {
+        void saveBotMeta(bot.name, { group: groupName })
+      }
+    }
+
+    // Members from OTHER connections can't ride bot-meta (it is scoped to
+    // the active gateway and name-keyed). Their descriptors live on the room
+    // record instead, so the roster merge can seat them every refresh.
+    const remoteMembers = selected
+      .filter(bot => bot.remoteSource)
+      .map(bot => ({
+        name: bot.name,
+        handle: bot.handle || bot.name,
+        connectionId: bot.connectionId,
+        connectionKind: bot.connectionKind,
+        connectionLabel: bot.connectionLabel,
+        remoteSource: true,
+        sourceScoped: true
+      }))
+
+    if (remoteMembers.length) {
+      updateGroupChat(groupName, room => {
+        room.members = remoteMembers
+        return room
+      })
+    }
+
+    host.notify({ kind: 'info', message: `“${groupName}” created with ${selected.length} bots` })
+    onClose()
+    onCreated?.(groupName)
+  }
+
+  return jsx(Dialog, {
+    open,
+    onOpenChange: value => {
+      if (!value) {
+        onClose()
+      }
+    },
+    children: jsxs(DialogContent, {
+      className: 'max-w-md',
+      children: [
+        jsxs(DialogHeader, {
+          children: [
+            jsx(DialogTitle, { children: 'New Group Chat' }),
+            jsx(DialogDescription, {
+              children: `Pick 2–${GROUP_CHAT_MAX_MEMBERS} bots. The room lives in the Bots roster and syncs to every machine.`
+            })
+          ]
+        }),
+        jsx(SearchField, {
+          'aria-label': 'Search bots to add',
+          autoFocus: true,
+          containerClassName: 'w-full',
+          inputClassName: 'w-full',
+          placeholder: 'Search bots to add…',
+          value: query,
+          onChange: setQuery
+        }),
+        selected.length
+          ? jsx('div', {
+              className: 'flex flex-wrap gap-1',
+              children: selected.map(bot =>
+                jsxs('button', {
+                  type: 'button',
+                  className:
+                    'flex items-center gap-1 rounded-full bg-(--chrome-action-hover) py-0.5 pl-2 pr-1.5 text-[0.6875rem] text-(--ui-text-secondary) transition-colors hover:text-foreground',
+                  title: 'Remove from selection',
+                  onClick: () => setChecked(prev => ({ ...prev, [botRosterKey(bot)]: false })),
+                  children: [displayName(bot, botRosterMeta(bot, allMeta)), jsx(Codicon, { name: 'close', className: 'text-[0.6rem]' })]
+                }, botRosterKey(bot))
+              )
+            })
+          : null,
+        jsx(ScrollArea, {
+          className: 'max-h-64 min-h-0',
+          children: jsx('div', {
+            className: 'grid gap-0.5 pr-2',
+            children: visible.length
+              ? visible.map(bot => {
+                  const meta = botRosterMeta(bot, allMeta)
+                  const { shape, color, image } = botAppearance(bot.name, meta)
+                  const isChecked = Boolean(checked[botRosterKey(bot)])
+                  const disabled = !isChecked && atCap
+                  const currentGroup = (meta?.group || '').trim()
+
+                  return jsxs('label', {
+                    className: cn(
+                      'flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-(--chrome-action-hover)',
+                      disabled && 'cursor-not-allowed opacity-50'
+                    ),
+                    children: [
+                      jsx(BotFace, {
+                        shape,
+                        color,
+                        image: image && !isBackfilledFacePng(image) ? image : null,
+                        size: 24,
+                        name: bot.name
+                      }),
+                      jsxs('div', {
+                        className: 'min-w-0 flex-1',
+                        children: [
+                          jsx('div', { className: 'truncate text-xs text-foreground', children: displayName(bot, meta) }),
+                          jsx('div', {
+                            className: 'truncate text-[0.625rem] text-(--ui-text-quaternary)',
+                            children: [
+                              currentGroup
+                                ? `@${botHandle(bot.name, bot)} · in “${currentGroup}”`
+                                : `@${botHandle(bot.name, bot)}`,
+                              bot.remoteSource && bot.connectionLabel ? ` · ${bot.connectionLabel}` : ''
+                            ].join('')
+                          })
+                        ]
+                      }),
+                      jsx(Checkbox, {
+                        checked: isChecked,
+                        disabled,
+                        onCheckedChange: value => setChecked(prev => ({ ...prev, [botRosterKey(bot)]: Boolean(value) }))
+                      })
+                    ]
+                  }, botRosterKey(bot))
+                })
+              : jsx('div', {
+                  className: 'px-1.5 py-3 text-center text-xs text-(--ui-text-tertiary)',
+                  children: query.trim() ? `No bots match “${query.trim()}”` : 'No bots yet — create agents first.'
+                })
+          })
+        }),
+        jsx('form', {
+          onSubmit: event => {
+            event.preventDefault()
+            create()
+          },
+          children: jsx(Input, {
+            'aria-label': 'Group name',
+            maxLength: 64,
+            placeholder,
+            value: name,
+            onChange: event => setName(event.target.value)
+          })
+        }),
+        jsxs(DialogFooter, {
+          children: [
+            jsx(Button, { variant: 'secondary', onClick: onClose, children: 'Cancel' }),
+            jsx(Button, {
+              disabled: !canCreate,
+              title: selected.length < 2 ? 'Pick at least 2 bots' : undefined,
+              onClick: create,
+              children: `Create Group${selected.length ? ` (${selected.length})` : ''}`
+            })
+          ]
+        })
+      ]
+    })
+  })
+}
+
 /** Merged room view for one group: shared timeline with per-member
  *  attribution, a composer that drives the round-robin, and a working
  *  indicator while member turns run. */
@@ -6029,6 +6951,7 @@ function GroupChatWorkspace({ group, members }) {
   const allMeta = useValue($botMeta)
   const room = rooms[group] || { log: [], running: false }
   const [draft, setDraft] = useState('')
+  const [confirmDisband, setConfirmDisband] = useState(false)
 
   const header = jsxs('div', {
     className: 'flex items-center gap-2 px-2.5 pt-2.5 pb-2',
@@ -6046,6 +6969,14 @@ function GroupChatWorkspace({ group, members }) {
       jsx('span', {
         className: 'shrink-0 text-[0.65rem] text-(--ui-text-quaternary)',
         children: `${members.length} bots`
+      }),
+      jsx(Button, {
+        variant: 'ghost',
+        size: 'sm',
+        className: 'shrink-0 text-(--ui-text-tertiary) hover:text-destructive',
+        title: `Disband the ${group} group chat`,
+        onClick: () => setConfirmDisband(true),
+        children: jsx(Codicon, { name: 'trash' })
       })
     ]
   })
@@ -6058,7 +6989,16 @@ function GroupChatWorkspace({ group, members }) {
     }
 
     setDraft('')
-    sendToGroupChat(group, members.map(b => ({ name: b.name, title: allMeta[b.name]?.title || '' })), text)
+    // Full descriptors ride into the turn loop: remote members keep their
+    // connection fields so their turns route to their own machines.
+    sendToGroupChat(
+      group,
+      members.map(b => ({
+        ...b,
+        title: (b.remoteSource ? '' : allMeta[b.name]?.title) || b.title || ''
+      })),
+      text
+    )
   }
 
   return jsxs('div', {
@@ -6073,12 +7013,13 @@ function GroupChatWorkspace({ group, members }) {
             ...(room.log.length
               ? room.log.map((entry, index) => {
                   const isUser = entry.from.kind === 'user'
-                  const meta = isUser ? null : allMeta[entry.from.name]
+                  const meta = isUser || entry.from.source ? null : allMeta[entry.from.name]
+                  const sourceBadge = !isUser && entry.from.source ? ` · ${entry.from.source}` : ''
                   const label = isUser
                     ? 'You'
                     : meta?.title
-                      ? `${meta.title} (@${entry.from.name})`
-                      : `@${entry.from.name}`
+                      ? `${meta.title} (@${entry.from.name})${sourceBadge}`
+                      : `@${entry.from.name}${sourceBadge}`
 
                   return jsxs('div', {
                     className: isUser ? 'rounded-md bg-(--chrome-action-hover) px-2 py-1.5' : 'px-2 py-1',
@@ -6099,8 +7040,8 @@ function GroupChatWorkspace({ group, members }) {
                         ]
                       }),
                       jsx('div', {
-                        className: 'whitespace-pre-wrap text-xs text-(--ui-text-secondary)',
-                        children: entry.text
+                        className: 'text-xs text-(--ui-text-secondary) [&_p]:mb-1 [&_p:last-child]:mb-0',
+                        children: Streamdown ? jsx(Streamdown, { children: entry.text }) : entry.text
                       })
                     ]
                   }, `${entry.at}:${index}`)
@@ -6138,6 +7079,30 @@ function GroupChatWorkspace({ group, members }) {
             jsx(Button, { type: 'submit', size: 'sm', disabled: !draft.trim(), children: 'Send' })
           ]
         })
+      }),
+      jsx(ConfirmDialog, {
+        open: confirmDisband,
+        title: 'Disband group chat?',
+        description: jsxs('span', {
+          children: [
+            'This removes the ',
+            jsx('span', { className: 'font-medium text-foreground', children: group }),
+            ' grouping from its ',
+            String(members.length),
+            ' bots and clears the shared room log. The bots themselves and their “Group: ',
+            group,
+            '” sessions are kept — you can still open those from each bot’s session browser.'
+          ]
+        }),
+        destructive: true,
+        confirmLabel: 'Disband',
+        busyLabel: 'Disbanding…',
+        doneLabel: 'Disbanded',
+        onClose: () => setConfirmDisband(false),
+        onConfirm: async () => {
+          await disbandGroupChat(group, members.map(bot => bot.name))
+          host.notify({ kind: 'success', message: `Disbanded “${group}”` })
+        }
       })
     ]
   })
@@ -6149,6 +7114,7 @@ function BotsPane() {
   const gatewayUp = gatewayState === 'open'
   const activeProfile = (useValue(host.state.profile) || 'default').trim() || 'default'
   const [createOpen, setCreateOpen] = useState(false)
+  const [groupCreateOpen, setGroupCreateOpen] = useState(false)
   const [editing, setEditing] = useState(null)
   const [deleting, setDeleting] = useState(null)
   const [grouping, setGrouping] = useState(null)
@@ -6172,7 +7138,7 @@ function BotsPane() {
   // freshly created bot tops the list until another bot gets a message.
   // No special slot for the primary bot — it competes on recency too.
   const activityOf = bot => {
-    const created = allMeta[bot.name]?.created || bot.ui_meta?.['hermes-bots']?.created || 0
+    const created = botRosterMeta(bot, allMeta)?.created || bot.ui_meta?.['hermes-bots']?.created || 0
     const lastMsg = (bot.last_session?.last_active || 0) * 1000
 
     return Math.max(created, lastMsg)
@@ -6180,7 +7146,7 @@ function BotsPane() {
   // Pinned bots (right-click → Pin) float to the top as a group; within the
   // pinned group and within the unpinned group, recency still rules. A
   // plain boolean flag in bot-meta (rides ui_meta to every machine).
-  const isPinned = bot => Boolean(allMeta[bot.name]?.pinned)
+  const isPinned = bot => Boolean(botRosterMeta(bot, allMeta)?.pinned)
   // Resilience (@wesleysimplicio, #13): a failed refresh must not erase a
   // roster the user already had — mixed local+cloud gateways and remotes
   // waking from sleep fail transiently. Render the last good snapshot with
@@ -6197,14 +7163,15 @@ function BotsPane() {
 
     return activityOf(b) - activityOf(a)
   })
+  const activeSourceRoster = roster.filter(bot => !bot.remoteSource)
   const filteredRoster = filterBots(roster, allMeta, query)
 
   if (live) {
     $lastRoster.set(roster)
-    mergeServerMeta(live)
-    pullServerAvatars(live)
-    trackInboundActivity(live)
-    backfillMessagingProtocol(live)
+    mergeServerMeta(activeSourceRoster)
+    pullServerAvatars(activeSourceRoster)
+    trackInboundActivity(activeSourceRoster)
+    backfillMessagingProtocol(activeSourceRoster)
   }
 
   const staleNotice = error && !live && roster.length
@@ -6217,7 +7184,30 @@ function BotsPane() {
   }
 
   const groupChatMembers = groupChatName
-    ? roster.filter(bot => (allMeta[bot.name]?.group || '').trim() === groupChatName)
+    ? (() => {
+        const local = activeSourceRoster.filter(
+          bot => (botRosterMeta(bot, allMeta)?.group || '').trim() === groupChatName
+        )
+        // Remote members live on the room record (they can't ride bot-meta).
+        // Prefer the LIVE roster row for each descriptor when present —
+        // fresher handle/label — else seat the stored descriptor itself.
+        const stored = ($groupChats.get()[groupChatName] || {}).members || []
+        const seated = new Set(local.map(botRosterKey))
+        const remote = []
+
+        for (const descriptor of stored) {
+          const key = botRosterKey(descriptor)
+
+          if (seated.has(key)) {
+            continue
+          }
+
+          seated.add(key)
+          remote.push(roster.find(bot => botRosterKey(bot) === key) || descriptor)
+        }
+
+        return [...local, ...remote]
+      })()
     : []
 
   if (groupChatName && groupChatMembers.length) {
@@ -6257,15 +7247,36 @@ function BotsPane() {
                   children: jsx(Codicon, { name: hideBotChats ? 'eye-closed' : 'eye' })
                 })
               }),
-              jsx(Tip, {
-                label: 'New Agent',
-                children: jsx('button', {
-                  type: 'button',
-                  className:
-                    'flex size-6 items-center justify-center rounded-md text-(--ui-text-tertiary) transition-colors hover:bg-(--chrome-action-hover) hover:text-foreground',
-                  onClick: () => setCreateOpen(true),
-                  children: jsx(Codicon, { name: 'add' })
-                })
+              jsxs(DropdownMenu, {
+                children: [
+                  jsx(Tip, {
+                    label: 'New…',
+                    children: jsx(DropdownMenuTrigger, {
+                      asChild: true,
+                      children: jsx('button', {
+                        type: 'button',
+                        'aria-label': 'New agent or group chat',
+                        className:
+                          'flex size-6 items-center justify-center rounded-md text-(--ui-text-tertiary) transition-colors hover:bg-(--chrome-action-hover) hover:text-foreground',
+                        children: jsx(Codicon, { name: 'add' })
+                      })
+                    })
+                  }),
+                  jsxs(DropdownMenuContent, {
+                    align: 'end',
+                    children: [
+                      jsxs(DropdownMenuItem, {
+                        onSelect: () => setCreateOpen(true),
+                        children: [jsx(Codicon, { name: 'hubot', className: 'mr-1.5' }), 'New Agent']
+                      }),
+                      jsxs(DropdownMenuItem, {
+                        disabled: activeSourceRoster.length < 2,
+                        onSelect: () => setGroupCreateOpen(true),
+                        children: [jsx(Codicon, { name: 'organization', className: 'mr-1.5' }), 'New Group Chat']
+                      })
+                    ]
+                  })
+                ]
               })
             ]
           })
@@ -6280,17 +7291,49 @@ function BotsPane() {
           haptic('tap')
           $selectedBot.set(bot.name)
 
+          if (bot.remoteSource) {
+            const handle = botHandle(bot.name, bot)
+            host.notify?.({
+              kind: 'info',
+              title: displayName(bot),
+              message: `Stay in this chat and @${handle} to message them. Gateway stays on this device.`
+            })
+            return
+          }
+
           if ($botUnread.get()[bot.name]) {
             const next = { ...$botUnread.get() }
             delete next[bot.name]
             $botUnread.set(next)
           }
 
-          void openBotCanonicalChat(bot.name, allMeta[bot.name]?.chat).catch(() => {
+          void (async () => {
+            let pinnedChat = botRosterMeta(bot, allMeta)?.chat
+
+            try {
+              pinnedChat = await prepareBotSource(bot, pinnedChat)
+            } catch (error) {
+              host.notifyError?.(error, `Could not reach ${bot.connectionLabel || 'the remote source'}`)
+
+              return
+            }
+
+            try {
+              const id = await openBotCanonicalChat(bot.name, pinnedChat)
+
+              if (id) {
+                return
+              }
+            } catch {
+              // Fall through to the older-gateway draft below.
+            }
+
             if (typeof host.newChat === 'function') {
               host.newChat(bot.name)
+            } else {
+              host.navigate('/')
             }
-          })
+          })()
         }
       }),
       roster.length
@@ -6389,7 +7432,11 @@ function BotsPane() {
                           }, `group:${section.group}`)
                         : null,
                       ...section.bots.map(bot =>
-                        jsx(BotRow, { bot, onDelete: setDeleting, onEdit: setEditing, onGroup: setGrouping }, bot.name)
+                        jsx(
+                          BotRow,
+                          { bot, onDelete: setDeleting, onEdit: setEditing, onGroup: setGrouping },
+                          botRosterKey(bot)
+                        )
                       )
                     ])
                   })
@@ -6409,7 +7456,15 @@ function BotsPane() {
           setCreateOpen(false)
           void refetch()
         },
-        roster
+        roster: activeSourceRoster
+      }),
+      jsx(CreateGroupChatDialog, {
+        open: groupCreateOpen,
+        // Full multi-source roster: group chats can seat bots from other
+        // registered connections — their turns route to their own machines.
+        roster,
+        onClose: () => setGroupCreateOpen(false),
+        onCreated: groupName => $groupChatWorkspace.set(groupName)
       }),
       jsx(EditProfileDialog, {
         bot: editing,
@@ -6463,6 +7518,63 @@ export default {
   register(ctx) {
     pluginCtx = ctx
     startFaceClock()
+    // Disabling the plugin (or a hot reload) must actually stop the clock —
+    // before this, the rAF loop + 1Hz document scan ran until app restart.
+    if (typeof ctx.onDispose === 'function') {
+      ctx.onDispose(stopFaceClock)
+    }
+
+    // @-mention autocomplete: typing "@rese…" in ANY composer offers the
+    // roster's handles (issue #88060). Reads the roster straight from the
+    // query cache — useRoster keeps it ≤5s stale and the popover must answer
+    // synchronously per keystroke. Multi-source rosters contribute their
+    // precomputed @name-device handles via botHandle. The active profile is
+    // excluded (a bot doesn't @ itself); 'default' surfaces as @hermes.
+    ctx.register({
+      id: 'mention-completions',
+      area: COMPOSER_AREAS.atCompletions,
+      data: {
+        provide: query => {
+          const roster = queryClient.getQueryData(ROSTER_KEY)
+          const profiles = Array.isArray(roster?.profiles) ? roster.profiles : []
+
+          if (!profiles.length) {
+            return []
+          }
+
+          const active = (host.state.profile.get() || 'default').trim() || 'default'
+          const q = (query || '').toLowerCase()
+          const items = []
+          const live = {
+            name: active,
+            connectionId: String(host.state.connectionId?.get?.() || host.activeConnectionId?.() || 'local')
+          }
+
+          for (const profile of profiles) {
+            if (!profile?.name || isActiveRosterBot(profile, live)) {
+              continue
+            }
+
+            const handle = botHandle(profile.name, profile)
+
+            if (q && !handle.toLowerCase().startsWith(q)) {
+              continue
+            }
+
+            const display = displayName(profile, $botMeta.get()[profile.name])
+            const source = profile.connectionLabel ? ` · ${profile.connectionLabel}` : ''
+
+            items.push({
+              insert: `@${handle}`,
+              display: `@${handle}`,
+              meta: `Bot · ${display}${source}`
+            })
+          }
+
+          return items.slice(0, 8)
+        }
+      }
+    })
 
     // Keyframes for the pet bob — injected because plugin classes aren't in
     // the app's precompiled CSS. Idempotent across hot reloads.
@@ -6533,6 +7645,7 @@ export default {
                   log: room.log,
                   watermarks: room.watermarks && typeof room.watermarks === 'object' ? room.watermarks : {},
                   sessions: room.sessions && typeof room.sessions === 'object' ? room.sessions : {},
+                  members: Array.isArray(room.members) ? room.members : [],
                   epoch: 0,
                   running: false
                 }
@@ -6639,52 +7752,73 @@ export default {
             return draft
           }
 
-          let names = []
-          try {
-            const res = await host.request('profiles.list', { include_sessions: false })
-            names = (res?.profiles ?? []).map(p => p.name)
-          } catch {
+          const live = {
+            name: (host.state.profile.get() || 'default').trim() || 'default',
+            connectionId: String(host.state.connectionId?.get?.() || host.activeConnectionId?.() || 'local')
+          }
+          const cached = typeof queryClient !== 'undefined' && queryClient && typeof queryClient.getQueryData === 'function'
+            ? queryClient.getQueryData(ROSTER_KEY)
+            : null
+          const roster = Array.isArray(cached?.profiles) ? cached.profiles : null
+          let mentionedBots = roster ? resolveRosterMentions(text, roster, live) : []
+
+          if (!roster) {
+            let names = []
+            try {
+              const res = await host.request('profiles.list', { include_sessions: false })
+              names = (res?.profiles ?? []).map(p => p.name)
+            } catch {
+              return draft
+            }
+
+            const prose = text.replace(/```[\s\S]*?```/g, ' ').replace(/`[^`\n]*`/g, ' ')
+            const mentioned = []
+
+            for (const match of prose.matchAll(/(^|\s)@([a-z0-9][a-z0-9_-]*)/gi)) {
+              let name = match[2].toLowerCase()
+
+              if (name === 'hermes' && !names.includes('hermes') && names.includes('default')) {
+                name = 'default'
+              }
+
+              if (names.includes(name) && name !== live.name && !mentioned.includes(name)) {
+                mentioned.push(name)
+              }
+            }
+
+            mentionedBots = mentioned.map(name => ({ name }))
+          }
+
+          if (!mentionedBots.length) {
             return draft
           }
 
-          // Mentions in code are code, not handoffs (#20).
-          const prose = text.replace(/```[\s\S]*?```/g, ' ').replace(/`[^`\n]*`/g, ' ')
-          const active = (host.state.profile.get() || 'default').trim() || 'default'
-          const mentioned = []
+          const localMentions = mentionedBots.filter(bot => !bot.remoteSource)
+          const remoteMentions = mentionedBots.filter(bot => bot.remoteSource)
 
-          for (const match of prose.matchAll(/(^|\s)@([a-z0-9][a-z0-9_-]*)/gi)) {
-            let name = match[2].toLowerCase()
-
-            if (name === 'hermes' && !names.includes('hermes') && names.includes('default')) {
-              name = 'default'
-            }
-
-            if (names.includes(name) && name !== active && !mentioned.includes(name)) {
-              mentioned.push(name)
-            }
+          if (remoteMentions.length && typeof host.requestProfile === 'function') {
+            void deliverRemoteRosterMentions(remoteMentions, text)
           }
 
-          if (!mentioned.length) {
-            return draft
+          const activeMeta = $botMeta.get()[live.name]
+          const senderName = displayName({ name: live.name, title: activeMeta?.title }, activeMeta)
+          let note = ''
+
+          if (localMentions.length) {
+            note +=
+              '\n\n[@mention handoff — for each mentioned agent (' + localMentions.map(bot => botHandle(bot.name, bot)).join(', ') + '): ' +
+              'COMPOSE a message from you (' + senderName + ') to that agent conveying what the user wants — do not forward this text verbatim (avoid double quotes in your composed message). Send it with exactly one terminal call, run with background=true AND notify_on_complete=true (the recipient may take minutes; the user must not be blocked):\n' +
+              localMentions.map(bot => '`hermes -p ' + shellQuote(bot.name) + ' chat --in ~ -c "Bot Chat" --create-if-missing -Q -q "Message from 🤖 ' + shellDoubleQuote(senderName) + ' (@' + shellDoubleQuote(botHandle(live.name)) + '): <your composed message>"`').join('\n') +
+              '\nAfter dispatching, tell the user the message was sent and END YOUR TURN — do not wait or poll; when the background process completes, its notification carries the reply — relay it then, attributed to that agent. ' +
+              'Relay the reply back to the user, attributed to that agent.]'
           }
 
-          // The ACTIVE BOT composes the message — it understands intent; a
-          // text pipe never can. Delivery is the one blessed command into the
-          // recipient's canonical Bot Chat, so their side reads as a normal
-          // DM (message bubble + their reply), and the reply prints on
-          // stdout for the sender to relay.
-          const activeMeta = $botMeta.get()[active]
-          const senderName = displayName({ name: active, title: activeMeta?.title }, activeMeta)
-          // The command below runs verbatim in the active agent's terminal:
-          // sender titles are free text (and sync from ui_meta), and profile
-          // names come from the gateway — every interpolated value must stay
-          // shell-literal, same class as the routine-prompt fix (#21).
-          const note =
-            '\n\n[@mention handoff — for each mentioned agent (' + mentioned.map(botHandle).join(', ') + '): ' +
-            'COMPOSE a message from you (' + senderName + ') to that agent conveying what the user wants — do not forward this text verbatim (avoid double quotes in your composed message). Send it with exactly one terminal call, run with background=true AND notify_on_complete=true (the recipient may take minutes; the user must not be blocked):\n' +
-            mentioned.map(n => '`hermes -p ' + shellQuote(n) + ' chat --in ~ -c "Bot Chat" -Q -q "Message from \uD83E\uDD16 ' + shellDoubleQuote(senderName) + ' (@' + shellDoubleQuote(botHandle(active)) + '): <your composed message>"`').join('\n') +
-            '\nAfter dispatching, tell the user the message was sent and END YOUR TURN — do not wait or poll; when the background process completes, its notification carries the reply — relay it then, attributed to that agent. If it fails with "No session found matching \'Bot Chat\'", send once without the -c flag, then run `hermes -p <agent> sessions rename <session_id from the output> "Bot Chat"`. ' +
-            'Relay the reply back to the user, attributed to that agent.]'
+          if (remoteMentions.length) {
+            const labels = remoteMentions.map(bot => `@${botHandle(bot.name, bot)} (${bot.connectionLabel || bot.connectionId})`).join(', ')
+            note +=
+              '\n\n[@mention — stay on this device. Desktop is delivering to ' + labels +
+              ' over Connections in the background. Do not run hermes -p for them and do not switch Gateway. Tell the user they were messaged here; when a reply lands, relay it attributed to that agent.]'
+          }
 
           return { ...draft, text: text + note }
         }      }

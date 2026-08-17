@@ -214,6 +214,27 @@ function connectionScopeKey(profile) {
   return String(profile ?? '').trim() || null
 }
 
+/** Which Hermes profile the remote SSH dashboard should actually run as.
+ *  Registry pool keys (`conn:mac-mini::default`) are desktop routing labels —
+ *  they must never be sent to the remote as a profile name. `default` and
+ *  empty mean the remote root home. */
+function resolveRemoteSshDashboardProfile(configuredRemoteProfile, poolOrProfileKey) {
+  const configured = String(configuredRemoteProfile || '').trim()
+
+  if (configured && configured !== 'default') {
+    return configured
+  }
+
+  const key = String(poolOrProfileKey || '').trim()
+  const requested = key.startsWith('conn:') ? key.split('::').pop() || '' : key
+
+  if (!requested || requested === 'default') {
+    return ''
+  }
+
+  return requested
+}
+
 // Coerce a remote auth mode to one of the two supported values ('token' default).
 function normAuthMode(mode) {
   return mode === 'oauth' ? 'oauth' : 'token'
@@ -280,8 +301,10 @@ function remoteRequestMatchesBaseUrl(requestUrl, baseUrl) {
     const request = new URL(requestUrl)
     const base = new URL(baseUrl)
     const basePath = base.pathname.replace(/\/+$/, '')
+
     const requestProtocol =
       request.protocol === 'ws:' ? 'http:' : request.protocol === 'wss:' ? 'https:' : request.protocol
+
     const baseProtocol = base.protocol === 'ws:' ? 'http:' : base.protocol === 'wss:' ? 'https:' : base.protocol
 
     if (requestProtocol !== baseProtocol || request.host !== base.host) {
@@ -311,6 +334,9 @@ function normalizeSshConfig(entry) {
   }
 
   let host = String(entry.host || '').trim()
+
+  // Tolerate a pasted command: "ssh root@box" → "root@box".
+  host = host.replace(/^ssh\s+/i, '').trim()
 
   if (!host) {
     return null
@@ -476,8 +502,10 @@ export interface ProfileRouteOptions {
   globalRemote?: boolean
   primaryProfile?: null | string
   profileRemoteOverride?: boolean
-  /** Registry remote/cloud descriptor: one selected host serves many profiles. */
-  sharedRemote?: boolean
+  /** The primary profile's own backend resolves to a remote host. */
+  primaryRemoteActive?: boolean
+  /** A stored per-profile entry exists for this profile (local or remote). */
+  ownEntry?: boolean
 }
 
 export interface ProfileBackendRoute {
@@ -522,6 +550,14 @@ function resolveProfileBackendRoute(profile, opts: ProfileRouteOptions = {}): Pr
   }
 
   if (opts.globalRemote) {
+    return { backend: 'primary', descriptorProfile: scopedProfile, scopePath: true }
+  }
+
+  if (opts.primaryRemoteActive && !opts.ownEntry) {
+    // The primary profile's own backend is a remote gateway (per-profile
+    // override or env) and this sub-profile has no stored entry of its own.
+    // Route through that gateway with profile scoping instead of spawning a
+    // fresh local backend that shares nothing but the name (#88296).
     return { backend: 'primary', descriptorProfile: scopedProfile, scopePath: true }
   }
 
@@ -787,6 +823,7 @@ export {
   remoteRequestMatchesBaseUrl,
   resolveAuthMode,
   resolveProfileBackendRoute,
+  resolveRemoteSshDashboardProfile,
   resolveTestWsUrl,
   RT_COOKIE_VARIANTS,
   savedProfileSsh,
