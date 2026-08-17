@@ -115,6 +115,27 @@ function isPdfFileTarget(target: PreviewTarget): boolean {
 /** Upgrade tabs persisted by builds that classified PDFs as generic binary.
  * Without this restore-time migration, an already-open PDF keeps taking the
  * obsolete raw-binary path after Desktop itself has been upgraded. */
+export const DEFAULT_PREVIEW_TABS: PreviewTab[] = [
+  {
+    id: 'url:https://www.youtube.com',
+    target: {
+      kind: 'url',
+      label: 'YouTube',
+      source: 'https://www.youtube.com',
+      url: 'https://www.youtube.com'
+    }
+  },
+  {
+    id: 'url:https://x.com',
+    target: {
+      kind: 'url',
+      label: 'X',
+      source: 'https://x.com',
+      url: 'https://x.com'
+    }
+  }
+]
+
 export function decodePreviewTabs(raw: string): PreviewTab[] {
   const parsed = JSON.parse(raw) as unknown
 
@@ -124,10 +145,11 @@ export function decodePreviewTabs(raw: string): PreviewTab[] {
       : tab
   )
 
-  return tabs.map(tab => (tab.target.kind === 'url' ? { ...tab, id: previewTabId(tab.target) } : tab))
+  const normalized = tabs.map(tab => (tab.target.kind === 'url' ? { ...tab, id: previewTabId(tab.target) } : tab))
+  return normalized.length > 0 ? normalized : DEFAULT_PREVIEW_TABS
 }
 
-export const $previewTabs = persistentAtom<PreviewTab[]>(TABS_STORAGE_KEY, [], {
+export const $previewTabs = persistentAtom<PreviewTab[]>(TABS_STORAGE_KEY, DEFAULT_PREVIEW_TABS, {
   decode: decodePreviewTabs,
   // Inline bytes are not restorable. Strip them from images, and skip remote
   // HTML and artifact tabs that cannot render without their in-memory payload.
