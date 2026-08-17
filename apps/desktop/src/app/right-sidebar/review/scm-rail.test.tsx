@@ -146,7 +146,14 @@ describe('ReviewScmRail', () => {
 
   it('lists stashes with index id and message', () => {
     $scmStashes.set([
-      { date: '2026-08-14T11:00:00+00:00', id: 'stash@{0}', index: 0, message: 'On main: WIP scm rail', sha: '1234567890abcdef', shortSha: '1234567' }
+      {
+        date: '2026-08-14T11:00:00+00:00',
+        id: 'stash@{0}',
+        index: 0,
+        message: 'On main: WIP scm rail',
+        sha: '1234567890abcdef',
+        shortSha: '1234567'
+      }
     ])
     renderRail()
 

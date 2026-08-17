@@ -258,7 +258,9 @@ async function stashCreate(repoPath, message, includeUntracked, gitBin) {
     args.push('-u')
   }
 
-  const note = String(message || '').trim().slice(0, 1000)
+  const note = String(message || '')
+    .trim()
+    .slice(0, 1000)
 
   if (note) {
     args.push('-m', note)

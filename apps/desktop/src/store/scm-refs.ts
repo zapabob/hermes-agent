@@ -73,11 +73,7 @@ export async function refreshScmRefs(): Promise<void> {
   $scmStashesLoading.set(true)
 
   try {
-    const [branches, tags, stashes] = await Promise.all([
-      git.branchList(cwd),
-      git.tagList(cwd),
-      git.stashList(cwd)
-    ])
+    const [branches, tags, stashes] = await Promise.all([git.branchList(cwd), git.tagList(cwd), git.stashList(cwd)])
 
     // Ignore a result that resolved after the cwd moved on.
     if (seq !== scmRefreshSeq || reviewRepoCwd() !== cwd) {

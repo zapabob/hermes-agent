@@ -389,8 +389,16 @@ async function listBranches(repoPath, gitBin) {
 
   try {
     const [localOut, remoteOut] = await Promise.all([
-      runGit(gitBin, ['for-each-ref', `--format=%(refname:short)${SEP}%(objectname)`, '--sort=-committerdate', 'refs/heads'], resolved),
-      runGit(gitBin, ['for-each-ref', `--format=%(refname:short)${SEP}%(objectname)`, '--sort=-committerdate', 'refs/remotes'], resolved)
+      runGit(
+        gitBin,
+        ['for-each-ref', `--format=%(refname:short)${SEP}%(objectname)`, '--sort=-committerdate', 'refs/heads'],
+        resolved
+      ),
+      runGit(
+        gitBin,
+        ['for-each-ref', `--format=%(refname:short)${SEP}%(objectname)`, '--sort=-committerdate', 'refs/remotes'],
+        resolved
+      )
     ])
 
     const trees = await listWorktrees(resolved, gitBin)
@@ -404,6 +412,7 @@ async function listBranches(repoPath, gitBin) {
         .filter(Boolean)
         .map(line => {
           const [name, ...shaParts] = line.split(SEP)
+
           return { name: name || '', sha: shaParts.join(SEP) || '' }
         })
 

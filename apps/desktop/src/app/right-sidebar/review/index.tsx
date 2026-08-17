@@ -19,9 +19,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tip } from '@/components/ui/tooltip'
 import { useDelayedTrue } from '@/hooks/use-delayed-true'
 import { useI18n } from '@/i18n'
+import { desktopGit } from '@/lib/desktop-git'
 import { displayPath } from '@/lib/display-path'
 import { cn } from '@/lib/utils'
-import { desktopGit } from '@/lib/desktop-git'
 import { $panesFlipped } from '@/store/layout'
 import { notifyError } from '@/store/notifications'
 import {
@@ -91,18 +91,24 @@ export function ReviewPane() {
 
   useEffect(() => {
     const cwd = scopeCwd?.trim() || currentCwd?.trim()
+
     if (!cwd || !desktopGit()?.worktreeList) {
       setWorktrees([])
+
       return
     }
+
     setWorktreesLoading(true)
-    desktopGit()!.worktreeList(cwd).then(wts => {
-      setWorktrees(wts.map(wt => ({ path: wt.path, branch: wt.branch })))
-      setWorktreesLoading(false)
-    }).catch(() => {
-      setWorktrees([])
-      setWorktreesLoading(false)
-    })
+    desktopGit()!
+      .worktreeList(cwd)
+      .then(wts => {
+        setWorktrees(wts.map(wt => ({ path: wt.path, branch: wt.branch })))
+        setWorktreesLoading(false)
+      })
+      .catch(() => {
+        setWorktrees([])
+        setWorktreesLoading(false)
+      })
   }, [scopeCwd, currentCwd])
 
   const selectedFile = files.find(file => file.path === selectedPath)
@@ -117,12 +123,20 @@ export function ReviewPane() {
   // Repo switcher options
   const repoOptions = worktrees.map(wt => ({
     value: wt.path,
-    label: `${wt.branch} (${wt.path.split(/[\\/]+/).filter(Boolean).pop()})`
+    label: `${wt.branch} (${wt.path
+      .split(/[\\/]+/)
+      .filter(Boolean)
+      .pop()})`
   }))
+
   const isScoped = Boolean(scopeCwd)
+
   const currentRepoLabel = isScoped
     ? repoOptions.find(o => o.value === scopeCwd)?.label || scopeCwd
-    : currentCwd?.split(/[\\/]+/).filter(Boolean).pop() || 'Session'
+    : currentCwd
+        ?.split(/[\\/]+/)
+        .filter(Boolean)
+        .pop() || 'Session'
 
   return (
     <aside
@@ -153,21 +167,28 @@ export function ReviewPane() {
           />
           <div className="ml-2 mr-1 flex min-w-0 flex-1">
             <Tip label="Switch repository / worktree">
-              <Select value={isScoped ? scopeCwd || '' : currentCwd || ''} onValueChange={path => path ? openReview(path) : openReview(null)}>
+              <Select
+                onValueChange={path => (path ? openReview(path) : openReview(null))}
+                value={isScoped ? scopeCwd || '' : currentCwd || ''}
+              >
                 <SelectTrigger className="w-full min-w-[160px] max-w-[280px]">
                   <SelectValue placeholder={currentRepoLabel} />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="">
                     <span className="flex items-center gap-2">
-                      <Codicon name="sync" size="0.8rem" className="text-(--ui-text-tertiary)" />
-                      Session: {currentCwd?.split(/[\\/]+/).filter(Boolean).pop() || 'default'}
+                      <Codicon className="text-(--ui-text-tertiary)" name="sync" size="0.8rem" />
+                      Session:{' '}
+                      {currentCwd
+                        ?.split(/[\\/]+/)
+                        .filter(Boolean)
+                        .pop() || 'default'}
                     </span>
                   </SelectItem>
                   {repoOptions.map(option => (
                     <SelectItem key={option.value} value={option.value}>
                       <span className="flex items-center gap-2">
-                        <Codicon name="branch" size="0.8rem" className="text-(--ui-text-tertiary)" />
+                        <Codicon className="text-(--ui-text-tertiary)" name="branch" size="0.8rem" />
                         {option.label}
                       </span>
                     </SelectItem>

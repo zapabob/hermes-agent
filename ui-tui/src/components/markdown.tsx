@@ -558,7 +558,11 @@ function MdInline({ color, t, text }: { color?: string; t: Theme; text: string }
     const k = parts.length
 
     if (i > last) {
-      parts.push(<Text color={color} key={k}>{text.slice(last, i)}</Text>)
+      parts.push(
+        <Text color={color} key={k}>
+          {text.slice(last, i)}
+        </Text>
+      )
     }
 
     if (m[1] && m[2]) {
@@ -656,7 +660,11 @@ function MdInline({ color, t, text }: { color?: string; t: Theme; text: string }
   }
 
   if (last < text.length) {
-    parts.push(<Text color={color} key={parts.length}>{text.slice(last)}</Text>)
+    parts.push(
+      <Text color={color} key={parts.length}>
+        {text.slice(last)}
+      </Text>
+    )
   }
 
   return (
