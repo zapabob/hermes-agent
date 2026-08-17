@@ -416,21 +416,25 @@ describe('body prose stays in the theme palette', () => {
     instance.unmount()
     instance.cleanup()
     chalk.level = savedLevel
+
     if (savedForceColor !== undefined) {
       process.env.FORCE_COLOR = savedForceColor
     } else {
       delete process.env.FORCE_COLOR
     }
+
     if (savedColorTerm !== undefined) {
       process.env.COLORTERM = savedColorTerm
     } else {
       delete process.env.COLORTERM
     }
+
     if (savedTermProgram !== undefined) {
       process.env.TERM_PROGRAM = savedTermProgram
     } else {
       delete process.env.TERM_PROGRAM
     }
+
     if (savedHermesTruecolor !== undefined) {
       process.env.HERMES_TUI_TRUECOLOR = savedHermesTruecolor
     } else {

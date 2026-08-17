@@ -154,7 +154,6 @@ import {
   pumpStreamToFile
 } from './gateway-file-download'
 import { probeGatewayWebSocket } from './gateway-ws-probe'
-import { scanGitRepos } from './git-repo-scan'
 import {
   branchCreate,
   branchDelete,
@@ -169,6 +168,7 @@ import {
   tagCreate,
   tagDelete
 } from './git-ref-ops'
+import { scanGitRepos } from './git-repo-scan'
 import {
   fileDiffVsHead,
   repoStatus,
@@ -14359,7 +14359,9 @@ ipcMain.handle('hermes:git:stashApply', async (_event, repoPath, index) =>
   stashApply(repoPath, index, resolveGitBinary())
 )
 
-ipcMain.handle('hermes:git:stashDrop', async (_event, repoPath, index) => stashDrop(repoPath, index, resolveGitBinary()))
+ipcMain.handle('hermes:git:stashDrop', async (_event, repoPath, index) =>
+  stashDrop(repoPath, index, resolveGitBinary())
+)
 
 ipcMain.handle('hermes:git:fetch', async (_event, repoPath, remote) => gitFetch(repoPath, remote, resolveGitBinary()))
 

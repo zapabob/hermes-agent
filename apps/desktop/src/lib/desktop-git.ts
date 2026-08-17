@@ -72,15 +72,13 @@ const remoteGit: GitBridge = {
 
   stashList: async repoPath => (await gitGet<{ stashes: HermesGitStash[] }>('stashes', { path: repoPath })).stashes,
 
-  branchCreate: (repoPath, name, base) =>
-    gitPost('branch/create', { base: base ?? null, name, path: repoPath }),
+  branchCreate: (repoPath, name, base) => gitPost('branch/create', { base: base ?? null, name, path: repoPath }),
 
   branchRename: (repoPath, name, newName) => gitPost('branch/rename', { name, newName, path: repoPath }),
 
   branchDelete: (repoPath, name, force) => gitPost('branch/delete', { force: force ?? false, name, path: repoPath }),
 
-  tagCreate: (repoPath, name, target) =>
-    gitPost('tag/create', { name, path: repoPath, target: target ?? null }),
+  tagCreate: (repoPath, name, target) => gitPost('tag/create', { name, path: repoPath, target: target ?? null }),
 
   tagDelete: (repoPath, name) => gitPost('tag/delete', { name, path: repoPath }),
 

@@ -69,7 +69,12 @@ describe('buildCommitGraph', () => {
   })
 
   it('is deterministic for the same window', () => {
-    const commits = [commit('aaaa', ['bbbb', 'cccc']), commit('bbbb', ['dddd']), commit('cccc', ['dddd']), commit('dddd')]
+    const commits = [
+      commit('aaaa', ['bbbb', 'cccc']),
+      commit('bbbb', ['dddd']),
+      commit('cccc', ['dddd']),
+      commit('dddd')
+    ]
 
     expect(buildCommitGraph(commits)).toEqual(buildCommitGraph(commits))
   })

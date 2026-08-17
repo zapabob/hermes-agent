@@ -146,6 +146,7 @@ export function decodePreviewTabs(raw: string): PreviewTab[] {
   )
 
   const normalized = tabs.map(tab => (tab.target.kind === 'url' ? { ...tab, id: previewTabId(tab.target) } : tab))
+
   return normalized.length > 0 ? normalized : DEFAULT_PREVIEW_TABS
 }
 

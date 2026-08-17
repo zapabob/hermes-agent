@@ -2,7 +2,6 @@ import { useStore } from '@nanostores/react'
 import type { FormEvent, ReactNode } from 'react'
 import { useEffect, useState } from 'react'
 
-import { TreeSkeleton } from '@/components/chat/skeletons'
 import { ActionStatus } from '@/components/ui/action-status'
 import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
@@ -173,7 +172,17 @@ interface DeleteTarget {
   name: string
 }
 
-function ScmActionButton({ busy, icon, label, onClick }: { busy: boolean; icon: string; label: string; onClick: () => void }) {
+function ScmActionButton({
+  busy,
+  icon,
+  label,
+  onClick
+}: {
+  busy: boolean
+  icon: string
+  label: string
+  onClick: () => void
+}) {
   return (
     <Tip label={label}>
       <Button aria-label={label} className="size-5" disabled={busy} onClick={onClick} size="icon-xs" variant="ghost">
@@ -208,7 +217,17 @@ function ScmSection({
   )
 }
 
-function ScmRow({ actions, name, title, meta }: { actions?: ReactNode; name: string; title?: string; meta?: ReactNode }) {
+function ScmRow({
+  actions,
+  name,
+  title,
+  meta
+}: {
+  actions?: ReactNode
+  name: string
+  title?: string
+  meta?: ReactNode
+}) {
   return (
     <div className="group/row flex min-w-0 items-center gap-2 px-2.5 py-1.5">
       <span className="min-w-0 flex-1 truncate text-[0.72rem] text-(--ui-text-primary)" title={title ?? name}>
@@ -251,11 +270,16 @@ export function ReviewScmRail() {
   const localBranches = branches.filter(b => !b.isRemote)
   const remoteBranches = branches.filter(b => b.isRemote)
   const remoteGroups = new Map<string, typeof remoteBranches>()
+
   for (const branch of remoteBranches) {
     const remote = branch.name.split('/')[0]
-    if (!remoteGroups.has(remote)) remoteGroups.set(remote, [])
+
+    if (!remoteGroups.has(remote)) {
+      remoteGroups.set(remote, [])
+    }
     remoteGroups.get(remote)!.push(branch)
   }
+
   const sortedRemotes = Array.from(remoteGroups.keys()).sort()
 
   const deleteConfirmation = deleteTarget
@@ -276,7 +300,9 @@ export function ReviewScmRail() {
   function BranchGroupHeader({ label, count }: { label: string; count: number }) {
     return (
       <div className="px-2.5 pt-1.5 pb-0.5">
-        <span className="text-[0.58rem] font-semibold uppercase tracking-wide text-(--ui-text-quaternary)">{label}</span>
+        <span className="text-[0.58rem] font-semibold uppercase tracking-wide text-(--ui-text-quaternary)">
+          {label}
+        </span>
         <span className="ml-1 rounded-full bg-(--ui-bg-tertiary) px-1.5 text-[0.55rem] text-(--ui-text-tertiary)">
           {count}
         </span>
@@ -357,7 +383,7 @@ export function ReviewScmRail() {
             <p className="px-2.5 py-1 text-[0.66rem] text-(--ui-text-tertiary)">{c.noBranches}</p>
           ) : (
             <>
-              <BranchGroupHeader label={c.local} count={localBranches.length} />
+              <BranchGroupHeader count={localBranches.length} label={c.local} />
               {localBranches.map(branch => (
                 <ScmRow
                   actions={
@@ -393,9 +419,10 @@ export function ReviewScmRail() {
               ))}
               {sortedRemotes.map(remote => {
                 const group = remoteGroups.get(remote)!
+
                 return (
                   <>
-                    <BranchGroupHeader key={remote} label={remote} count={group.length} />
+                    <BranchGroupHeader count={group.length} key={remote} label={remote} />
                     {group.map(branch => (
                       <ScmRow
                         key={branch.name}
@@ -450,9 +477,7 @@ export function ReviewScmRail() {
                 key={tag.name}
                 meta={
                   <>
-                    <span className="shrink-0 font-mono text-[0.58rem] text-(--ui-text-secondary)">
-                      {tag.shortSha}
-                    </span>
+                    <span className="shrink-0 font-mono text-[0.58rem] text-(--ui-text-secondary)">{tag.shortSha}</span>
                     <time className={META_TIME} dateTime={tag.date}>
                       {formatScmTime(tag.date)}
                     </time>

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { HermesGitBranch, HermesGitStash, HermesGitTag } from '@/global'
 
-import { $currentCwd } from './session'
+import { $reviewOpen, $reviewScopeCwd } from './review'
 import {
   $scmBranches,
   $scmBranchesLoading,
@@ -23,7 +23,7 @@ import {
   scmTagCreate,
   scmTagDelete
 } from './scm-refs'
-import { $reviewOpen, $reviewScopeCwd } from './review'
+import { $currentCwd } from './session'
 
 // refreshRepoStatus is a fire-and-forget side effect of mutations; stub it so
 // it doesn't try to hit the (absent) probe and log.
