@@ -11,7 +11,7 @@
     "tests-js"
   ],
   "scripts": {
-    "postinstall": "echo '\u2705 Node dependencies installed. Run: python run_agent.py --help'",
+    "postinstall": "echo '✅ Node dependencies installed. Run: python run_agent.py --help'",
     "install:root": "npm install --workspaces=false",
     "install:web": "npm install --workspace web",
     "install:tui": "npm install --workspace ui-tui",
@@ -66,10 +66,12 @@
     "unicode-animations": false,
     "esbuild@0.28.1": true,
     "node-pty@1.1.0": true,
-    "get-windows@9.3.0": true,
     "electron-winstaller@5.4.0": true,
     "electron@41.10.3": true,
     "fsevents@2.3.2": true,
-    "fsevents@2.3.3": true
+    "fsevents@2.3.3": true,
+    "get-windows": true,
+    "get-windows@9.3.0": true,
+    "file:../../../node_modules/.pnpm/get-windows@9.3.0_encoding@0.1.13/node_modules/get-windows": true
   }
 }

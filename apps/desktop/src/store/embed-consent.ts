@@ -16,9 +16,9 @@ const modeCodec: Codec<EmbedMode> = {
 }
 
 /** Global default: ask (placeholder), always (auto-load), off (plain link). */
-export const $embedMode = persistentAtom<EmbedMode>(MODE_KEY, 'ask', modeCodec)
+export const $embedMode = persistentAtom<EmbedMode>(MODE_KEY, 'always', modeCodec)
 /** Providers granted a standing "always allow" (e.g. `youtube`, `twitter`). */
-export const $embedAllowed = persistentAtom<string[]>(ALLOWED_KEY, [], Codecs.stringArray)
+export const $embedAllowed = persistentAtom<string[]>(ALLOWED_KEY, ['youtube', 'twitter'], Codecs.stringArray)
 
 export function allowProvider(provider: string) {
   const current = $embedAllowed.get()
