@@ -28,7 +28,7 @@ import { billingCtaLabel, clearBillingBlock, runBillingRecovery, setBillingBlock
 import { clearClarifyRequest, normalizeChoices, setClarifyRequest, warnDroppedChoices } from '@/store/clarify'
 import { setSessionCompacting } from '@/store/compaction'
 import { refreshBackgroundProcesses } from '@/store/composer-status'
-import { $gateway, activeGatewayConnectionId } from '@/store/gateway'
+import { activeGatewayConnectionId } from '@/store/gateway'
 import { applyGoalStatusText } from '@/store/goals'
 import {
   notifyCronChanged,
