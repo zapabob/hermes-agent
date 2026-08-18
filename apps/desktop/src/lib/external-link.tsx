@@ -2,10 +2,10 @@ import type { ComponentProps, ReactNode } from 'react'
 import { useEffect, useMemo, useState } from 'react'
 
 import { ArrowUpRight } from '@/lib/icons'
+import { openPreview } from '@/store/preview'
 
 import { resolveBrandIcon } from './brand-icon'
 import { cn } from './utils'
-import { openPreview } from '@/store/preview'
 
 const titleCache = new Map<string, string>()
 const titleInflight = new Map<string, Promise<string>>()

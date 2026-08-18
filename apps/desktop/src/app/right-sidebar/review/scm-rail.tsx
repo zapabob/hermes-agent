@@ -277,6 +277,7 @@ export function ReviewScmRail() {
     if (!remoteGroups.has(remote)) {
       remoteGroups.set(remote, [])
     }
+
     remoteGroups.get(remote)!.push(branch)
   }
 
