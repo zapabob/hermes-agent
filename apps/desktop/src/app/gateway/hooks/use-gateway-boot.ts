@@ -22,6 +22,7 @@ import {
   ensureGatewayForProfile,
   gatewayActivationEpoch,
   isActivePrimary,
+  primaryGatewayScope,
   pruneSecondaryGateways,
   reconnectSecondaryGateways,
   reportPrimaryGatewayState,
