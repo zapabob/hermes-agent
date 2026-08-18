@@ -33,6 +33,12 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 import fire
+import sys
+from pathlib import Path
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from dotenv import load_dotenv
 from agent.tool_dispatch_helpers import make_tool_result_message
 

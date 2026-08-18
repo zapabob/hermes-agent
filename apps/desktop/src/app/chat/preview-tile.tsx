@@ -140,21 +140,29 @@ const watchPreviewTileMirror = paneMirror<{ id: string; target: PreviewTarget }>
   source: $previewTabs,
   key: tab => tab.id,
   prefix: PREVIEW_TILE_PREFIX,
-  // URL previews are independent browser panes. The first URL opens beside the
-  // conversation; the second docks below it, which gives YouTube + X a real
-  // vertical split while preserving the existing file/artifact behavior.
+  // URL previews are independent browser panes that share a vertical split:
+  // the first URL opens beside the conversation, the second docks beside the
+  // first. A row split lays them out side by side at equal height, sharing the
+  // rail width between them, while preserving the existing file/artifact
+  // behavior (those still dock as before).
   dir: tile => {
     if (tile.target.kind !== 'url') {
       return 'right'
     }
 
-    return tile.id === urlPreviewIds()[0] ? 'right' : 'bottom'
+    // Both URL previews dock right: the first beside the workspace, the
+    // second beside the first. A row split lays them out side by side at
+    // equal height, sharing the rail width between them.
+    return 'right'
   },
   anchor: tile => {
     if (tile.target.kind !== 'url') {
       return 'workspace'
     }
 
+    // URL previews stack beside each other: the first docks against the
+    // workspace, the second docks against the first, producing a side-by-side
+    // row split.
     const firstUrlId = urlPreviewIds()[0]
 
     return tile.id === firstUrlId ? 'workspace' : `${PREVIEW_TILE_PREFIX}:${firstUrlId}`
