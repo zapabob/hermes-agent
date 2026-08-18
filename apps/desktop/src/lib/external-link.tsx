@@ -5,6 +5,7 @@ import { ArrowUpRight } from '@/lib/icons'
 
 import { resolveBrandIcon } from './brand-icon'
 import { cn } from './utils'
+import { openPreview } from '@/store/preview'
 
 const titleCache = new Map<string, string>()
 const titleInflight = new Map<string, Promise<string>>()
@@ -197,7 +198,18 @@ export function useLinkTitle(url?: null | string): string {
 
 export function openExternalLink(href: string): void {
   if (href) {
-    void window.hermesDesktop?.openExternal?.(href)
+    const url = normalizeExternalUrl(href)
+
+    if (/^https?:\/\//i.test(url)) {
+      openPreview({
+        kind: 'url',
+        label: shortHostLabel(url),
+        source: url,
+        url
+      })
+    } else {
+      void window.hermesDesktop?.openExternal?.(url)
+    }
   }
 }
 
