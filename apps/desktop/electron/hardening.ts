@@ -22,7 +22,7 @@ const DEFAULT_FETCH_TIMEOUT_MS = 15_000
 const ATTACHMENT_UPLOAD_DEFAULT_MAX_BYTES = 256 * 1024 * 1024
 const TEXT_PREVIEW_SOURCE_MAX_BYTES = 64 * 1024 * 1024
 
-function dataUrlReadMaxBytesFromMb(maxMb) {
+function dataUrlReadMaxBytesFromMb(maxMb: number | null | undefined) {
   return clampDataUrlReadMaxMb(maxMb) * 1024 * 1024
 }
 
@@ -122,7 +122,7 @@ interface SecretFileOptions {
  * another user), and failing to tighten a file is not a reason to lose the
  * user's configured gateway.
  */
-function tightenSecretFileMode(filePath, options: SecretFileOptions = {}) {
+function tightenSecretFileMode(filePath: string, options: SecretFileOptions = {}) {
   const fsImpl = options.fs || fs
   const platform = options.platform || process.platform
 
@@ -172,7 +172,11 @@ function tightenSecretFileMode(filePath, options: SecretFileOptions = {}) {
  * cannot be redirected), the create-time `mode`, and the chmod before the
  * rename.
  */
-function writeSecretFileAtomic(targetPath, data, options: SecretFileOptions = {}) {
+function writeSecretFileAtomic(
+  targetPath: string,
+  data: string | NodeJS.ArrayBufferView,
+  options: SecretFileOptions = {}
+) {
   const fsImpl = options.fs || fs
   const tmp = targetPath + '.tmp'
 
@@ -182,7 +186,7 @@ function writeSecretFileAtomic(targetPath, data, options: SecretFileOptions = {}
   fsImpl.renameSync(tmp, targetPath)
 }
 
-function resolveTimeoutMs(timeoutMs, fallbackMs = DEFAULT_FETCH_TIMEOUT_MS) {
+function resolveTimeoutMs(timeoutMs?: number | string | null, fallbackMs = DEFAULT_FETCH_TIMEOUT_MS) {
   const fallback =
     Number.isFinite(fallbackMs) && Number(fallbackMs) > 0 ? Math.round(Number(fallbackMs)) : DEFAULT_FETCH_TIMEOUT_MS
 
@@ -195,7 +199,11 @@ function resolveTimeoutMs(timeoutMs, fallbackMs = DEFAULT_FETCH_TIMEOUT_MS) {
   return fallback
 }
 
-function encryptDesktopSecret(value, safeStorageApi, options: { allowPlainText?: boolean } = {}) {
+function encryptDesktopSecret(
+  value: string | null | undefined,
+  safeStorageApi: any,
+  options: { allowPlainText?: boolean } = {}
+) {
   const raw = String(value || '')
 
   if (!raw) {
@@ -308,7 +316,7 @@ function resolvePersistedRemoteToken({
   return encryptSecret(incomingToken, { allowPlainText: allowPlainText === true })
 }
 
-function sensitiveFileBlockReason(filePath) {
+function sensitiveFileBlockReason(filePath: unknown) {
   const normalized = String(filePath || '')
     .replace(/\\/g, '/')
     .toLowerCase()
@@ -359,7 +367,7 @@ function sensitiveFileBlockReason(filePath) {
   return null
 }
 
-function shouldRevealExternalFilePath(filePath) {
+function shouldRevealExternalFilePath(filePath: unknown) {
   const basename = path.basename(String(filePath || '')).toLowerCase()
 
   if (!basename) {
@@ -369,7 +377,7 @@ function shouldRevealExternalFilePath(filePath) {
   return EXTERNAL_FILE_REVEAL_EXTENSIONS.has(path.extname(basename))
 }
 
-function isPrivateNetworkAddress(address) {
+function isPrivateNetworkAddress(address: unknown) {
   const normalized = String(address || '')
     .trim()
     .toLowerCase()
@@ -447,7 +455,10 @@ async function resolvePublicHttpTarget(parsed: URL, lookup: LookupAll = lookupHo
   return targets[0]
 }
 
-async function openOrRevealExternalFilePath(filePath, actions) {
+async function openOrRevealExternalFilePath(
+  filePath: string,
+  actions: { open: (p: string) => Promise<unknown>; reveal: (p: string) => unknown }
+) {
   if (shouldRevealExternalFilePath(filePath)) {
     actions.reveal(filePath)
 
@@ -473,7 +484,7 @@ function ipcPathError(code: any, message: string): Error & { code: any } {
   return error
 }
 
-function rejectUnsafePathSyntax(filePath, purpose = 'File read') {
+function rejectUnsafePathSyntax(filePath: unknown, purpose = 'File read') {
   if (typeof filePath !== 'string') {
     throw ipcPathError('invalid-path', `${purpose} failed: file path is required.`)
   }
@@ -490,13 +501,6 @@ function rejectUnsafePathSyntax(filePath, purpose = 'File read') {
 
   const normalized = raw.replace(/\\/g, '/').toLowerCase()
 
-  // Never allow a network-share path to reach path.resolve/stat/open.  This
-  // check intentionally runs on the raw spelling so mixed slash UNC forms
-  // are rejected before Node can reinterpret them as a local path.
-  if (/^\/\/[^/]+(?:\/|$)/.test(normalized)) {
-    throw ipcPathError('network-path', `${purpose} blocked: network share paths are not allowed.`)
-  }
-
   if (
     normalized.startsWith('//?/') ||
     normalized.startsWith('//./') ||
@@ -506,10 +510,20 @@ function rejectUnsafePathSyntax(filePath, purpose = 'File read') {
     throw ipcPathError('device-path', `${purpose} blocked: Windows device paths are not allowed.`)
   }
 
+  // Never allow a network-share path to reach path.resolve/stat/open.  This
+  // check intentionally runs on the raw spelling so mixed slash UNC forms
+  // are rejected before Node can reinterpret them as a local path.
+  if (/^\/\/[^/]+(?:\/|$)/.test(normalized)) {
+    throw ipcPathError('network-path', `${purpose} blocked: network share paths are not allowed.`)
+  }
+
   return raw
 }
 
-function resolveRequestedPathForIpc(filePath, options: { purpose?: string; baseDir?: fs.PathOrFileDescriptor } = {}) {
+function resolveRequestedPathForIpc(
+  filePath: unknown,
+  options: { purpose?: string; baseDir?: fs.PathOrFileDescriptor } = {}
+) {
   const purpose = String(options.purpose || 'File read')
   let raw = rejectUnsafePathSyntax(filePath, purpose)
 
@@ -539,6 +553,7 @@ function resolveRequestedPathForIpc(filePath, options: { purpose?: string; baseD
       if (error && typeof error === 'object' && 'code' in error && error.code === 'network-path') {
         throw error
       }
+
       throw ipcPathError('invalid-path', `${purpose} failed: file URL is invalid.`)
     }
 
@@ -557,11 +572,16 @@ function resolveRequestedPathForIpc(filePath, options: { purpose?: string; baseD
   return resolvedPath
 }
 
-async function statForIpc(fsImpl: { promises: { stat: typeof fs.promises.stat } }, resolvedPath, purpose, typeLabel) {
+async function statForIpc(
+  fsImpl: { promises: { stat: typeof fs.promises.stat } },
+  resolvedPath: string,
+  purpose: string,
+  typeLabel: string
+) {
   try {
     return await fsImpl.promises.stat(resolvedPath)
   } catch (error) {
-    const code = error && typeof error === 'object' ? error.code : ''
+    const code = error && typeof error === 'object' && 'code' in error ? String((error as { code?: unknown }).code) : ''
 
     if (code === 'ENOENT' || code === 'ENOTDIR') {
       throw ipcPathError(code || 'ENOENT', `${purpose} failed: ${typeLabel} does not exist.`)
@@ -574,7 +594,11 @@ async function statForIpc(fsImpl: { promises: { stat: typeof fs.promises.stat } 
   }
 }
 
-async function realpathForIpc(fsImpl, resolvedPath, purpose) {
+async function realpathForIpc(
+  fsImpl: { promises: { realpath?: typeof fs.promises.realpath } },
+  resolvedPath: string,
+  purpose: string
+) {
   if (typeof fsImpl.promises.realpath !== 'function') {
     return resolvedPath
   }
@@ -585,7 +609,7 @@ async function realpathForIpc(fsImpl, resolvedPath, purpose) {
 
     return realPath
   } catch (error) {
-    const code = error && typeof error === 'object' ? error.code : ''
+    const code = error && typeof error === 'object' && 'code' in error ? String((error as { code?: unknown }).code) : ''
     throw ipcPathError(
       code || 'read-error',
       `${purpose} failed: ${error instanceof Error ? error.message : String(error)}`
@@ -593,7 +617,7 @@ async function realpathForIpc(fsImpl, resolvedPath, purpose) {
   }
 }
 
-function rejectSensitiveFilePath(filePath, purpose) {
+function rejectSensitiveFilePath(filePath: unknown, purpose: string) {
   const blockReason = sensitiveFileBlockReason(filePath)
 
   if (blockReason) {
@@ -602,11 +626,11 @@ function rejectSensitiveFilePath(filePath, purpose) {
 }
 
 async function resolveDirectoryForIpc(
-  dirPath,
+  dirPath: unknown,
   options: {
     purpose?: string
     baseDir?: fs.PathOrFileDescriptor
-    fs?: { promises: { stat: typeof fs.promises.stat } }
+    fs?: { promises: { stat: typeof fs.promises.stat; realpath?: typeof fs.promises.realpath } }
   } = {}
 ) {
   const purpose = String(options.purpose || 'Directory read')
@@ -624,7 +648,7 @@ async function resolveDirectoryForIpc(
 }
 
 async function resolveReadableFileForIpc(
-  filePath,
+  filePath: unknown,
   options: {
     purpose?: string
     baseDir?: fs.PathOrFileDescriptor
@@ -673,7 +697,7 @@ async function resolveReadableFileForIpc(
 }
 
 async function readFileDataUrlForIpc(
-  filePath,
+  filePath: unknown,
   options: {
     purpose?: string
     baseDir?: fs.PathOrFileDescriptor
