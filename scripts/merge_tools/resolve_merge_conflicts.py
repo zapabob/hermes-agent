@@ -106,12 +106,14 @@ class Resolver:
         old_head: str = "",
         merge_base: str = "",
         overlay_sanitizers: dict[str, dict[str, object]] | None = None,
+        semantic_invariants: dict[str, str] | None = None,
     ):
         self.upstream_ref = upstream_ref
         self.dry_run = dry_run
         self.old_head = old_head or run_git(["rev-parse", "HEAD"], check=False).stdout.strip()
         self.merge_base = merge_base or merge_base_sha(upstream_ref, self.old_head)
         self.overlay_sanitizers = overlay_sanitizers or {}
+        self.semantic_invariants = semantic_invariants or {}
         self.actions: list[dict[str, str]] = []
 
     def run(self, cmd: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -183,6 +185,24 @@ class Resolver:
             self.resolve_drop_generated(path)
             return "resolved"
         if action == "manual_api_followup" and self.dry_run:
+            invariant = self.semantic_invariants.get(path)
+            if invariant == "command_registry":
+                from apply_three_way_overlay import three_way_merge
+                from merge_semantic_invariants import validate_command_registry
+
+                code, merged = three_way_merge(
+                    path,
+                    self.merge_base,
+                    self.upstream_ref,
+                    self.old_head,
+                    sanitizers=self.overlay_sanitizers,
+                )
+                if code == 2:
+                    return "semantic_preview_failed"
+                errors = validate_command_registry(merged)
+                if errors:
+                    return "semantic_preview_failed: " + "; ".join(errors)
+                return "manual_approval_required_preview_valid"
             return "manual_approval_required"
         if action in OVERLAY_ACTIONS:
             if self.dry_run:
@@ -426,6 +446,10 @@ def main() -> int:
         old_head=args.old_head,
         merge_base=args.merge_base,
         overlay_sanitizers=overlay_sanitizers,
+        semantic_invariants={
+            str(path).replace("\\", "/"): str(kind)
+            for path, kind in (strategy_payload.get("post_merge_invariants") or {}).items()
+        },
     )
     print(f"Detected paths: {len(classifications)}")
     if resolver.merge_base:

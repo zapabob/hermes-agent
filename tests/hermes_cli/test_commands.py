@@ -82,6 +82,25 @@ class TestCommandRegistry:
 
 class TestResolveCommand:
 
+    def test_automation_commands_preserve_official_and_fork_surfaces(self):
+        suggestions = resolve_command("suggestions")
+        blueprint = resolve_command("blueprint")
+        auth = resolve_command("auth")
+
+        assert suggestions is not None
+        assert blueprint is not None
+        assert auth is not None
+        assert resolve_command("suggest") is suggestions
+        assert resolve_command("bp") is blueprint
+
+    def test_worktree_command_keeps_official_prune_contract(self):
+        worktree = resolve_command("worktree")
+
+        assert worktree is not None
+        assert worktree.cli_only is True
+        assert worktree.subcommands == ("new", "list", "prune")
+        assert "--dry-run" in (worktree.args_hint or "")
+
 
     def test_topic_is_gateway_command(self):
         topic = resolve_command("topic")

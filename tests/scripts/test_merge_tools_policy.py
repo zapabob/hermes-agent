@@ -62,7 +62,6 @@ def test_config_defaults_overlap_overlay(strategy):
         "tests/run_agent/test_in_place_compaction.py",
         "tools/memory_tool.py",
         "tui_gateway/server.py",
-        "hermes_cli/commands.py",
         "hermes_cli/main.py",
     ],
 )
@@ -74,6 +73,16 @@ def test_incremental_official_api_paths_overlay_cleanly(path, strategy):
         touched_custom=True,
     )
     assert item.action == "official_with_overlay"
+
+
+def test_command_registry_requires_manual_api_followup(strategy):
+    item = classify_path_with_context(
+        "hermes_cli/commands.py",
+        strategy,
+        touched_upstream=True,
+        touched_custom=True,
+    )
+    assert item.action == "manual_api_followup"
 
 
 @pytest.mark.parametrize(

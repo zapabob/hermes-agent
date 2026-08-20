@@ -30,7 +30,8 @@ def _enable_plugin(hermes_home: Path, name: str) -> None:
     cfg_path.write_text(yaml.safe_dump(cfg))
 
 
-def test_register_cli_command_rejects_builtin_name():
+@pytest.mark.parametrize("builtin_name", ["dashboard", "worktree"])
+def test_register_cli_command_rejects_builtin_name(builtin_name):
     mgr = PluginManager()
     manifest = PluginManifest(name="conflict-test", version="0.0.1", description="test")
     ctx = PluginContext(manifest, mgr)
@@ -39,13 +40,13 @@ def test_register_cli_command_rejects_builtin_name():
         parser.add_argument("--noop", action="store_true")
 
     ctx.register_cli_command(
-        name="dashboard",
+        name=builtin_name,
         help="should not register",
         setup_fn=_setup,
         handler_fn=lambda _args: 0,
     )
 
-    assert "dashboard" not in mgr._cli_commands
+    assert builtin_name not in mgr._cli_commands
 
 
 def test_main_survives_conflicting_plugin_cli_name(tmp_path, monkeypatch):

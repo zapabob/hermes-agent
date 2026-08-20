@@ -19,6 +19,11 @@
     }
   },
   "blocker_actions": ["official_with_overlay", "manual_api_followup"],
+  "post_merge_invariants": {
+    "hermes_cli/commands.py": "command_registry",
+    "hermes_cli/cli_command_names.py": "canonical_cli_names"
+  },
+  "post_merge_auto_overlay_paths": ["hermes_cli/commands.py"],
   "dirty_tree_ignore": [
     ".cursor/hooks/state/*",
     ".specstory/**",
@@ -401,8 +406,8 @@
     },
     {
       "pattern": "hermes_cli/commands.py",
-      "action": "official_with_overlay",
-      "note": "Take the official attended worktree prune command surface while retaining fork command registrations.",
+      "action": "manual_api_followup",
+      "note": "Compose official attended worktree prune with fork suggestions/suggest, blueprint/bp, and auth registrations; semantic invariant is mandatory after overlay.",
       "context": "overlap_only"
     },
     {

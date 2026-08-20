@@ -11,11 +11,13 @@ import io
 import os
 import shutil
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
 import cli as cli_mod
 from hermes_cli.cli_commands_mixin import CLICommandsMixin
+from hermes_cli import worktree_cmd, worktree_gc
 
 requires_git = pytest.mark.skipif(
     shutil.which("git") is None, reason="git required"
@@ -129,3 +131,49 @@ def test_new_sanitizes_name(repo):
 def test_unknown_subcommand(repo):
     out = _run(_Stub(), "/worktree frobnicate")
     assert "Unknown /worktree subcommand" in out
+
+
+def test_prune_slash_is_plan_only_without_consent(repo, monkeypatch):
+    record = SimpleNamespace(path="stale", name="stale", verdict="reap", reason="old")
+    calls = []
+    monkeypatch.setattr(worktree_gc, "audit_worktrees", lambda *a, **k: [record])
+    monkeypatch.setattr(worktree_gc, "reclaim_worktrees",
+                        lambda *a, **k: calls.append(k["dry_run"]) or ["tree planned"])
+    monkeypatch.setattr(worktree_gc, "reclaim_branches",
+                        lambda *a, **k: calls.append(k["dry_run"]) or [])
+
+    out = _run(_Stub(), "/worktree prune")
+
+    assert calls == [True, True]
+    assert "Plan only" in out
+
+
+def test_prune_slash_requires_explicit_apply_to_mutate(repo, monkeypatch):
+    record = SimpleNamespace(path="stale", name="stale", verdict="reap", reason="old")
+    calls = []
+    monkeypatch.setattr(worktree_gc, "audit_worktrees", lambda *a, **k: [record])
+    monkeypatch.setattr(worktree_gc, "reclaim_worktrees",
+                        lambda *a, **k: calls.append(k["dry_run"]) or ["tree removed"])
+    monkeypatch.setattr(worktree_gc, "reclaim_branches",
+                        lambda *a, **k: calls.append(k["dry_run"]) or [])
+
+    out = _run(_Stub(), "/worktree prune --yes")
+
+    assert calls == [False, False]
+    assert "Plan only" not in out
+
+
+def test_top_level_prune_defaults_to_plan_only(monkeypatch, capsys):
+    record = SimpleNamespace(path="stale", name="stale", verdict="reap", reason="old", size_mb=None,
+                             age_days=10)
+    calls = []
+    monkeypatch.setattr(worktree_cmd, "_repo_root", lambda: ".")
+    monkeypatch.setattr(worktree_gc, "audit_worktrees", lambda *a, **k: [record])
+    monkeypatch.setattr(worktree_gc, "reclaim_worktrees",
+                        lambda *a, **k: calls.append(k["dry_run"]) or ["tree planned"])
+    monkeypatch.setattr(worktree_gc, "reclaim_branches",
+                        lambda *a, **k: calls.append(k["dry_run"]) or [])
+
+    assert worktree_cmd.cmd_worktree(SimpleNamespace(worktree_action="prune")) == 0
+    assert calls == [True, True]
+    assert "Plan only" in capsys.readouterr().out

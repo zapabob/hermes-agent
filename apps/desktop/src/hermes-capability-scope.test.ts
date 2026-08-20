@@ -14,10 +14,10 @@ import {
   installMcpCatalogEntry,
   installSkillFromHub,
   profileScopeKey,
+  removeMcpServer,
   saveMcpServers,
   setApiRequestConnection,
   setApiRequestProfile,
-  removeMcpServer,
   setMcpServerEnabled,
   setSkillEnabled,
   setToolsetEnabled

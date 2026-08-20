@@ -5,7 +5,6 @@
 // plugin installs.
 import { ipcMain } from 'electron'
 
-import { scanGitRepos } from './git-repo-scan'
 import {
   branchCreate,
   branchDelete,
@@ -20,6 +19,7 @@ import {
   tagCreate,
   tagDelete
 } from './git-ref-ops'
+import { scanGitRepos } from './git-repo-scan'
 import {
   fileDiffVsHead,
   repoStatus,

@@ -1904,9 +1904,14 @@ def _setup_worktree(repo_root: str = None, sync_base: bool = True,
         "-c", "checkout.thresholdForParallelism=100",
     ]
     try:
+        # 120s, not 30: on a multi-agent box the ~10k-file materialization
+        # contends with sibling sessions' checkouts/fetches/Electron dev
+        # builds for the same disk — measured 113s wall at near-zero CPU
+        # under load vs 1.2s idle (Aug 2026). A too-tight timeout kills a
+        # legitimately slow create and wastes the work already done.
         result = subprocess.run(
             ["git", *_wt_add_cfg, "worktree", "add", str(wt_path), "-b", branch_name, base_ref],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, cwd=repo_root,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, cwd=repo_root,
         )
         if result.returncode != 0:
             # If branching from the resolved remote ref failed for any reason
@@ -1921,7 +1926,7 @@ def _setup_worktree(repo_root: str = None, sync_base: bool = True,
                 base_ref, base_label = "HEAD", "HEAD (fallback — remote base failed)"
                 result = subprocess.run(
                     ["git", "worktree", "add", str(wt_path), "-b", branch_name, base_ref],
-                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, cwd=repo_root,
+                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, cwd=repo_root,
                 )
             if result.returncode != 0:
                 _cleanup_failed_worktree_add(repo_root, wt_path, branch_name)
@@ -2337,6 +2342,141 @@ def _worktree_commits_all_merged_upstream(
         return False
 
 
+def _worktree_branch_pr_merged(
+    worktree_path: str,
+    timeout: int = 15,
+    cache: Optional[Dict[str, bool]] = None,
+) -> bool:
+    """Return whether the worktree branch's PR is MERGED on GitHub.
+
+    Escape hatch for the case ``git cherry`` cannot catch: a rebase-merge that
+    altered the diff (conflict resolution against a moved base, follow-up
+    commits added during salvage/CI-fix) changes the patch-id, so the local
+    commits are no longer patch-equivalent to anything upstream even though
+    the PR merged. Those trees survive the cherry check forever (Aug 2026:
+    12 of 22 "unpushed" trees on a loaded box had MERGED PRs).
+
+    GitHub's PR state is the authoritative merge signal, so a clean tree
+    whose remote-known branch has a MERGED PR *at the worktree's exact HEAD
+    SHA* is reaped. Local-only branch names are never sent to GitHub by the
+    automatic startup pass: the branch must already have a configured remote
+    upstream or a local remote-tracking ref.
+    The SHA check is essential because branch names can be deleted and reused;
+    an older merged PR for the same name must not make new work disposable.
+    Verdicts are memoized keyed on ``(branch, head_sha)`` — MERGED is
+    monotonic, so a True verdict is cached permanently; False is never cached
+    (the PR may merge later without new local commits, which would leave the
+    key unchanged).
+
+    Fails SAFE toward False (preserve): no gh binary, offline, rate-limited,
+    detached HEAD, or any parse failure keeps the tree.
+    """
+    import subprocess
+
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, cwd=worktree_path,
+        )
+        if head.returncode != 0:
+            return False
+        branch = head.stdout.strip()
+        if not branch or branch == "HEAD":  # detached — no PR to look up
+            return False
+
+        # Privacy boundary: `gh pr list --head <branch>` discloses the local
+        # branch name to GitHub. Automatic startup maintenance must not do
+        # that for unpublished scratch work. Only consult GitHub when local
+        # Git metadata already proves the branch is remote-known. Both probes
+        # are local-only and therefore safe on the startup path.
+        upstream_remote = subprocess.run(
+            [
+                "git", "for-each-ref", "--count=1",
+                "--format=%(upstream:remotename)", f"refs/heads/{branch}",
+            ],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=timeout, cwd=worktree_path,
+        )
+        remote_known = (
+            upstream_remote.returncode == 0
+            and upstream_remote.stdout.strip() not in ("", ".")
+        )
+        if not remote_known:
+            remote_refs = subprocess.run(
+                ["git", "for-each-ref", "--format=%(refname)", "refs/remotes"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=timeout, cwd=worktree_path,
+            )
+            remote_known = remote_refs.returncode == 0 and any(
+                len(parts := ref.split("/", 3)) == 4 and parts[3] == branch
+                for ref in remote_refs.stdout.splitlines()
+            )
+        if not remote_known:
+            return False
+
+        sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, cwd=worktree_path,
+        )
+        if sha.returncode != 0 or not sha.stdout.strip():
+            return False
+        head_sha = sha.stdout.strip()
+
+        cache_key = f"pr-merged:{branch}:{head_sha}"
+        if cache is not None and cache.get(cache_key) is True:
+            return True
+
+        result = subprocess.run(
+            ["gh", "pr", "list", "--head", branch, "--state", "merged",
+             "--json", "number,headRefOid", "--limit", "100"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, cwd=worktree_path,
+        )
+        if result.returncode != 0:
+            return False
+        prs = json.loads(result.stdout or "[]")
+        merged = isinstance(prs, list) and any(
+            isinstance(pr, dict) and pr.get("headRefOid") == head_sha
+            for pr in prs
+        )
+        if merged and cache is not None:
+            cache[cache_key] = True
+        return merged
+    except Exception:
+        return False
+
+
+def _worktree_branch_head(
+    worktree_path: str,
+    timeout: int = 5,
+) -> Optional[tuple[str, str]]:
+    """Return the attached branch and exact HEAD, or ``None`` fail-safe."""
+    import subprocess
+
+    try:
+        branch_result = subprocess.run(
+            ["git", "branch", "--show-current"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=timeout, cwd=worktree_path,
+        )
+        head_result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=timeout, cwd=worktree_path,
+        )
+        branch = branch_result.stdout.strip()
+        head_sha = head_result.stdout.strip()
+        if (
+            branch_result.returncode != 0
+            or head_result.returncode != 0
+            or not branch
+            or not head_sha
+        ):
+            return None
+        return branch, head_sha
+    except Exception:
+        return None
+
+
 def _worktree_lock_is_live(repo_root: str, worktree_path: str, timeout: int = 10):
     """Classify a worktree's git lock as live, dead, or absent.
 
@@ -2682,12 +2822,15 @@ def _prune_stale_worktrees(repo_root: str, max_age_hours: int = 24) -> None:
 
     def _classify(item):
         entry, mtime, force = item
+        identity = _worktree_branch_head(str(entry), timeout=5)
+        if identity is None:
+            return (entry, mtime, force, "changed", None, None, None)
         # Never delete real work, regardless of age or tier. Uncommitted
         # changes and unpushed commits may be a crashed session's in-flight
         # work; only clean, fully-merged/pushed trees (the scratch trees that
         # actually cause .worktrees/ bloat) are ever reaped.
         if _worktree_is_dirty(str(entry), timeout=5):
-            return (entry, mtime, force, "dirty", None)
+            return (entry, mtime, force, "dirty", None, None, None)
         if _worktree_has_unpushed_commits(str(entry), timeout=5):
             # Squash-merge escape hatch: commits unreachable from any remote
             # ref but patch-equivalent to upstream commits are merged work,
@@ -2697,20 +2840,28 @@ def _prune_stale_worktrees(repo_root: str, max_age_hours: int = 24) -> None:
             merged = _worktree_commits_all_merged_upstream(
                 str(entry), timeout=30, cache=snapshot
             )
+            if not merged:
+                # Rebase-merge escape hatch: conflict resolution or follow-up
+                # commits change the patch-id, so cherry misses them — but
+                # GitHub knows the PR merged. Authoritative and cheap (~0.3s,
+                # memoized on (branch, head_sha) so it's paid once per tree).
+                merged = _worktree_branch_pr_merged(
+                    str(entry), timeout=15, cache=snapshot
+                )
             with cache_lock:
                 merge_cache.update(snapshot)
             if not merged:
-                return (entry, mtime, force, "unpushed", None)
+                return (entry, mtime, force, "unpushed", None, None, None)
 
         # Respect git-native session locks. A lock owned by a still-running
         # hermes process means the worktree is actively in use — never touch
         # it. A lock whose owning pid is gone is a crashed session's leftover:
-        # unlock it so `git worktree remove --force` (single -f) can reap it,
+        # unlock it so non-force `git worktree remove` can reap it,
         # otherwise dead-locked worktrees pile up indefinitely.
         lock_state = _worktree_lock_is_live(repo_root, str(entry), timeout=5)
         if lock_state == "live":
-            return (entry, mtime, force, "locked-live", None)
-        return (entry, mtime, force, "reap", lock_state)
+            return (entry, mtime, force, "locked-live", None, None, None)
+        return (entry, mtime, force, "reap", lock_state, *identity)
 
     # Bounded pool: enough to hide git's per-process startup latency without
     # spawning dozens of concurrent git processes on a small machine.
@@ -2732,7 +2883,46 @@ def _prune_stale_worktrees(repo_root: str, max_age_hours: int = 24) -> None:
         _save_worktree_merge_cache(merge_cache)
 
     # ── Phase 3: mutate serially (unlock / remove / branch -D) ──────────────
-    for entry, mtime, force, verdict, lock_state in verdicts:
+    def _revalidate_reapable(entry, expected_branch, expected_head):
+        """Re-run every destructive precondition after parallel classify."""
+        identity = _worktree_branch_head(str(entry), timeout=5)
+        if identity != (expected_branch, expected_head):
+            logger.debug("Worktree identity changed before prune: %s", entry)
+            return None
+        if _worktree_is_dirty(str(entry), timeout=5):
+            logger.debug("Worktree became dirty before prune: %s", entry)
+            return None
+        if _worktree_has_unpushed_commits(str(entry), timeout=5):
+            with cache_lock:
+                snapshot = dict(merge_cache)
+            merged = _worktree_commits_all_merged_upstream(
+                str(entry), timeout=30, cache=snapshot
+            )
+            if not merged:
+                merged = _worktree_branch_pr_merged(
+                    str(entry), timeout=15, cache=snapshot
+                )
+            with cache_lock:
+                merge_cache.update(snapshot)
+            if not merged:
+                logger.debug("Worktree gained unmerged commits before prune: %s", entry)
+                return None
+        current_lock = _worktree_lock_is_live(
+            repo_root, str(entry), timeout=5
+        )
+        if current_lock == "live":
+            logger.debug("Worktree gained a live lock before prune: %s", entry)
+            return None
+        # Close the windows opened by the more expensive merge/lock probes.
+        if _worktree_branch_head(str(entry), timeout=5) != identity:
+            logger.debug("Worktree identity changed during prune checks: %s", entry)
+            return None
+        if _worktree_is_dirty(str(entry), timeout=5):
+            logger.debug("Worktree became dirty during prune checks: %s", entry)
+            return None
+        return current_lock or "absent"
+
+    for entry, mtime, force, verdict, lock_state, branch, head_sha in verdicts:
         if verdict == "dirty":
             if mtime <= stale_work_cutoff:
                 preserved_stale.append(f"{entry.name} (uncommitted changes)")
@@ -2744,26 +2934,36 @@ def _prune_stale_worktrees(repo_root: str, max_age_hours: int = 24) -> None:
         if verdict == "locked-live":
             logger.debug("Skipping live-locked worktree: %s", entry.name)
             continue
+        if verdict != "reap":
+            continue
+
+        lock_state = _revalidate_reapable(entry, branch, head_sha)
+        if lock_state is None:
+            logger.debug(
+                "Skipping worktree changed after classification: %s", entry.name
+            )
+            continue
 
         if lock_state == "dead":
             try:
-                subprocess.run(
+                unlock_result = subprocess.run(
                     ["git", "worktree", "unlock", str(entry)],
                     capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10, cwd=repo_root,
                 )
+                if unlock_result.returncode != 0:
+                    logger.debug(
+                        "Failed to unlock dead worktree %s: %s",
+                        entry.name, unlock_result.stderr.strip(),
+                    )
+                    continue
             except Exception as e:
                 logger.debug("Failed to unlock dead worktree %s: %s", entry.name, e)
+                continue
 
         # Safe to remove
         try:
-            branch_result = subprocess.run(
-                ["git", "branch", "--show-current"],
-                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5, cwd=str(entry),
-            )
-            branch = branch_result.stdout.strip()
-
             remove_result = subprocess.run(
-                ["git", "worktree", "remove", str(entry), "--force"],
+                ["git", "worktree", "remove", str(entry)],
                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15, cwd=repo_root,
             )
             if remove_result.returncode != 0:
@@ -2775,22 +2975,58 @@ def _prune_stale_worktrees(repo_root: str, max_age_hours: int = 24) -> None:
                 )
                 continue
             if branch:
-                subprocess.run(
-                    ["git", "branch", "-D", branch],
-                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10, cwd=repo_root,
+                # Compare-and-delete the ref in one Git transaction. A
+                # separate rev-parse followed by `git branch -D` has a TOCTOU
+                # window where another process can advance the branch between
+                # the check and deletion. update-ref rejects the delete unless
+                # the ref still has the exact worktree HEAD we classified.
+                delete_result = subprocess.run(
+                    [
+                        "git", "update-ref", "-d",
+                        f"refs/heads/{branch}", head_sha,
+                    ],
+                    capture_output=True, text=True, encoding="utf-8",
+                    errors="replace", timeout=10, cwd=repo_root,
                 )
+                if delete_result.returncode != 0:
+                    logger.debug(
+                        "Preserved branch changed during worktree prune %s: %s",
+                        branch, delete_result.stderr.strip(),
+                    )
             logger.debug("Pruned stale worktree: %s (force=%s)", entry.name, force)
         except Exception as e:
             logger.debug("Failed to prune worktree %s: %s", entry.name, e)
 
+    if len(merge_cache) != cache_size_before:
+        _save_worktree_merge_cache(merge_cache)
+
     if preserved_stale:
         logger.warning(
             "Preserving %d worktree(s) older than 7 days with unmerged work "
-            "(push or remove them to reclaim disk): %s",
+            "(run `hermes worktree prune` to review and reclaim): %s",
             len(preserved_stale), ", ".join(sorted(preserved_stale)),
         )
 
     _prune_orphaned_branches(repo_root)
+
+    # Escalation notice: the startup pass is deliberately conservative, so
+    # installs accumulate preserved trees it can never reclaim. Once the
+    # footprint is clearly a problem (many trees or multi-GB), say so once
+    # per launch and name the attended reclaim command — silence here is how
+    # boxes reach 15GB+ of .worktrees/ without anyone noticing.
+    try:
+        from hermes_cli.worktree_gc import worktrees_summary
+
+        count, size_mb = worktrees_summary(repo_root)
+        if count >= 10 or (size_mb or 0) >= 5120:
+            size_txt = f"{size_mb / 1024:.1f}GB" if size_mb else "unknown size"
+            logger.warning(
+                ".worktrees/ holds %d tree(s) (%s) — run `hermes worktree list` "
+                "to audit and `hermes worktree prune` to reclaim safely.",
+                count, size_txt,
+            )
+    except Exception:
+        pass
 
 
 def _prune_orphaned_branches(repo_root: str) -> None:
