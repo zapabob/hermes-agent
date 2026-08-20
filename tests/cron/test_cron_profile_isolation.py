@@ -68,3 +68,19 @@ def test_cron_storage_anchors_at_profile_home(tmp_path, monkeypatch):
         importlib.reload(jobs)
 
 
+def test_job_needs_sequential_tick_for_workdir_or_named_profile():
+    """Tick must serialize jobs that mutate process-global Hermes state.
+
+    A live gateway loop died every minute with
+    ``NameError: name '_job_needs_sequential_tick' is not defined`` after a
+    merge dropped the helper while leaving the call site in ``tick()``.
+    """
+    from cron.scheduler import _job_needs_sequential_tick
+
+    assert _job_needs_sequential_tick({}) is False
+    assert _job_needs_sequential_tick({"workdir": "C:/tmp/project"}) is True
+    assert _job_needs_sequential_tick({"profile": "alpha"}) is True
+    assert _job_needs_sequential_tick({"profile": "default"}) is True
+    assert _job_needs_sequential_tick({"profile": "  "}) is False
+
+

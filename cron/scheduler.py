@@ -1430,6 +1430,138 @@ def _get_hermes_home() -> Path:
     return _hermes_home or get_hermes_home()
 
 
+def _job_needs_sequential_tick(job: dict) -> bool:
+    """Return True when a due job mutates process-global Hermes state."""
+    if (job.get("workdir") or "").strip():
+        return True
+    profile = str(job.get("profile") or "").strip()
+    return bool(profile)
+
+
+def _execution_home_for_job(job: dict | None) -> Path:
+    """Resolve the Hermes home a job must execute under.
+
+    A missing profile follows the scheduler's active home. Explicit
+    ``default`` selects the canonical default root. Any other name must
+    resolve to a real profile directory under the profiles root.
+    """
+    profile = str((job or {}).get("profile") or "").strip()
+    if not profile:
+        return _get_hermes_home()
+    if profile.lower() == "default":
+        return get_default_hermes_root()
+
+    from hermes_cli.profiles import (
+        get_profile_dir,
+        normalize_profile_name,
+        profile_exists,
+        validate_profile_name,
+    )
+
+    canonical_profile = normalize_profile_name(profile)
+    validate_profile_name(canonical_profile)
+    if not profile_exists(canonical_profile):
+        raise ValueError(f"Cron profile {canonical_profile!r} does not exist")
+
+    profiles_root = (get_default_hermes_root() / "profiles").resolve()
+    profile_home = get_profile_dir(canonical_profile).resolve()
+    try:
+        profile_home.relative_to(profiles_root)
+    except ValueError as exc:
+        raise ValueError(
+            f"Cron profile {canonical_profile!r} resolves outside the profiles root"
+        ) from exc
+    return profile_home
+
+
+@contextlib.contextmanager
+def _cron_profile_guard(job: dict):
+    """Exclude named-profile global overrides from every other cron run."""
+    depth = _profile_home_guard_depth.get()
+    if depth:
+        token = _profile_home_guard_depth.set(depth + 1)
+        try:
+            yield
+        finally:
+            _profile_home_guard_depth.reset(token)
+        return
+
+    profile = str(job.get("profile") or "").strip()
+    holds_write = bool(profile)
+    if holds_write:
+        _profile_home_lock.acquire_write()
+    else:
+        _profile_home_lock.acquire_read()
+    token = _profile_home_guard_depth.set(1)
+    try:
+        yield
+    finally:
+        _profile_home_guard_depth.reset(token)
+        if holds_write:
+            _profile_home_lock.release_write()
+        else:
+            _profile_home_lock.release_read()
+
+
+@contextlib.contextmanager
+def _cron_profile_context(job: dict):
+    """Temporarily switch HERMES_HOME for profile-pinned cron jobs."""
+    global _hermes_home
+
+    profile_name = str(job.get("profile") or "").strip()
+    if not profile_name:
+        yield
+        return
+
+    try:
+        from hermes_cli.profiles import normalize_profile_name
+
+        canon = normalize_profile_name(profile_name)
+        home = _execution_home_for_job(job)
+    except ValueError as exc:
+        logger.error(
+            "Job '%s': refusing invalid or missing profile %r (%s)",
+            job.get("id"),
+            profile_name,
+            exc,
+        )
+        raise
+
+    prior_home = _hermes_home
+    prior_env = os.environ.get("HERMES_HOME")
+    home_override_token = set_hermes_home_override(home)
+    _hermes_home = home
+    os.environ["HERMES_HOME"] = str(home)
+    logger.info(
+        "Job '%s': switched to profile %r (%s)",
+        job.get("id"),
+        canon,
+        home,
+    )
+    try:
+        yield
+    finally:
+        _hermes_home = prior_home
+        if prior_env is None:
+            os.environ.pop("HERMES_HOME", None)
+        else:
+            os.environ["HERMES_HOME"] = prior_env
+        reset_hermes_home_override(home_override_token)
+
+
+def _scripts_dir_for_job(job: dict | None) -> Path:
+    """Resolve the scripts directory for a cron job.
+
+    A named profile selects its validated profile home, explicit ``default``
+    selects the canonical default root, and a missing profile follows the
+    scheduler's active home. Named resolution is derived from the immutable
+    job field rather than mutable process-global profile context.
+    """
+    scripts_dir = _execution_home_for_job(job) / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    return scripts_dir
+
+
 def _get_lock_paths() -> tuple[Path, Path]:
     """Resolve cron lock paths at call time so profile/env changes are honored."""
     hermes_home = _get_hermes_home()

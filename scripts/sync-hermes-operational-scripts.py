@@ -40,6 +40,7 @@ ALLOWLIST = (
     "wm-osint-pdb-evening.py",
     "wm-osint-pdb-morning.py",
     "worldmonitor-fusion-jp-security-noagent.py",
+    "master-heartbeat.py",
 )
 
 

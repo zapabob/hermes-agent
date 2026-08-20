@@ -15,15 +15,15 @@ import { resolveRequestedPathForIpc } from './hardening'
 const SEP = String.fromCharCode(31)
 
 // HermesGitBranch now carries a `sha` field (commit the ref points at), so the
-function execGit(gitBin, args, cwd) {
-  return new Promise((resolve, reject) => {
+function runGit(gitBin: string, args: string[], cwd: string): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
     execFile(
       gitBin,
       args,
       { cwd, windowsHide: true, timeout: 30_000, maxBuffer: 8 * 1024 * 1024 },
       (err, stdout, stderr) => {
         if (err) {
-          err.stderr = String(stderr || '')
+          ;(err as any).stderr = String(stderr || '')
           reject(err)
 
           return

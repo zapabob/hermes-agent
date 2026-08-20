@@ -259,6 +259,20 @@ def _safe_environment(
             env["LOCALAPPDATA"] = str(process_home / "AppData" / "Local")
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
+    # Playwright resolves its browser bundle under LOCALAPPDATA by default, but
+    # the sandboxed child gets LOCALAPPDATA/HOME rewritten to an isolated root,
+    # so a browser installed for the host is invisible to it and every
+    # browser-backed search fails. Pin the shared browser cache explicitly so
+    # full-scope runs can actually drive a browser.
+    browsers_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    if not browsers_path:
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        if local_appdata:
+            candidate = Path(local_appdata) / "ms-playwright"
+            if candidate.is_dir():
+                browsers_path = str(candidate)
+    if browsers_path:
+        env["PLAYWRIGHT_BROWSERS_PATH"] = browsers_path
     if include_secret:
         secret_name = _api_key_env(entry)
         secret = os.environ.get(secret_name)
@@ -282,6 +296,45 @@ def _write_receipt(run_root: Path, payload: dict[str, Any]) -> Path:
 def _new_run_root() -> tuple[str, Path]:
     run_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:10]}"
     return run_id, get_hermes_home() / "openmanus" / "runs" / run_id
+
+
+def _host_search_seed(task: str, limit: int = 8) -> str:
+    """Prepend host-side search hits to a full-scope task.
+
+    OpenManus's bundled engines scrape search-result HTML directly, which the
+    engines themselves defeat from a residential host: Google serves a CAPTCHA,
+    DuckDuckGo rate-limits, and Bing returns opaque ``bing.com/ck/a`` redirect
+    stubs. The agent then burns its whole step budget rediscovering that.
+    Hermes already has a working, configured search backend, so seed the task
+    with real URLs and let the worker's browser do the deep reading it is
+    actually good at. Best-effort: any failure returns an empty seed and the
+    worker falls back to its own engines.
+    """
+    try:
+        from tools.web_tools import web_search_tool  # local import: optional surface
+    except Exception:
+        return ""
+    try:
+        raw = web_search_tool(query=task[:400], limit=limit)
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        return ""
+    rows = ((payload or {}).get("data") or {}).get("web") or []
+    lines: list[str] = []
+    for row in rows[:limit]:
+        url = str((row or {}).get("url") or "").strip()
+        title = str((row or {}).get("title") or "").strip()
+        if url.startswith(("http://", "https://")):
+            lines.append(f"- {title or url}: {url}")
+    if not lines:
+        return ""
+    return (
+        "Verified starting sources from the host's search backend "
+        "(open these directly with the browser tool instead of running a new "
+        "web search — the bundled search engines are blocked from this host):\n"
+        + "\n".join(lines)
+        + "\n\nTask:\n"
+    )
 
 
 def _validate_request(args: dict[str, Any]) -> tuple[dict[str, Any], Path]:
@@ -310,6 +363,10 @@ def _validate_request(args: dict[str, Any]) -> tuple[dict[str, Any], Path]:
             raise ValueError("configure plugins.entries.openmanus.llm.model and llm.base_url")
         if not bool(args.get("no_secret_env")) and not os.environ.get(_api_key_env(entry)):
             raise ValueError(f"secret environment variable {_api_key_env(entry)} is not set")
+    if network_scope == "full" and not dry_run and entry.get("host_search_seed", True):
+        seed = _host_search_seed(task)
+        if seed and len(seed) + len(task) <= MAX_PROMPT_CHARS:
+            task = seed + task
     normalized = dict(args)
     normalized["task"] = task
     normalized["dry_run"] = dry_run

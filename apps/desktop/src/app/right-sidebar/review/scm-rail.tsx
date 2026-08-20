@@ -42,6 +42,19 @@ import {
   scmTagDelete
 } from '@/store/scm-refs'
 
+function skeleton(loading: boolean, empty: boolean) {
+  if (!loading || !empty) {
+    return null
+  }
+
+  return (
+    <div className="space-y-1 px-2.5 py-1.5" data-slot="tree-skeleton">
+      <div className="h-3 w-3/4 animate-pulse rounded bg-(--ui-bg-tertiary)" />
+      <div className="h-3 w-1/2 animate-pulse rounded bg-(--ui-bg-tertiary)" />
+    </div>
+  )
+}
+
 function formatScmTime(value: string): string {
   const timestamp = Date.parse(value)
 

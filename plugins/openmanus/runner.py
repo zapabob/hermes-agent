@@ -67,11 +67,28 @@ def _write_config(checkout: Path, args: argparse.Namespace) -> None:
             "disable_security = false",
             "max_content_length = 4000",
             "",
+            # Broad web coverage for full-scope runs: OpenManus defaults leave
+            # [search] unset, so the agent falls back to a single engine and
+            # gives up when that one rate-limits. Chaining every bundled engine
+            # with retries is what makes "search the whole web" actually hold.
+            # Engine order is empirical: Bing's HTML endpoint returns opaque
+            # bing.com/ck/a redirect stubs with unrelated titles, and
+            # DuckDuckGo's rate-limits aggressively from a single host, so
+            # neither is the primary.
+            "[search]",
+            'engine = "Google"',
+            'fallback_engines = ["DuckDuckGo", "Baidu", "Bing"]',
+            "retry_delay = 20",
+            "max_retries = 4",
+            "",
             "[mcp]",
             'server_reference = "app.mcp.server"',
             "",
             "[runflow]",
             "use_data_analysis_agent = false",
+            "",
+            "[sandbox]",
+            "use_sandbox = false",
             "",
             "[daytona]",
             "daytona_api_key = \"\"",
@@ -266,7 +283,12 @@ async def _run(args: argparse.Namespace) -> str:
     _copy_source(source_root, checkout, workspace_root)
     if args.network_scope != "full":
         _disable_network_imports(checkout)
-        _disable_optional_sandbox_imports(checkout)
+    # The Daytona cloud-sandbox modules authenticate at import time
+    # (vendor/openmanus/app/daytona/sandbox.py builds a Daytona client at module
+    # level), so importing them without DAYTONA_API_KEY aborts the run before
+    # the agent starts — even with [sandbox] use_sandbox = false. Local
+    # execution never needs the cloud sandbox, so stub it for every scope.
+    _disable_optional_sandbox_imports(checkout)
     config_path = checkout / "config" / "config.toml"
     agent = None
     try:
@@ -282,13 +304,20 @@ async def _run(args: argparse.Namespace) -> str:
 
             agent = await Manus.create()
         agent.max_steps = max(1, int(args.max_steps))
-        if args.network_scope != "full":
-            from app.tool import ToolCollection  # pyright: ignore[reportMissingImports]
+        from app.tool import ToolCollection  # pyright: ignore[reportMissingImports]
 
+        if args.network_scope != "full":
             blocked = ("browser", "mcp", "web")
             agent.available_tools = ToolCollection(
                 *(tool for tool in agent.available_tools.tools if not any(word in tool.name.lower() for word in blocked))
             )
+        # This runner is non-interactive: the child's stdin is already consumed
+        # by the prompt, so ask_human raises "EOF when reading a line" and the
+        # agent treats that failed step as a dead end and terminates early.
+        # Removing it keeps the agent working with the tools it actually has.
+        agent.available_tools = ToolCollection(
+            *(tool for tool in agent.available_tools.tools if tool.name.lower() != "ask_human")
+        )
         result = await agent.run(args.prompt)
         return str(result or "")
     finally:

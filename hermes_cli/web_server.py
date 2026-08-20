@@ -10103,7 +10103,7 @@ async def _telegram_onboarding_request(
 
 @app.post("/api/messaging/telegram/onboarding/start")
 async def start_telegram_onboarding(body: TelegramOnboardingStart):
-    bot_name = (body.bot_name or "Hermes Agent").strip() or "Hermes Agent"
+    bot_name = (body.bot_name or "Hermes").strip() or "Hermes"
     payload = await _telegram_onboarding_request(
         "POST",
         "/v1/telegram/pairings",

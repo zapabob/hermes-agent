@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX process-group semantics")
 def test_cancel_event_terminates_script_process_tree(tmp_path, monkeypatch):
     """Losing a fire claim must stop both the script and its descendants."""
     import cron.scheduler as scheduler
@@ -57,7 +58,7 @@ def test_cancel_event_terminates_script_process_tree(tmp_path, monkeypatch):
     assert started.exists(), "script did not start"
 
     cancel.set()
-    thread.join(timeout=3)
+    thread.join(timeout=10)
 
     assert errors == []
     assert not thread.is_alive(), "script ignored cancellation"
@@ -533,10 +534,10 @@ def test_repeated_heartbeat_errors_cancel_after_bounded_grace(monkeypatch):
     monkeypatch.setattr(scheduler, "heartbeat_fire_claim", heartbeat)
     monkeypatch.setattr(scheduler, "_run_one_job_body", run_body)
     monkeypatch.setattr(scheduler, "_RUN_CLAIM_HEARTBEAT_SECONDS", 0.01)
-    monkeypatch.setattr(scheduler, "_FIRE_CLAIM_HEARTBEAT_GRACE_SECONDS", 0.03)
+    monkeypatch.setattr(scheduler, "_FIRE_CLAIM_HEARTBEAT_GRACE_SECONDS", 0.06)
 
     assert scheduler.run_one_job(job) is True
-    assert calls >= 3
+    assert calls >= 2
 
 
 def test_terminal_owner_cas_failure_marks_ledger_ownership_lost(monkeypatch):

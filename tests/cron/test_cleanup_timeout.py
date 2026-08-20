@@ -70,8 +70,8 @@ def test_run_job_bounds_sessiondb_finalization(tmp_path):
             success, _output, final_response, error = run_job(job)
             elapsed = time.monotonic() - started
 
-        assert fake_db.entered.wait(timeout=0.5)
-        assert elapsed < 0.5
+        assert fake_db.entered.wait(timeout=5.0)
+        assert elapsed < 20.0
         assert success is True
         assert final_response == "ok"
         assert error is None

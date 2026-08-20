@@ -54,6 +54,7 @@ const branch = (over: Partial<HermesGitBranch> = {}): HermesGitBranch => ({
   isDefault: false,
   isRemote: false,
   worktreePath: null,
+  sha: '1234567890abcdef1234567890abcdef12345678',
   ...over
 })
 

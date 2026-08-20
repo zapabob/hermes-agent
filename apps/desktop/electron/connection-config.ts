@@ -506,6 +506,8 @@ export interface ProfileRouteOptions {
   primaryRemoteActive?: boolean
   /** A stored per-profile entry exists for this profile (local or remote). */
   ownEntry?: boolean
+  /** Whether the connection is a shared remote backend. */
+  sharedRemote?: boolean
 }
 
 export interface ProfileBackendRoute {
@@ -574,6 +576,7 @@ function resolveProfileBackendRoute(profile, opts: ProfileRouteOptions = {}): Pr
  * selectors such as `all` or another concrete profile retain their meaning.
  */
 function pathWithGlobalRemoteProfile(path, profile, opts: ProfileRouteOptions = {}) {
+  const scopedProfile = connectionScopeKey(profile)
   const translated = translateSelfProfileQuery(path, profile, opts.backendProfile)
 
   if (translated !== path) {

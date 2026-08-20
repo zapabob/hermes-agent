@@ -27,7 +27,7 @@ TELEGRAM_ONBOARDING_URL_ENV = "TELEGRAM_ONBOARDING_URL"
 # actual deep link, so this is only used by local helpers/tests.
 DEFAULT_MANAGER_BOT = "HermesSetupBot"
 
-DEFAULT_BOT_NAME = "Hermes Agent"
+DEFAULT_BOT_NAME = "Hermes"
 DEFAULT_POLL_TIMEOUT = 180
 POLL_INTERVAL = 2
 

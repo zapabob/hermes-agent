@@ -453,8 +453,6 @@ export interface PaginatedSessions {
 }
 
 export interface RpcEvent<T = unknown> {
-  /** Renderer-side source tag added by the Desktop gateway registry. */
-  connectionId?: string
   payload?: T
   profile?: string
   /** Registry connection whose socket delivered the event (renderer-side tag;

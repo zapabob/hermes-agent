@@ -276,16 +276,142 @@ export const slateTheme: DesktopTheme = {
   }
 }
 
+export const hakuaTheme: DesktopTheme = {
+  name: 'hakua',
+  label: 'Hakua',
+  description: 'Sovereign ASI Hakua — high-density purple and gold',
+  colors: {
+    background: '#120824',
+    foreground: '#FFF0F5',
+    card: '#1c1035',
+    cardForeground: '#FFF0F5',
+    muted: '#28184c',
+    mutedForeground: '#BA55D3',
+    popover: '#1a0d33',
+    popoverForeground: '#FFF0F5',
+    primary: '#FFD700',
+    primaryForeground: '#120824',
+    secondary: '#2e185b',
+    secondaryForeground: '#FFF0F5',
+    accent: '#DA70D6',
+    accentForeground: '#FFFFFF',
+    border: '#4B0082',
+    input: '#1f0e3d',
+    ring: '#FFD700',
+    midground: '#DA70D6',
+    composerRing: '#FFD700',
+    destructive: '#FF1493',
+    destructiveForeground: '#FFFFFF',
+    sidebarBackground: '#0d051a',
+    sidebarBorder: '#3d0a6a',
+    userBubble: '#2e1458',
+    userBubbleBorder: '#6a1b9a'
+  },
+  darkColors: {
+    background: '#0d0418',
+    foreground: '#FFF0F5',
+    card: '#160829',
+    cardForeground: '#FFF0F5',
+    muted: '#220c40',
+    mutedForeground: '#DA70D6',
+    popover: '#160829',
+    popoverForeground: '#FFF0F5',
+    primary: '#FFD700',
+    primaryForeground: '#0d0418',
+    secondary: '#280f4a',
+    secondaryForeground: '#FFF0F5',
+    accent: '#FF69B4',
+    accentForeground: '#FFFFFF',
+    border: '#4B0082',
+    input: '#180730',
+    ring: '#FFD700',
+    midground: '#DA70D6',
+    composerRing: '#FFD700',
+    destructive: '#FF1493',
+    destructiveForeground: '#FFFFFF',
+    sidebarBackground: '#080210',
+    sidebarBorder: '#350660',
+    userBubble: '#240b44',
+    userBubbleBorder: '#5c1088'
+  }
+}
+
+export const twilightHakuaTheme: DesktopTheme = {
+  name: 'twilight-hakua',
+  label: 'Twilight Hakua',
+  description: 'はくあ — 宵のインディゴ×黄昏テーマ（壁紙付き）',
+  backgroundImageFit: 'cover',
+  backgroundImagePosition: 'center',
+  backgroundOverlay: '#120a22ba',
+  colors: {
+    background: '#1a1030',
+    foreground: '#e8d8c8',
+    card: '#22153e',
+    cardForeground: '#ffe8d0',
+    muted: '#2a1a4a',
+    mutedForeground: '#a898a8',
+    popover: '#1e1038',
+    popoverForeground: '#ffe8d0',
+    primary: '#e87a5a',
+    primaryForeground: '#1a1030',
+    secondary: '#2e1c50',
+    secondaryForeground: '#ffe8d0',
+    accent: '#ffb84d',
+    accentForeground: '#1a1030',
+    border: '#3d2a5a',
+    input: '#140a28',
+    ring: '#e87a5a',
+    midground: '#a87ae8',
+    composerRing: '#e87a5a',
+    destructive: '#e85a7a',
+    destructiveForeground: '#ffffff',
+    sidebarBackground: '#16092e',
+    sidebarBorder: '#3d2a5a',
+    userBubble: '#2d184f',
+    userBubbleBorder: '#5a3880'
+  },
+  darkColors: {
+    background: '#140a28',
+    foreground: '#e8d8c8',
+    card: '#1c0f38',
+    cardForeground: '#ffe8d0',
+    muted: '#241444',
+    mutedForeground: '#a898a8',
+    popover: '#180c30',
+    popoverForeground: '#ffe8d0',
+    primary: '#e87a5a',
+    primaryForeground: '#140a28',
+    secondary: '#28164a',
+    secondaryForeground: '#ffe8d0',
+    accent: '#ffb84d',
+    accentForeground: '#140a28',
+    border: '#382252',
+    input: '#100720',
+    ring: '#e87a5a',
+    midground: '#a87ae8',
+    composerRing: '#e87a5a',
+    destructive: '#e85a7a',
+    destructiveForeground: '#ffffff',
+    sidebarBackground: '#0f0520',
+    sidebarBorder: '#351d4e',
+    userBubble: '#261245',
+    userBubbleBorder: '#4e2d70'
+  }
+}
+
 export const BUILTIN_THEMES: Record<string, DesktopTheme> = {
   nous: nousTheme,
   midnight: midnightTheme,
   ember: emberTheme,
   mono: monoTheme,
   cyberpunk: cyberpunkTheme,
-  slate: slateTheme
+  slate: slateTheme,
+  hakua: hakuaTheme,
+  'twilight-hakua': twilightHakuaTheme
 }
 
 export const BUILTIN_THEME_LIST = Object.values(BUILTIN_THEMES)
 
 /** Skin used when nothing is persisted or the persisted name is retired. */
 export const DEFAULT_SKIN_NAME = 'nous'
+

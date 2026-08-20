@@ -13236,10 +13236,10 @@ async function handleHermesApiRequest(request) {
   // list and WS traffic use) instead of the legacy profile route; a shared
   // remote/cloud host serves every profile via ?profile=, so scope the path.
   // '' / 'local' fall through to the byte-identical v1 route below (#87882).
-  const registryConnectionId = apiRequestRegistryConnectionId(request)
+  const requestedConnectionId = apiRequestRegistryConnectionId(request)
 
-  if (registryConnectionId) {
-    const connection: any = await ensureRegistryBackend(registryConnectionId, request?.profile)
+  if (requestedConnectionId) {
+    const connection: any = await ensureRegistryBackend(requestedConnectionId, request?.profile)
 
     // A shared remote host serves every profile via ?profile=; an SSH-scoped
     // backend instead runs AS one remote profile, so an explicit self-profile
