@@ -10,6 +10,7 @@ import {
   setChangeEventsAvailable
 } from '@/store/live-sync'
 import { dropSessionState, unbindTileRuntime } from '@/store/session-states'
+import { activeGatewayConnectionId, gatewayScope } from '@/store/gateway'
 // Leaf import (not the `@/themes` barrel) to avoid pulling the ThemeProvider
 // module graph into the gateway event hot path.
 import { ingestBackendSkin } from '@/themes/backend-sync'
@@ -23,7 +24,12 @@ export function handleLifecycleEvent(ctx: GatewayEventContext): boolean {
   if (event.type === 'gateway.ready') {
     // Seed the active skin into the desktop theme registry without applying,
     // so a fresh connect never overrides the user's persisted desktop theme.
-    ingestBackendSkin((payload as { skin?: HermesSkin } | undefined)?.skin, { apply: false })
+    ingestBackendSkin((payload as { skin?: HermesSkin } | undefined)?.skin, {
+      apply: false,
+      scope:
+        ctx.sourceScope ??
+        gatewayScope(event.connectionId ?? activeGatewayConnectionId(), event.profile ?? deps.activeGatewayProfile)
+    })
     // Backends with the change watcher broadcast pet/cron/sessions change
     // events; consumers demote their legacy polls to slow backstops.
     setChangeEventsAvailable(Boolean((payload as { change_events?: boolean } | undefined)?.change_events))
@@ -34,9 +40,12 @@ export function handleLifecycleEvent(ctx: GatewayEventContext): boolean {
   if (event.type === 'skin.changed') {
     // A runtime skin switch (Hermes activating an authored skin, or `/skin`
     // on another surface). Only the active source+profile's change repaints.
-    if (fromActiveSource()) {
-      ingestBackendSkin(payload as HermesSkin | undefined, { apply: true })
-    }
+    ingestBackendSkin(payload as HermesSkin | undefined, {
+      apply: fromActiveSource(),
+      scope:
+        ctx.sourceScope ??
+        gatewayScope(event.connectionId ?? activeGatewayConnectionId(), event.profile ?? deps.activeGatewayProfile)
+    })
 
     return true
   }

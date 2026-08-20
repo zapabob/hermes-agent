@@ -1,4 +1,4 @@
-import { readDesktopFileDataUrl } from '@/lib/desktop-fs'
+import { readDesktopFileDataUrl, type DesktopFsSourceScope } from '@/lib/desktop-fs'
 import { capitalize } from '@/lib/text'
 import { $connection } from '@/store/session'
 
@@ -77,13 +77,44 @@ export function isFileMediaPath(path: string): boolean {
   return /^(?:file:|\/|~\/|[a-z]:[\\/]|\\\\)/i.test(path)
 }
 
-export async function resolveMediaDisplaySrc(path: string): Promise<string> {
+/** Reject UNC/network-share paths before any renderer or backend filesystem bridge. */
+export function isNetworkFilePath(path: string): boolean {
+  const raw = path.trim()
+  const normalized = raw.replace(/\\/g, '/')
+
+  if (normalized.startsWith('//')) {
+    return true
+  }
+
+  if (!/^file:/i.test(raw)) {
+    return false
+  }
+
+  try {
+    const url = new URL(raw)
+    const host = url.hostname.trim().toLowerCase()
+
+    if (host && host !== 'localhost') {
+      return true
+    }
+
+    return decodeURIComponent(url.pathname).replace(/\\/g, '/').startsWith('//')
+  } catch {
+    return false
+  }
+}
+
+export async function resolveMediaDisplaySrc(path: string, scope?: DesktopFsSourceScope): Promise<string> {
   if (isInlineMediaSrc(path) || !isFileMediaPath(path)) {
     return path
   }
 
-  if (window.hermesDesktop && isRemoteGateway()) {
-    return gatewayMediaDataUrl(path)
+  if (isNetworkFilePath(path)) {
+    throw new Error('Network-share media paths are not allowed')
+  }
+
+  if (window.hermesDesktop && (isRemoteGateway() || scope)) {
+    return gatewayMediaDataUrl(path, scope)
   }
 
   if (!window.hermesDesktop?.readFileDataUrl) {
@@ -113,6 +144,10 @@ export async function resolveMediaPlaybackSrc(path: string): Promise<string> {
 // gateway-local paths to an authenticated /api/files/download URL (the file
 // lives on the gateway, not this disk); local mode keeps the file:// form.
 export function mediaExternalUrl(path: string): string {
+  if (isNetworkFilePath(path)) {
+    throw new Error('Network-share media paths are not allowed')
+  }
+
   if (/^https?:/i.test(path)) {
     return path
   }
@@ -135,6 +170,10 @@ export function mediaExternalUrl(path: string): string {
 // HTTPS source cannot authenticate reliably. The custom protocol keeps secrets
 // out of renderer URLs while forwarding Range requests to /api/files/stream.
 export function mediaGatewayStreamUrl(path: string): string {
+  if (isNetworkFilePath(path)) {
+    throw new Error('Network-share media paths are not allowed')
+  }
+
   const conn = $connection.get()
 
   if (isRemoteGateway()) {
@@ -151,6 +190,10 @@ export function mediaGatewayStreamUrl(path: string): string {
 // file with Range support. Used for audio/video so playback bypasses the data
 // URL size cap and supports seeking. `path` may be a plain path or `file://…`.
 export function mediaStreamUrl(path: string): string {
+  if (isNetworkFilePath(path)) {
+    throw new Error('Network-share media paths are not allowed')
+  }
+
   return `hermes-media://stream/${encodeURIComponent(filePathFromMediaPath(path))}`
 }
 
@@ -172,8 +215,22 @@ export function filePathFromMediaPath(path: string): string {
   }
 
   try {
-    return decodeURIComponent(new URL(path).pathname)
+    const url = new URL(path)
+
+    if (url.hostname && url.hostname.toLowerCase() !== 'localhost') {
+      throw new Error('Network-share file URLs are not allowed')
+    }
+
+    const decoded = decodeURIComponent(url.pathname)
+
+    // URL.pathname retains a leading slash for Windows drive paths. Strip it
+    // so file:///C:/... does not become /C:/... or C:\C:\... downstream.
+    return decoded.replace(/^\/[a-z]:[\\/]/i, match => match.slice(1))
   } catch {
+    if (isNetworkFilePath(path)) {
+      throw new Error('Network-share file URLs are not allowed')
+    }
+
     return path.replace(/^file:\/\//, '')
   }
 }
@@ -188,8 +245,12 @@ export function isRemoteGateway(): boolean {
 // bridge. Remote Desktop artifacts can live anywhere the gateway can read
 // (workspace, skills, ~/.hermes/cache, etc.); /api/media is intentionally
 // narrower and rejects non-images plus images outside its media roots.
-export async function gatewayMediaDataUrl(path: string): Promise<string> {
-  return readDesktopFileDataUrl(filePathFromMediaPath(path))
+export async function gatewayMediaDataUrl(path: string, scope?: DesktopFsSourceScope): Promise<string> {
+  if (isNetworkFilePath(path)) {
+    throw new Error('Network-share media paths are not allowed')
+  }
+
+  return readDesktopFileDataUrl(filePathFromMediaPath(path), scope)
 }
 
 // Remote-mode replacement for opening gateway-local file paths with file://.

@@ -7,6 +7,7 @@ import {
   filePathFromMediaPath,
   gatewayMediaDataUrl,
   isInlineMediaSrc,
+  isNetworkFilePath,
   isRemoteGateway,
   mediaExternalUrl,
   mediaGatewayStreamUrl,
@@ -42,6 +43,25 @@ describe('filePathFromMediaPath', () => {
 
   it('decodes a file:// URL with encoded characters', () => {
     expect(filePathFromMediaPath('file:///tmp/a%20b.png')).toBe('/tmp/a b.png')
+  })
+
+  it('normalizes Windows drive file URLs without duplicating the drive prefix', () => {
+    expect(filePathFromMediaPath('file:///C:/Users/Bob/wallpaper.png')).toBe('C:/Users/Bob/wallpaper.png')
+  })
+
+  it('rejects non-local file URL authorities', () => {
+    expect(() => filePathFromMediaPath('file://fileserver/share/wallpaper.png')).toThrow(/Network-share/)
+  })
+})
+
+describe('isNetworkFilePath', () => {
+  it.each([
+    String.raw`\\fileserver\share\wallpaper.png`,
+    '//fileserver/share/wallpaper.png',
+    'file://fileserver/share/wallpaper.png',
+    'file:///%5C%5Cfileserver%5Cshare%5Cwallpaper.png'
+  ])('rejects network spelling %s', path => {
+    expect(isNetworkFilePath(path)).toBe(true)
   })
 })
 

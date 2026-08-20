@@ -18,14 +18,33 @@
  */
 
 import type { HermesSkin } from '@hermes/shared/skin'
+import { registryBackendScopeKey } from '@hermes/shared'
 import { atom } from 'nanostores'
+
+import { $connection } from '@/store/session'
 
 import { BUILTIN_THEMES } from './presets'
 import { skinToDesktopTheme } from './skin'
-import type { DesktopTheme } from './types'
+import type { DesktopTheme, DesktopThemeSource } from './types'
 
-/** Skins pushed by the backend, keyed by name. Merged by `listAllThemes`. */
+/** Skins pushed by each backend, keyed first by its connection/profile scope. */
+const $backendThemesByScope = atom<Record<string, Record<string, DesktopTheme>>>({})
+
+/** Active-scope view consumed by the theme registry. Kept as a writable atom
+ * for compatibility with existing theme tests and plugin integrations. */
 export const $backendThemes = atom<Record<string, DesktopTheme>>({})
+
+function activeScopeKey(): string {
+  const connection = $connection.get()
+
+  return registryBackendScopeKey(connection?.connectionId ?? null, connection?.profile ?? null)
+}
+
+function publishActiveScope(scoped = $backendThemesByScope.get()): void {
+  $backendThemes.set(scoped[activeScopeKey()] ?? {})
+}
+
+$connection.subscribe(() => publishActiveScope())
 
 /** One-shot skin name the ThemeProvider should switch to (it clears this). */
 export const $pendingSkinApply = atom<string | null>(null)
@@ -36,11 +55,28 @@ export const $pendingSkinApply = atom<string | null>(null)
 // A `skin.changed` matching a seed-only baseline still applies: the seed
 // records without painting, so if the activation event was missed (backend
 // restart / disconnected), an explicit re-affirm must repaint, not no-op.
-let lastSynced: { applied: boolean; name: string } | null = null
+const lastSyncedByScope = new Map<string, { applied: boolean; name: string }>()
+
+function sourceFor(source?: DesktopThemeSource): DesktopThemeSource {
+  if (source) {
+    return Object.freeze({
+      connectionId: source.connectionId ?? null,
+      profile: source.profile.trim() || 'default'
+    })
+  }
+
+  const connection = $connection.get()
+
+  return Object.freeze({
+    connectionId: connection?.connectionId ?? null,
+    profile: connection?.profile?.trim() || 'default'
+  })
+}
 
 /** Test-only: reset the module's apply guard + registry between cases. */
 export function __resetBackendSkinSync(): void {
-  lastSynced = null
+  lastSyncedByScope.clear()
+  $backendThemesByScope.set({})
   $backendThemes.set({})
   $pendingSkinApply.set(null)
 }
@@ -51,12 +87,18 @@ export function __resetBackendSkinSync(): void {
  * change. Built-in names keep the desktop's own palette while still accepting
  * wallpaper, fit, position, and overlay from the canonical backend skin.
  */
-export function ingestBackendSkin(skin: HermesSkin | undefined | null, { apply }: { apply: boolean }): void {
+export function ingestBackendSkin(
+  skin: HermesSkin | undefined | null,
+  { apply, scope }: { apply: boolean; scope?: DesktopThemeSource }
+): void {
   const name = (skin && typeof skin === 'object' ? (skin.name ?? '') : '').trim()
 
   if (!name) {
     return
   }
+
+  const source = sourceFor(scope)
+  const scopeKey = registryBackendScopeKey(source.connectionId, source.profile)
 
   // `default` is "no opinion" on the PALETTE — the desktop keeps its own default
   // (nous), so we never register a converted theme under `default`. It is still a
@@ -73,7 +115,8 @@ export function ingestBackendSkin(skin: HermesSkin | undefined | null, { apply }
       return
     }
 
-    const current = $backendThemes.get()
+    const scoped = $backendThemesByScope.get()
+    const current = scoped[scopeKey] ?? {}
     const builtin = BUILTIN_THEMES[name]
 
     const theme = builtin
@@ -83,31 +126,40 @@ export function ingestBackendSkin(skin: HermesSkin | undefined | null, { apply }
             backgroundImage: converted.backgroundImage,
             backgroundImageFit: converted.backgroundImageFit,
             backgroundImagePosition: converted.backgroundImagePosition,
-            backgroundOverlay: converted.backgroundOverlay
+            backgroundOverlay: converted.backgroundOverlay,
+            backgroundImageSource: source
           }
         : null
-      : converted
+      : converted.backgroundImage
+        ? { ...converted, backgroundImageSource: source }
+        : converted
 
     if (!theme && current[name]) {
       const { [name]: _removed, ...rest } = current
-      $backendThemes.set(rest)
+      const next = { ...scoped, [scopeKey]: rest }
+      $backendThemesByScope.set(next)
+      if (scopeKey === activeScopeKey()) publishActiveScope(next)
     } else if (theme && JSON.stringify(current[name]) !== JSON.stringify(theme)) {
-      $backendThemes.set({ ...current, [name]: theme })
+      const next = { ...scoped, [scopeKey]: { ...current, [name]: theme } }
+      $backendThemesByScope.set(next)
+      if (scopeKey === activeScopeKey()) publishActiveScope(next)
     }
   }
+
+  const lastSynced = lastSyncedByScope.get(scopeKey)
 
   if (!apply) {
     // Connect-time seed: record without painting. A reconnect re-seed keeps an
     // earlier real apply's flag so repeat events can't override a manual switch.
     if (lastSynced?.name !== name || !lastSynced.applied) {
-      lastSynced = { applied: false, name }
+      lastSyncedByScope.set(scopeKey, { applied: false, name })
     }
 
     return
   }
 
   if (name !== lastSynced?.name || !lastSynced.applied) {
-    lastSynced = { applied: true, name }
+    lastSyncedByScope.set(scopeKey, { applied: true, name })
     $pendingSkinApply.set(name)
   }
 }

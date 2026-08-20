@@ -2189,12 +2189,20 @@ def _fs_path(raw_path: str) -> Path:
         if raw.lower().startswith("file:"):
             parsed = urllib.parse.urlparse(raw)
             if parsed.netloc and parsed.netloc not in {"", "localhost"}:
-                raise ValueError
-            raw = urllib.request.url2pathname(parsed.path)
+                raise PermissionError("remote file URL authority")
+            raw = urllib.request.url2pathname(urllib.parse.unquote(parsed.path))
+        # Reject raw and decoded UNC/network-share spellings before Path or any
+        # endpoint can stat, scan, open, or stream the target.  This remains
+        # OS-neutral so Windows backslashes cannot bypass the POSIX test path.
+        normalized = raw.replace("\\", "/")
+        if normalized.startswith("//") and len(normalized) > 2 and normalized.lstrip("/"):
+            raise PermissionError("network share path")
         candidate = Path(raw).expanduser()
         if not candidate.is_absolute():
             candidate = Path.cwd() / candidate
         return candidate.resolve(strict=False)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Network share paths are not allowed")
     except (OSError, RuntimeError, ValueError):
         raise HTTPException(status_code=400, detail="Invalid path")
 

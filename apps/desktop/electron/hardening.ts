@@ -490,6 +490,13 @@ function rejectUnsafePathSyntax(filePath, purpose = 'File read') {
 
   const normalized = raw.replace(/\\/g, '/').toLowerCase()
 
+  // Never allow a network-share path to reach path.resolve/stat/open.  This
+  // check intentionally runs on the raw spelling so mixed slash UNC forms
+  // are rejected before Node can reinterpret them as a local path.
+  if (/^\/\/[^/]+(?:\/|$)/.test(normalized)) {
+    throw ipcPathError('network-path', `${purpose} blocked: network share paths are not allowed.`)
+  }
+
   if (
     normalized.startsWith('//?/') ||
     normalized.startsWith('//./') ||
@@ -523,8 +530,15 @@ function resolveRequestedPathForIpc(filePath, options: { purpose?: string; baseD
         throw new Error('not a file URL')
       }
 
+      if (parsed.hostname && parsed.hostname.toLowerCase() !== 'localhost') {
+        throw ipcPathError('network-path', `${purpose} blocked: remote file URL authorities are not allowed.`)
+      }
+
       resolvedPath = fileURLToPath(parsed)
-    } catch {
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'network-path') {
+        throw error
+      }
       throw ipcPathError('invalid-path', `${purpose} failed: file URL is invalid.`)
     }
 

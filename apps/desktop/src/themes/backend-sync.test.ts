@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+
+import { $connection } from '@/store/session'
 
 import { $backendThemes, $pendingSkinApply, __resetBackendSkinSync, ingestBackendSkin } from './backend-sync'
 import { BUILTIN_THEMES } from './presets'
@@ -10,6 +12,7 @@ const skin = (name: string) => ({
 
 describe('ingestBackendSkin', () => {
   beforeEach(() => __resetBackendSkinSync())
+  afterEach(() => $connection.set(null))
 
   it('registers a converted skin without applying when apply=false', () => {
     ingestBackendSkin(skin('neon'), { apply: false })
@@ -131,6 +134,24 @@ describe('ingestBackendSkin', () => {
     ingestBackendSkin(skin('mono'), { apply: false })
 
     expect($backendThemes.get().mono).toBeUndefined()
+  })
+
+  it('keeps same-named wallpaper metadata isolated by connection and profile', () => {
+    $connection.set({ connectionId: 'gateway-a', profile: 'default' } as never)
+    ingestBackendSkin(
+      { ...skin('mono'), background_image: 'C:/gateway-a/mono.png' },
+      { apply: false, scope: { connectionId: 'gateway-a', profile: 'default' } }
+    )
+    ingestBackendSkin(
+      { ...skin('mono'), background_image: 'C:/gateway-b/mono.png' },
+      { apply: false, scope: { connectionId: 'gateway-b', profile: 'default' } }
+    )
+
+    expect($backendThemes.get().mono?.backgroundImage).toBe('C:/gateway-a/mono.png')
+    expect($backendThemes.get().mono?.backgroundImageSource).toEqual({
+      connectionId: 'gateway-a',
+      profile: 'default'
+    })
   })
 
   it('ignores empty payloads', () => {

@@ -2,7 +2,7 @@ import { useStore } from '@nanostores/react'
 import { Leva, useControls } from 'leva'
 import { type CSSProperties, useEffect, useMemo, useState } from 'react'
 
-import { isFileMediaPath, resolveMediaDisplaySrc } from '@/lib/media'
+import { isFileMediaPath, isNetworkFilePath, resolveMediaDisplaySrc } from '@/lib/media'
 import { $backdrop } from '@/store/backdrop'
 import { useTheme } from '@/themes/context'
 
@@ -76,15 +76,41 @@ export function Backdrop() {
     }
 
     // A backend skin may be remote. Keep the renderer from making arbitrary
-    // outbound requests: files use the existing authenticated media path and
-    // inline data must identify itself as an image.
-    if (!isFileMediaPath(wallpaper) && !/^data:image\//i.test(wallpaper)) {
+    // outbound requests: public HTTP(S) images go through the main-process
+    // SSRF-safe bridge, files use the authenticated media path, and inline
+    // data must identify itself as an image. UNC paths are never accepted.
+    if (/^https?:\/\//i.test(wallpaper)) {
+      if (!window.hermesDesktop?.readImageDataUrl) {
+        setSkinWallpaperUrl(null)
+
+        return
+      }
+
+      void window.hermesDesktop
+        .readImageDataUrl(wallpaper)
+        .then(src => {
+          if (!cancelled) {
+            setSkinWallpaperUrl(src || null)
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setSkinWallpaperUrl(null)
+          }
+        })
+
+      return () => {
+        cancelled = true
+      }
+    }
+
+    if (isNetworkFilePath(wallpaper) || (!isFileMediaPath(wallpaper) && !/^data:image\//i.test(wallpaper))) {
       setSkinWallpaperUrl(null)
 
       return
     }
 
-    void resolveMediaDisplaySrc(wallpaper)
+    void resolveMediaDisplaySrc(wallpaper, theme.backgroundImageSource)
       .then(src => {
         if (!cancelled) {
           setSkinWallpaperUrl(src || null)
@@ -99,7 +125,7 @@ export function Backdrop() {
     return () => {
       cancelled = true
     }
-  }, [wallpaper])
+  }, [theme.backgroundImageSource, wallpaper])
 
   const shape = useControls(
     'UI / Shape',

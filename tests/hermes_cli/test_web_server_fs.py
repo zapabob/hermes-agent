@@ -1,5 +1,4 @@
 import base64
-from pathlib import Path
 
 import pytest
 
@@ -89,3 +88,33 @@ def test_fs_endpoints_require_auth(tmp_path):
     assert list_response.status_code == 401
     assert read_response.status_code == 401
     assert default_response.status_code == 401
+
+
+@pytest.mark.parametrize(
+    "raw_path",
+    [
+        r"\\fileserver\share\secret.txt",
+        "//fileserver/share/secret.txt",
+        r"\\?\UNC\fileserver\share\secret.txt",
+        "file://fileserver/share/secret.txt",
+        "file:///%5C%5Cfileserver%5Cshare%5Csecret.txt",
+    ],
+)
+def test_fs_rejects_network_paths_before_filesystem_io(client, raw_path, monkeypatch):
+    calls = []
+
+    def fail(*_args, **_kwargs):
+        calls.append(True)
+        raise AssertionError("network path reached filesystem I/O")
+
+    # The endpoint rejects these spellings during path normalization. Patch
+    # only the directory syscall used by the endpoint; patching Path methods
+    # globally also intercepts pytest's own traceback/cache cleanup on a
+    # failing assertion.
+    monkeypatch.setattr(web_server.os, "scandir", fail)
+
+    response = client.get("/api/fs/read-text", params={"path": raw_path})
+
+    assert response.status_code == 403
+    assert "Network share" in response.json()["detail"]
+    assert calls == []

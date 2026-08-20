@@ -6,6 +6,10 @@ import type {
 } from '@/global'
 import { $connection } from '@/store/session'
 
+import type { DesktopThemeSource } from '@/themes/types'
+
+export type DesktopFsSourceScope = DesktopThemeSource
+
 export interface DesktopFsRemotePicker {
   selectPaths: (options?: HermesSelectPathsOptions) => Promise<string[]>
 }
@@ -43,6 +47,16 @@ export function desktopFsProfile(): string | undefined {
   return $connection.get()?.profile || undefined
 }
 
+function sameAsActiveScope(scope: DesktopFsSourceScope): boolean {
+  const active = $connection.get()
+  const activeConnection = active?.connectionId?.trim() || null
+  const activeProfile = active?.profile?.trim() || 'default'
+
+  return (
+    (scope.connectionId?.trim() || null) === activeConnection && (scope.profile.trim() || 'default') === activeProfile
+  )
+}
+
 function fsPath(endpoint: string, filePath: string) {
   return `/api/fs/${endpoint}?path=${encodeURIComponent(filePath)}`
 }
@@ -57,10 +71,18 @@ function bridge() {
   return desktop
 }
 
-function remoteFsApi<T>(path: string, body?: Record<string, unknown>): Promise<T> {
-  return bridge().api<T>(
-    body ? { body, method: 'POST', path, profile: desktopFsProfile() } : { path, profile: desktopFsProfile() }
-  )
+function remoteFsApi<T>(path: string, body?: Record<string, unknown>, scope?: DesktopFsSourceScope): Promise<T> {
+  const connection = $connection.get()
+  const profile = scope ? scope.profile.trim() || 'default' : desktopFsProfile()
+  const connectionId = scope ? scope.connectionId : connection?.connectionId ?? null
+
+  const request = body ? { body, method: 'POST' as const, path, profile } : { path, profile }
+
+  if (scope || connection?.connectionId) {
+    return bridge().api<T>({ ...request, connectionId })
+  }
+
+  return bridge().api<T>(request)
 }
 
 export async function readDesktopDir(path: string): Promise<HermesReadDirResult> {
@@ -99,12 +121,15 @@ export async function writeDesktopFileText(path: string, content: string): Promi
   return { path: result.path || path }
 }
 
-export async function readDesktopFileDataUrl(path: string): Promise<string> {
-  if (!isDesktopFsRemoteMode()) {
+export async function readDesktopFileDataUrl(path: string, scope?: DesktopFsSourceScope): Promise<string> {
+  // A wallpaper's source scope is immutable. Even when the active shell is
+  // local, a non-active connection must be read through its authenticated API
+  // route rather than falling through to this machine's Electron filesystem.
+  if (!isDesktopFsRemoteMode() && (!scope || sameAsActiveScope(scope))) {
     return bridge().readFileDataUrl(path)
   }
 
-  const result = await remoteFsApi<string | { dataUrl?: string }>(fsPath('read-data-url', path))
+  const result = await remoteFsApi<string | { dataUrl?: string }>(fsPath('read-data-url', path), undefined, scope)
 
   return typeof result === 'string' ? result : result.dataUrl || ''
 }
