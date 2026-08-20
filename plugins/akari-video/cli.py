@@ -5,21 +5,26 @@ import json
 import sys
 from pathlib import Path
 
-# Ensure the plugin root is on sys.path for imports
-PLUGIN_ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(PLUGIN_ROOT))
-
-import core
+try:
+    from . import core
+except ImportError:
+    import core
 
 
 def register_cli(subparser: argparse.ArgumentParser) -> None:
     subs = subparser.add_subparsers(dest="akari_video_command")
-    status = subs.add_parser("status", help="Show the pinned AKARI Video submodule status")
-    status.add_argument("--detail", action="store_true", help="Include detailed submodule info")
+    status = subs.add_parser(
+        "status", help="Show the pinned AKARI Video submodule status"
+    )
+    status.add_argument(
+        "--detail", action="store_true", help="Include detailed submodule info"
+    )
     subs.add_parser("skills", help="List the AKARI Video skills catalog")
 
     launch = subs.add_parser("launch", help="Launch the AKARI Video launcher")
-    launch.add_argument("args", nargs=argparse.REMAINDER, help="Arguments to pass to akari.mjs")
+    launch.add_argument(
+        "args", nargs=argparse.REMAINDER, help="Arguments to pass to akari.mjs"
+    )
     launch.add_argument("--project-dir", default="", help="Project directory to run in")
 
 
@@ -38,12 +43,10 @@ def akari_video_command(args: argparse.Namespace) -> int:
     if command == "launch":
         return _print(
             json.loads(
-                core.handle_launch(
-                    {
-                        "project_dir": args.project_dir or None,
-                        "args": args.args,
-                    }
-                )
+                core.handle_launch({
+                    "project_dir": args.project_dir or None,
+                    "args": args.args,
+                })
             )
         )
     print("usage: hermes akari-video {status,skills,launch}")

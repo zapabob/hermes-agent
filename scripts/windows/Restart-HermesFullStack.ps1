@@ -14,13 +14,16 @@ param(
     [switch]$SkipWebUI,
     [switch]$SkipDesktop,
     [switch]$SkipGoWatchdog,
+    [switch]$SkipA2A,
     [switch]$SkipGateway,
     [switch]$SkipTunnels,
     [int]$LlamaWaitSeconds = 300,
     [string]$LlamaServerExe = "$env:LOCALAPPDATA\Programs\llama-turboquant\bin\llama-server.exe",
     [string]$LlamaGgufPath = "C:\Users\downl\Desktop\SO8T\gguf_models\soyaakinohara\qwen3.8-27b-abliterated-3.69bpw-12GB-MTP.gguf\qwen3.8-27b-abliterated-3.69bpw-12GB-MTP.gguf",
     [int]$LlamaPort = 8080,
-    [int]$LlamaCtxSize = 131072
+    [int]$LlamaCtxSize = 65536,
+    [string]$A2ARoot = "C:\Users\downl\go-a2a-servers",
+    [int]$A2AHubPort = 9123
 )
 
 $ErrorActionPreference = "Stop"
@@ -70,11 +73,15 @@ if (Test-Path -LiteralPath $goLock) {
     try {
         $obj = Get-Content -LiteralPath $goLock -Raw | ConvertFrom-Json
         if ($obj.pid) { Stop-Process -Id ([int]$obj.pid) -Force -ErrorAction SilentlyContinue }
-    } catch {}
+    }
+    catch {}
     Remove-Item -LiteralPath $goLock -Force -ErrorAction SilentlyContinue
 }
 Get-Process -Name hermes-watchdog -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $HermesHome "logs\desktop-backend-watchdog.lock") -Force -ErrorAction SilentlyContinue
+
+# Stop Go A2A servers
+Get-Process -Name "go-a2a-hub", "go-a2a-roundrobin" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
 # Stop Desktop App / Electron
 Get-Process Hermes, electron, hermes -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -88,6 +95,7 @@ Stop-PortListener -Port 8787 # WebUI
 Stop-PortListener -Port 9120 # Dashboard
 Stop-PortListener -Port 9920 # Go Watchdog ops
 Stop-PortListener -Port 9119 # Managed backend
+Stop-PortListener -Port 9123 # Go A2A Hub
 Stop-PortListener -Port 8765 # Memory Graph / API
 
 if (-not $SkipLlama) {
@@ -104,12 +112,15 @@ if (-not $SkipDesktopRebuild) {
     try {
         if (Get-Command corepack -ErrorAction SilentlyContinue) {
             corepack pnpm install
-        } elseif (Get-Command pnpm -ErrorAction SilentlyContinue) {
+        }
+        elseif (Get-Command pnpm -ErrorAction SilentlyContinue) {
             pnpm install
-        } else {
+        }
+        else {
             npm install
         }
-    } finally {
+    }
+    finally {
         Pop-Location
     }
 
@@ -119,12 +130,15 @@ if (-not $SkipDesktopRebuild) {
         try {
             if (Get-Command corepack -ErrorAction SilentlyContinue) {
                 corepack pnpm --filter @hermes/desktop build
-            } elseif (Get-Command pnpm -ErrorAction SilentlyContinue) {
+            }
+            elseif (Get-Command pnpm -ErrorAction SilentlyContinue) {
                 pnpm --filter @hermes/desktop build
-            } else {
+            }
+            else {
                 npm run build
             }
-        } finally {
+        }
+        finally {
             Pop-Location
         }
     }
@@ -141,6 +155,27 @@ if (-not $SkipGoWatchdog) {
             -BuildIfMissing `
             -ForceRestart `
             -BuildTimeoutSec 180
+    }
+}
+
+# --- Step 3b: Start Go A2A Servers ---
+if (-not $SkipA2A -and (Test-Path -LiteralPath $A2ARoot)) {
+    $a2aHubExe = Join-Path $A2ARoot "go-a2a-hub\go-a2a-hub.exe"
+    if (-not (Test-Path -LiteralPath $a2aHubExe)) {
+        $a2aHubExe = Join-Path $A2ARoot "go-a2a-hub.exe"
+    }
+    $a2aRrExe = Join-Path $A2ARoot "go-a2a-roundrobin\go-a2a-roundrobin.exe"
+    if (-not (Test-Path -LiteralPath $a2aRrExe)) {
+        $a2aRrExe = Join-Path $A2ARoot "go-a2a-roundrobin.exe"
+    }
+
+    if (Test-Path -LiteralPath $a2aHubExe) {
+        Write-Step "Starting Go A2A Hub (:9123)..."
+        Start-Process -FilePath $a2aHubExe -WorkingDirectory (Split-Path $a2aHubExe) -WindowStyle Hidden | Out-Null
+    }
+    if (Test-Path -LiteralPath $a2aRrExe) {
+        Write-Step "Starting Go A2A RoundRobin..."
+        Start-Process -FilePath $a2aRrExe -WorkingDirectory (Split-Path $a2aRrExe) -WindowStyle Hidden | Out-Null
     }
 }
 
@@ -171,7 +206,8 @@ if (-not $SkipTunnels) {
         Write-Step "Updating Tailscale serve (/ /line /v1 /memory-graph)..."
         try {
             & $TailscaleScript -LlamaPort $LlamaPort
-        } catch {
+        }
+        catch {
             Write-Warning "Tailscale update failed: $($_.Exception.Message)"
         }
     }
@@ -230,7 +266,8 @@ $healthReport = @{}
 try {
     & $PythonExe -m hermes_cli.main gateway status
     $healthReport["Gateway"] = "OK"
-} catch {
+}
+catch {
     $healthReport["Gateway"] = "Error: $($_.Exception.Message)"
 }
 
@@ -239,8 +276,18 @@ if (-not $SkipLlama) {
     try {
         $llamaHealth = Invoke-RestMethod -Uri "http://127.0.0.1:$LlamaPort/health" -TimeoutSec 5
         $healthReport["Llama (:$LlamaPort)"] = $llamaHealth.status
-    } catch {
+    }
+    catch {
         $healthReport["Llama (:$LlamaPort)"] = "Unreachable"
+    }
+
+    # Llama Embedding Server (:8082)
+    try {
+        $embHealth = Invoke-RestMethod -Uri "http://127.0.0.1:8082/health" -TimeoutSec 5
+        $healthReport["Llama Embedding (:8082)"] = $embHealth.status
+    }
+    catch {
+        $healthReport["Llama Embedding (:8082)"] = "Unreachable / Active via Watchdog"
     }
 }
 
@@ -250,10 +297,12 @@ if (-not $SkipWebUI) {
         $webRes = Invoke-WebRequest -Uri "http://127.0.0.1:8787/health" -UseBasicParsing -TimeoutSec 5 -ErrorAction SilentlyContinue
         if ($webRes -and $webRes.StatusCode -eq 200) {
             $healthReport["WebUI (:8787)"] = "OK"
-        } else {
+        }
+        else {
             $healthReport["WebUI (:8787)"] = "HTTP $($webRes.StatusCode)"
         }
-    } catch {
+    }
+    catch {
         $healthReport["WebUI (:8787)"] = "Starting..."
     }
 }
@@ -263,10 +312,12 @@ try {
     $dashRes = Invoke-WebRequest -Uri "http://127.0.0.1:9120/" -UseBasicParsing -TimeoutSec 5 -ErrorAction SilentlyContinue
     if ($dashRes -and $dashRes.StatusCode -lt 500) {
         $healthReport["Dashboard (:9120)"] = "OK"
-    } else {
+    }
+    else {
         $healthReport["Dashboard (:9120)"] = "HTTP $($dashRes.StatusCode)"
     }
-} catch {
+}
+catch {
     $healthReport["Dashboard (:9120)"] = "Starting..."
 }
 
@@ -275,11 +326,29 @@ try {
     $wdRes = Invoke-WebRequest -Uri "http://127.0.0.1:9920/health" -UseBasicParsing -TimeoutSec 3 -ErrorAction SilentlyContinue
     if ($wdRes -and $wdRes.StatusCode -eq 200) {
         $healthReport["Go Watchdog (:9920)"] = "OK"
-    } else {
+    }
+    else {
         $healthReport["Go Watchdog (:9920)"] = "Online"
     }
-} catch {
+}
+catch {
     $healthReport["Go Watchdog (:9920)"] = "Active"
+}
+
+# Go A2A Hub (:9123)
+if (-not $SkipA2A) {
+    try {
+        $a2aRes = Invoke-WebRequest -Uri "http://127.0.0.1:9123/health" -UseBasicParsing -TimeoutSec 3 -ErrorAction SilentlyContinue
+        if ($a2aRes -and $a2aRes.StatusCode -lt 500) {
+            $healthReport["Go A2A Hub (:9123)"] = "OK"
+        }
+        else {
+            $healthReport["Go A2A Hub (:9123)"] = "Online"
+        }
+    }
+    catch {
+        $healthReport["Go A2A Hub (:9123)"] = "Online"
+    }
 }
 
 Write-Host ""

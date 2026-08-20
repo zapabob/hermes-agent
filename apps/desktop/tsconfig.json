@@ -3,7 +3,6 @@
     "target": "ES2023",
     "useDefineForClassFields": true,
     "lib": ["DOM", "DOM.Iterable", "ES2023"],
-    "types": ["node"],
     "allowJs": false,
     "skipLibCheck": true,
     "esModuleInterop": true,

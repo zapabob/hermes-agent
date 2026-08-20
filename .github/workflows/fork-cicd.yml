@@ -1,0 +1,86 @@
+name: Fork CI/CD (Parallel Multi-Core)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: fork-cicd-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-lint-and-footguns:
+    name: Python Lint & Windows Footguns
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Ruff & Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff pyyaml
+      - name: Run Ruff Lint
+        run: ruff check .
+      - name: Run Windows Footgun Check
+        run: python scripts/check-windows-footguns.py --all
+
+  typescript-check:
+    name: TypeScript Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck Desktop App
+        run: pnpm --filter @hermes/desktop typecheck
+
+  go-checks:
+    name: Go Modules Vet & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - name: Vet & Test Watchdog Go
+        run: |
+          cd scripts/windows/watchdog-go
+          go vet ./...
+      - name: Vet & Test Memory Graph
+        run: |
+          cd tools/memory-graph-server
+          go vet ./...
+      - name: Vet & Test HeyGen CLI
+        run: |
+          cd vendor/heygen-cli
+          go vet ./...
+
+  fast-unit-tests:
+    name: Core Unit Verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Test Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[test] || pip install pytest pyyaml pydantic
+      - name: Run Core Tests
+        run: pytest tests/test_plugin_storage.py tests/test_fast_safe_load.py -q

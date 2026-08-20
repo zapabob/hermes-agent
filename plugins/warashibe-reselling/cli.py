@@ -1,11 +1,16 @@
 """Warashibe Reselling — CLI
 hermes warashibe <subcommand>
 """
-from __future__ import annotations
-import argparse, json, sys
+
+import argparse
+import json
 import pathlib
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-import core
+import sys
+
+try:
+    from . import core
+except ImportError:
+    import core
 
 
 def register_cli(parser) -> None:
@@ -28,7 +33,9 @@ def register_cli(parser) -> None:
     sp.add_argument("--output", "-o", default=None)
 
     # public market price research via CloakBrowser / official APIs
-    sp = sub.add_parser("price", help="公開価格調査 (メルカリ/ヤフオク/eBay/Amazon公式)")
+    sp = sub.add_parser(
+        "price", help="公開価格調査 (メルカリ/ヤフオク/eBay/Amazon公式)"
+    )
     sp.add_argument("--keyword", "-k", required=True)
     sp.add_argument(
         "--platforms",
@@ -65,7 +72,12 @@ def register_cli(parser) -> None:
     sp.add_argument("--budget", "-b", type=int, default=None)
     sp.add_argument("--min-profit", type=int, default=None)
     sp.add_argument("--min-rate", type=float, default=None)
-    sp.add_argument("--min-premium", type=float, default=0.5, help="輸出プレミアム最小値(例: 0.5=50%%)")
+    sp.add_argument(
+        "--min-premium",
+        type=float,
+        default=0.5,
+        help="輸出プレミアム最小値(例: 0.5=50%%)",
+    )
     sp.add_argument("--dry-run", action="store_true")
 
     # shipping
@@ -95,13 +107,17 @@ def register_cli(parser) -> None:
 
 def main(argv=None):
     if argv is None or isinstance(argv, (list, tuple)):
-        p = argparse.ArgumentParser(prog="hermes warashibe", description="わらしべ長者式せどり")
+        p = argparse.ArgumentParser(
+            prog="hermes warashibe", description="わらしべ長者式せどり"
+        )
         register_cli(p)
         args = p.parse_args(argv)
     else:
         args = argv
     if args.cmd == "license":
-        out = args.output or str(core.pathlib.Path.home() / "Documents" / "ops" / "sedori" / "license_pkg")
+        out = args.output or str(
+            core.pathlib.Path.home() / "Documents" / "ops" / "sedori" / "license_pkg"
+        )
         r = core.generate_license_package(out)
         print(json.dumps(r, ensure_ascii=False, indent=2))
     elif args.cmd == "reroll":
@@ -113,6 +129,7 @@ def main(argv=None):
         print(json.dumps(r, ensure_ascii=False, indent=2))
     elif args.cmd == "price":
         from .price_research import search_markets, find_arbitrage
+
         if getattr(args, "arbitrage", False):
             r = find_arbitrage(
                 args.keyword,
@@ -121,10 +138,13 @@ def main(argv=None):
                 dry_run=args.dry_run,
             )
         else:
-            r = search_markets(args.keyword, args.platforms, args.limit, dry_run=args.dry_run)
+            r = search_markets(
+                args.keyword, args.platforms, args.limit, dry_run=args.dry_run
+            )
         print(json.dumps(r, ensure_ascii=False, indent=2))
     elif args.cmd == "arb":
         from .price_research import find_arbitrage
+
         r = find_arbitrage(
             args.keyword,
             args.platforms,
@@ -137,6 +157,7 @@ def main(argv=None):
         print(json.dumps(r, ensure_ascii=False, indent=2))
     elif args.cmd == "j2e":
         from .price_research import find_japan_to_ebay
+
         r = find_japan_to_ebay(
             args.keyword,
             args.platforms,
@@ -155,7 +176,9 @@ def main(argv=None):
         r = core.platform_comparison()
         print(json.dumps(r, ensure_ascii=False, indent=2))
     elif args.cmd == "sop":
-        out = args.output or str(core.pathlib.Path.home() / "Documents" / "ops" / "sedori" / "sop")
+        out = args.output or str(
+            core.pathlib.Path.home() / "Documents" / "ops" / "sedori" / "sop"
+        )
         r = core.generate_sop_templates(out)
         print(json.dumps(r, ensure_ascii=False, indent=2))
     elif args.cmd == "ledger":

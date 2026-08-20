@@ -480,6 +480,13 @@ redundant-cast = "ignore"
 
 [tool.ruff]
 preview = true  # required for PLW1514 (unspecified-encoding) — preview rule
+exclude = [
+  "vendor",
+  ".venv",
+  "venv",
+  "apps",
+  "node_modules",
+]
 
 [tool.ruff.lint]
 # All other lints are intentionally disabled (see comment history on this
