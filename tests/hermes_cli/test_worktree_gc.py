@@ -200,6 +200,34 @@ class TestReclaim:
         assert archived, "untracked file must be archived, not destroyed"
         assert archived[0].read_text() == "important scribbles\n"
 
+    def test_archive_second_move_failure_rolls_back_first(self, repo, monkeypatch):
+        tree, _ = _add_worktree(repo, "hermes-archive-rollback")
+        first = tree / "FIRST.md"
+        second = tree / "SECOND.md"
+        first.write_text("first remains recoverable\n")
+        second.write_text("second remains recoverable\n")
+        records = worktree_gc.audit_worktrees(str(repo), with_sizes=False)
+        real_move = worktree_gc.shutil.move
+        move_count = 0
+
+        def fail_second_move(src, dst, *args, **kwargs):
+            nonlocal move_count
+            move_count += 1
+            if move_count == 2:
+                raise OSError("injected second archive move failure")
+            return real_move(src, dst, *args, **kwargs)
+
+        monkeypatch.setattr(worktree_gc.shutil, "move", fail_second_move)
+        actions = worktree_gc.reclaim_worktrees(str(repo), records=records)
+
+        assert tree.exists()
+        assert first.read_text() == "first remains recoverable\n"
+        assert second.read_text() == "second remains recoverable\n"
+        assert any("archive of untracked files failed" in action
+                   for action in actions)
+        archive_root = Path.home() / ".hermes" / "archive" / "worktree-prune"
+        assert not list(archive_root.rglob("FIRST.md"))
+
     def test_dry_run_changes_nothing(self, repo):
         tree, _ = _add_worktree(repo, "hermes-clean")
         records = worktree_gc.audit_worktrees(str(repo), with_sizes=False)
@@ -264,8 +292,17 @@ class TestReclaim:
     def test_edit_after_final_revalidation_is_caught_by_git_remove(
         self, repo, monkeypatch,
     ):
+        import cli
+
         tree, _ = _add_worktree(repo, "hermes-last-moment-edit")
         records = worktree_gc.audit_worktrees(str(repo), with_sizes=False)
+        # Keep the contract focused on the final real-Git dirty guard; busy CI
+        # hosts can otherwise make the repeated five-second ancillary probes
+        # fail closed before the remove call is reached.
+        monkeypatch.setattr(cli, "_worktree_lock_is_live",
+                            lambda *_args, **_kwargs: "absent")
+        monkeypatch.setattr(cli, "_worktree_has_unpushed_commits",
+                            lambda *_args, **_kwargs: False)
         real_git = worktree_gc._git
         injected = False
 

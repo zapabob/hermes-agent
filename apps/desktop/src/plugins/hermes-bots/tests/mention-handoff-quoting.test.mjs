@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { dirname } from 'node:path'
 import test from 'node:test'
 import vm from 'node:vm'
 
@@ -14,6 +15,22 @@ import vm from 'node:vm'
 // class as the delegated-routine fix for #21.
 
 const pluginSource = readFileSync(new URL('../plugin.js', import.meta.url), 'utf8')
+
+function shellInvocation() {
+  if (process.platform !== 'win32') return { command: 'sh', env: process.env }
+
+  const candidates = [
+    process.env.HERMES_TEST_SHELL,
+    'C:\\Program Files\\Git\\usr\\bin\\sh.exe',
+    'C:\\Program Files\\Git\\bin\\sh.exe'
+  ].filter(Boolean)
+  const command = candidates.find(candidate => candidate === 'sh' || existsSync(candidate)) ?? 'sh'
+  if (command === 'sh') return { command, env: process.env }
+
+  const pathKey = Object.keys(process.env).find(key => key.toLowerCase() === 'path') ?? 'PATH'
+  const env = { ...process.env, [pathKey]: `${dirname(command)};${process.env[pathKey] ?? ''}` }
+  return { command, env }
+}
 
 function load({ activeProfile = 'research', profiles = ['research', 'ops'], title = null } = {}) {
   const values = new Map()
@@ -58,9 +75,10 @@ function load({ activeProfile = 'research', profiles = ['research', 'ops'], titl
 /** Run the note's first hermes command under a stub that echoes each argv
  *  element — proves the shell received the interpolations as LITERALS. */
 function runHandoffCommand(noteText) {
-  const command = noteText.match(/`hermes -p [^`]*`/)[0].slice(1, -1)
-  const script = `hermes() { printf '%s\\037' "$@"; }\n${command}`
-  const result = spawnSync('sh', ['-c', script], { encoding: 'utf8' })
+  const commandText = noteText.match(/`hermes -p [^`]*`/)[0].slice(1, -1)
+  const script = `hermes() { printf '%s\\037' "$@"; }\n${commandText}`
+  const { command: shell, env } = shellInvocation()
+  const result = spawnSync(shell, ['-c', script], { encoding: 'utf8', env })
   assert.equal(result.status, 0, result.stderr)
   return result.stdout.split('\x1f').slice(0, -1)
 }

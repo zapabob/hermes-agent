@@ -1,46 +1,59 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+
+import { group, split } from '@/components/pane-shell/tree/model'
+import * as tree from '@/components/pane-shell/tree/store'
+import { registry } from '@/contrib/registry'
+import { createClientSessionState } from '@/lib/chat-runtime'
+
+import * as session from './session'
+import * as states from './session-states'
 
 // The completed-unread dot is keyed on the FOCUSED session, not the selected
 // one. A tile is never $selectedStoredSessionId, so keying either half on the
 // selection left a tiled session's dot green with no way to clear it.
 
 describe('completed-unread dot follows the focused session', () => {
+  const disposers: (() => void)[] = []
+
   beforeEach(() => {
-    vi.resetModules()
+    for (const id of ['workspace', 'session-tile:tiled']) {
+      disposers.push(
+        registry.register({
+          area: 'panes',
+          data: id === 'workspace' ? { placement: 'main', uncloseable: true } : { placement: 'main' },
+          id,
+          render: () => null,
+          title: id
+        })
+      )
+    }
+
+    tree.$layoutTree.set(null)
+    tree.$activeTreeGroup.set(null)
+    tree.$hoveredTreeGroup.set(null)
+    states.clearAllSessionStates()
+    session.$unreadFinishedSessionIds.set([])
+    session.$selectedStoredSessionId.set('primary')
   })
 
   afterEach(() => {
-    vi.resetModules()
+    states.clearAllSessionStates()
+    session.$unreadFinishedSessionIds.set([])
+    session.$selectedStoredSessionId.set(null)
+    tree.$layoutTree.set(null)
+    tree.$activeTreeGroup.set(null)
+    tree.$hoveredTreeGroup.set(null)
+    disposers.splice(0).forEach(dispose => dispose())
   })
 
-  async function setup() {
-    const tree = await import('@/components/pane-shell/tree/store')
-    const model = await import('@/components/pane-shell/tree/model')
-    const { registry } = await import('@/contrib/registry')
-    const { createClientSessionState } = await import('@/lib/chat-runtime')
-    const session = await import('./session')
-    const states = await import('./session-states')
-
-    for (const id of ['workspace', 'session-tile:tiled']) {
-      registry.register({
-        area: 'panes',
-        data: id === 'workspace' ? { placement: 'main', uncloseable: true } : { placement: 'main' },
-        id,
-        render: () => null,
-        title: id
-      })
-    }
-
+  function setup() {
     // The workspace holds the primary chat, a second zone holds the tile.
     tree.declareDefaultTree(
-      model.split('row', [
-        model.group(['workspace'], { active: 'workspace', id: 'grp-main' }),
-        model.group(['session-tile:tiled'], { active: 'session-tile:tiled', id: 'grp-tile' })
+      split('row', [
+        group(['workspace'], { active: 'workspace', id: 'grp-main' }),
+        group(['session-tile:tiled'], { active: 'session-tile:tiled', id: 'grp-tile' })
       ])
     )
-
-    session.$unreadFinishedSessionIds.set([])
-    session.$selectedStoredSessionId.set('primary')
 
     const finishTurn = (storedSessionId: string) => {
       const working = { ...createClientSessionState(null), busy: true, storedSessionId }
@@ -48,11 +61,11 @@ describe('completed-unread dot follows the focused session', () => {
       states.publishSessionState(`rt-${storedSessionId}`, { ...working, busy: false })
     }
 
-    return { finishTurn, session, tree }
+    return { finishTurn }
   }
 
-  it('clears the dot when an already-open tile is fronted', async () => {
-    const { finishTurn, session, tree } = await setup()
+  it('clears the dot when an already-open tile is fronted', () => {
+    const { finishTurn } = setup()
 
     tree.noteActiveTreeGroup('grp-main')
     finishTurn('tiled')
@@ -64,8 +77,8 @@ describe('completed-unread dot follows the focused session', () => {
     expect(session.$unreadFinishedSessionIds.get()).toEqual([])
   })
 
-  it('never marks a tile that finishes while it is the focused one', async () => {
-    const { finishTurn, session, tree } = await setup()
+  it('never marks a tile that finishes while it is the focused one', () => {
+    const { finishTurn } = setup()
 
     tree.noteActiveTreeGroup('grp-tile')
     finishTurn('tiled')
@@ -73,8 +86,8 @@ describe('completed-unread dot follows the focused session', () => {
     expect(session.$unreadFinishedSessionIds.get()).toEqual([])
   })
 
-  it('marks the primary session when a tile has focus', async () => {
-    const { finishTurn, session, tree } = await setup()
+  it('marks the primary session when a tile has focus', () => {
+    const { finishTurn } = setup()
 
     tree.noteActiveTreeGroup('grp-tile')
     finishTurn('primary')

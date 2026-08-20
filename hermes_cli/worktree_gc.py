@@ -196,22 +196,47 @@ def _archive_untracked(tree: Path, untracked: List[str]) -> Optional[Path]:
     keep. Costs almost nothing and removes the "did I just delete
     something?" question.
     """
-    stamp = time.strftime("%Y%m%d-%H%M%S")
+    stamp = f"{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}-{time.time_ns()}"
     dest = (
         Path.home() / ".hermes" / "archive" / "worktree-prune"
         / f"{tree.name}-{stamp}"
     )
+    moved: List[tuple[Path, Path]] = []
     try:
         for rel in untracked:
             src = tree / rel
             if not src.exists() and not src.is_symlink():
-                continue
+                raise FileNotFoundError(f"untracked archive source disappeared: {src}")
             target = dest / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(src), str(target))
+            moved.append((src, target))
         return dest if dest.exists() else None
     except Exception as exc:
         logger.warning("Could not archive untracked files from %s: %s", tree, exc)
+        # A cross-device shutil.move can raise after creating the target and
+        # removing the source. Include that partially completed current entry
+        # in rollback even though the call never returned normally.
+        try:
+            if ((not src.exists() and not src.is_symlink())
+                    and (target.exists() or target.is_symlink())
+                    and (src, target) not in moved):
+                moved.append((src, target))
+        except UnboundLocalError:
+            pass
+        rollback_failures: List[str] = []
+        for src, target in reversed(moved):
+            try:
+                src.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(target), str(src))
+            except Exception as rollback_exc:
+                rollback_failures.append(f"{target} -> {src}: {rollback_exc}")
+        if rollback_failures:
+            logger.error(
+                "Archive rollback from %s was incomplete; preserved copies remain "
+                "under %s: %s",
+                tree, dest, "; ".join(rollback_failures),
+            )
         return None
 
 

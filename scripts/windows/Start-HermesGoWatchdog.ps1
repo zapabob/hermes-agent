@@ -14,8 +14,8 @@ param(
     [int]$BuildTimeoutSec = 180,
     # Default skip go test for operator start path (full test via Build-HermesGoWatchdog.ps1).
     [switch]$RunBuildTests,
-    # Watchdog-managed hermes serve port (must stay outside reserved ops: 9119/9120/8787/9920).
-    # Desktop connects via desktop-backend.json / HERMES_DESKTOP_REMOTE_*; default 9118.
+    # Watchdog-managed hermes serve port; 9120/8787/9920 remain reserved ops ports.
+    # Desktop connects via desktop-backend.json / HERMES_DESKTOP_REMOTE_*; default 9119.
     [int]$ManagedBackendPort = 9119
 )
 

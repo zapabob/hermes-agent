@@ -1,9 +1,11 @@
 import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import { setAccentOverride } from './accent-override'
 import { __resetBackendSkinSync, ingestBackendSkin } from './backend-sync'
-import { skinPref, ThemeProvider, useTheme } from './context'
-import { midnightTheme } from './presets'
+import { modePref, skinPref, ThemeProvider, useTheme } from './context'
+import { everforestTheme, nousTheme } from './presets'
+import { retintTheme } from './retint'
 
 // The live-authoring loop: Hermes writes/edits one skin file and every surface
 // repaints. An in-place edit keeps the NAME — only the palette moves.
@@ -74,6 +76,7 @@ describe('ThemeProvider highlight preview', () => {
   beforeEach(() => {
     window.localStorage.clear()
     __resetBackendSkinSync()
+    setAccentOverride(null)
   })
 
   afterEach(cleanup)
@@ -94,14 +97,27 @@ describe('ThemeProvider highlight preview', () => {
       </ThemeProvider>
     )
 
+  it('retints the authored dark palette before selecting dark mode', () => {
+    modePref.assign('default', 'dark')
+    const expected = retintTheme(nousTheme, '#ff3366').darkColors!.primary
+
+    renderProbe()
+    act(() => setAccentOverride('#ff3366'))
+
+    expect(ctx.theme.colors.primary).toBe(expected)
+    expect(ctx.theme.colors.primary).not.toBe(
+      retintTheme({ ...nousTheme, colors: nousTheme.darkColors! }, '#ff3366').colors.primary
+    )
+  })
+
   it('paints the previewed theme without persisting it', () => {
     renderProbe()
 
     const committed = ctx.themeName
 
-    act(() => ctx.previewTheme('midnight', 'dark'))
+    act(() => ctx.previewTheme('everforest', 'dark'))
 
-    expect(cssVar('--theme-foreground')).toBe(midnightTheme.colors.foreground)
+    expect(cssVar('--theme-foreground')).toBe(everforestTheme.darkColors!.foreground)
     // The commit surface does not change. The context name and the stored
     // preference keep their values.
     expect(ctx.themeName).toBe(committed)
@@ -111,22 +127,22 @@ describe('ThemeProvider highlight preview', () => {
   it('clearThemePreview repaints the committed appearance', () => {
     renderProbe()
 
-    act(() => ctx.previewTheme('midnight', 'dark'))
-    expect(cssVar('--theme-foreground')).toBe(midnightTheme.colors.foreground)
+    act(() => ctx.previewTheme('everforest', 'dark'))
+    expect(cssVar('--theme-foreground')).toBe(everforestTheme.darkColors!.foreground)
 
     act(() => ctx.clearThemePreview())
-    expect(cssVar('--theme-foreground')).not.toBe(midnightTheme.colors.foreground)
+    expect(cssVar('--theme-foreground')).not.toBe(everforestTheme.darkColors!.foreground)
   })
 
   it('a commit replaces the preview and persists', () => {
     renderProbe()
 
-    act(() => ctx.previewTheme('midnight', 'dark'))
+    act(() => ctx.previewTheme('everforest', 'dark'))
     act(() => ctx.setTheme('mono'))
 
     expect(ctx.themeName).toBe('mono')
     expect(skinPref.resolve('default')).toBe('mono')
-    expect(cssVar('--theme-foreground')).not.toBe(midnightTheme.colors.foreground)
+    expect(cssVar('--theme-foreground')).not.toBe(everforestTheme.darkColors!.foreground)
   })
 
   it('ignores a preview of an unknown theme', () => {

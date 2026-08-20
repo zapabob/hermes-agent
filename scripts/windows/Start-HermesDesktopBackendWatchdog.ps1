@@ -1,5 +1,5 @@
 # Mutual watchdog: packaged Hermes Desktop <-> desktop-spawned hermes serve backend.
-# Prefer Start-HermesGoWatchdog.ps1 (managed :9118 + desktop-backend.json). This script
+# Prefer Start-HermesGoWatchdog.ps1 (managed :9119 + desktop-backend.json). This script
 # remains for environments without the Go binary and mirrors its backend discovery order.
 #
 # Usage:
@@ -15,7 +15,7 @@ param(
     [int]$IntervalSec = 20,
     [int]$FailThreshold = 2,
     [int]$StartupGraceSec = 45,
-    [int]$ManagedBackendPort = 9118,
+    [int]$ManagedBackendPort = 9119,
     [switch]$Once,
     [string]$HermesRoot = "",
     [string]$HermesHome = ""
@@ -43,7 +43,7 @@ if (-not (Test-Path -LiteralPath $PackagedExe)) {
 }
 
 # Stack-owned listeners — never reap; skip when scanning ephemeral Desktop serve.
-$script:ReservedOpsPorts = @(8080, 8081, 8646, 8765, 8787, 9119, 9120, 9920, 18794)
+$script:ReservedOpsPorts = @(8080, 8081, 8646, 8765, 8787, 9120, 9920, 18794)
 
 function Write-WdLog([string]$Message) {
     $line = "[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Message

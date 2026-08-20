@@ -2608,7 +2608,13 @@ def _cleanup_worktree(info: Dict[str, str] = None) -> None:
         logger.debug("Failed to delete branch %s: %s", branch, e)
 
     _active_worktree = None
-    print(f"\033[32m✓ Worktree cleaned up: {wt_path}\033[0m")
+    # Windows legacy consoles (notably cp932) cannot encode the success
+    # glyph. Preserve the pretty output where supported, but never let an
+    # exit-time status message raise after cleanup has already succeeded.
+    try:
+        print(f"\033[32m✓ Worktree cleaned up: {wt_path}\033[0m")
+    except UnicodeEncodeError:
+        print(f"\033[32mWorktree cleaned up: {wt_path}\033[0m")
 
 
 def _run_state_db_auto_maintenance(session_db) -> None:

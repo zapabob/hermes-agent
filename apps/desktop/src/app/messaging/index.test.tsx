@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { MessagingPlatformInfo } from '@/types/hermes'
 
+import { MessagingView } from './index'
+
 const getMessagingPlatforms = vi.fn()
 const updateMessagingPlatform = vi.fn()
 const getPairing = vi.fn()
@@ -71,18 +73,12 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-async function renderMessaging() {
-  const { MessagingView } = await import('./index')
-  let result: ReturnType<typeof render>
-  await act(async () => {
-    result = render(
-      <MemoryRouter useTransitions={false}>
-        <MessagingView />
-      </MemoryRouter>
-    )
-  })
-
-  return result!
+function renderMessaging() {
+  return render(
+    <MemoryRouter useTransitions={false}>
+      <MessagingView />
+    </MemoryRouter>
+  )
 }
 
 describe('MessagingView setup-guide link', () => {
@@ -150,8 +146,9 @@ describe('MessagingView pairing', () => {
 
     await renderMessaging()
 
+    const approve = await screen.findByRole('button', { name: 'Approve' })
     await act(async () => {
-      fireEvent.click(await screen.findByRole('button', { name: 'Approve' }))
+      fireEvent.click(approve)
     })
 
     expect(await screen.findByRole('button', { name: 'Approve' })).toBeTruthy()

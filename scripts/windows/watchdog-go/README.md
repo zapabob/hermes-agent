@@ -69,11 +69,11 @@ Admin 認証: `Authorization: Bearer <token>` または `X-Admin-Token: <token>`
 
 ## 監視ロジック
 
-1. **起動時 prewarm（非同期）** — HTTP / RunLoop 起動後に goroutine で managed `hermes serve --skip-build`（既定 `:9118`）を立ち上げ、`%LOCALAPPDATA%\HermesWatchdog\desktop-backend.json` に URL/token/port を公開。cold start で制御プレーンをブロックしない
+1. **起動時 prewarm（非同期）** — HTTP / RunLoop 起動後に goroutine で managed `hermes serve --skip-build`（既定 `:9119`）を立ち上げ、`%LOCALAPPDATA%\HermesWatchdog\desktop-backend.json` に URL/token/port を公開。cold start で制御プレーンをブロックしない
 2. `Hermes.exe` 不在 → 管理 backend は reaping しない → Desktop 起動（manifest があれば `HERMES_DESKTOP_REMOTE_*` も注入）
 3. Desktop 生存 + backend 不在 → **Electron 再起動の前に** managed serve を起動/復旧
 4. 連続失敗が `-FailThreshold` 以上 → Desktop 強制再起動
-5. 予約 ops ポート (9120/8787/9119/…) は backend 判定・reap 対象外（従来どおり）
+5. 予約 ops ポート (9120/8787/9920/…) は backend 判定・reap 対象外（従来どおり）
 
 ### Desktop ショートカット
 
@@ -84,7 +84,7 @@ Admin 認証: `Authorization: Bearer <token>` または `X-Admin-Token: <token>`
 | フラグ | 既定 | 説明 |
 |--------|------|------|
 | `-prewarm-backend` | on | serve の prewarm / 常時監督 |
-| `-managed-backend-port` | 9118 | watchdog 管理の固定 serve ポート（9120/8787/9119 とは別） |
+| `-managed-backend-port` | 9119 | watchdog 管理の固定 serve ポート（9120/8787/9920 とは別） |
 | `-backend-start-timeout` | 120 | `/api/status` 待ち (秒) |
 | `-backend-ready-timeout` | 45 | `/api/status` 待ち (秒) |
 | `-embedding-enabled` | off | 設定済み loopback embedding server の監督 |

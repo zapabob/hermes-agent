@@ -295,6 +295,81 @@ def _build_persisted_message(
     return msg
 
 
+_PERSISTED_PATH_RE = re.compile(r"^Full output saved to: (.+)$", re.MULTILINE)
+
+
+def extract_persisted_path(content: str) -> str | None:
+    """Return the file path from a <persisted-output> replacement block.
+
+    Used by the result-reference stubbing guard (agent/tool_guardrails.py) so
+    a stub referencing a persisted first occurrence can carry the spillover
+    path instead of dangling. Returns None for non-persisted content.
+    """
+    if not isinstance(content, str) or PERSISTED_OUTPUT_TAG not in content:
+        return None
+    match = _PERSISTED_PATH_RE.search(content)
+    return match.group(1).strip() if match else None
+
+
+def extract_trusted_persisted_path(
+    content: str,
+    *,
+    expected_tool_use_id: str,
+) -> str | None:
+    """Return a path only from Hermes' exact persistence wrapper and namespace.
+
+    Tool output is untrusted text and may contain ``<persisted-output>`` or a
+    forged ``Full output saved to`` line.  Executor bookkeeping must never turn
+    those strings into trusted recovery guidance.  This stricter companion to
+    :func:`extract_persisted_path` validates the generated header and requires
+    the path to use Hermes' safe filename inside either ``cache/spillover`` or
+    ``hermes-results``.  The executor additionally requires proof that the
+    persistence layer transformed the raw result during this call.
+    """
+    if not isinstance(content, str) or not content.endswith(
+        f"\n{PERSISTED_OUTPUT_CLOSING_TAG}"
+    ):
+        return None
+    header, separator, _preview = content.partition("\n\nPreview (")
+    if not separator:
+        return None
+    header_lines = header.splitlines()
+    if len(header_lines) != 5 or header_lines[0] != PERSISTED_OUTPUT_TAG:
+        return None
+    if not header_lines[1].startswith("This tool result was too large ("):
+        return None
+    if not header_lines[2].startswith("Full output saved to: "):
+        return None
+    if header_lines[3] != (
+        "Use the read_file tool with offset and limit to access specific "
+        "sections of this output."
+    ):
+        return None
+    if header_lines[4] != (
+        "Recovery: page through the saved file with read_file (offset/limit) "
+        "or process it with execute_code — do NOT re-request the same data "
+        "from the remote API; the full result is already on disk."
+    ):
+        return None
+
+    path = header_lines[2].removeprefix("Full output saved to: ").strip()
+    normalized = path.replace("\\", "/")
+    if not normalized.startswith("/") and not re.match(r"^[A-Za-z]:/", normalized):
+        return None
+    parts = normalized.split("/")
+    if any(part in {".", ".."} for part in parts):
+        return None
+    if not parts or parts[-1] != _safe_result_filename(expected_tool_use_id):
+        return None
+    parent = "/".join(parts[:-1]).rstrip("/")
+    if not (
+        parent.endswith("/cache/spillover")
+        or parent.endswith("/hermes-results")
+    ):
+        return None
+    return path
+
+
 def maybe_persist_tool_result(
     content: str,
     tool_name: str,

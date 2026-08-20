@@ -1268,6 +1268,11 @@ class CLICommandsMixin:
             tokens = rest.split()
             dry_run = "--dry-run" in tokens or "-n" in tokens
             apply = "--yes" in tokens or "--apply" in tokens
+            trees_only = "--trees-only" in tokens
+            branches_only = "--branches-only" in tokens
+            if trees_only and branches_only:
+                print("  Choose only one of --trees-only or --branches-only.")
+                return
             # Keep slash commands fail-safe as the top-level command: absent
             # explicit consent, only produce a plan.
             plan_only = not dry_run and not apply
@@ -1276,19 +1281,23 @@ class CLICommandsMixin:
             from hermes_cli import worktree_gc
 
             active = _cli._active_worktree
-            tree_records = worktree_gc.audit_worktrees(repo_root, with_sizes=False)
-            if active:
-                # Never reap the tree this very session is sitting in, even
-                # if a concurrent audit would judge it clean+merged.
-                active_path = str(active.get("path") or "")
-                tree_records = [
-                    record for record in tree_records
-                    if record.path != active_path
-                ]
-            actions = worktree_gc.reclaim_worktrees(
-                repo_root, dry_run=dry_run, records=tree_records
-            )
-            actions += worktree_gc.reclaim_branches(repo_root, dry_run=dry_run)
+            tree_records = []
+            actions = []
+            if not branches_only:
+                tree_records = worktree_gc.audit_worktrees(repo_root, with_sizes=False)
+                if active:
+                    # Never reap the tree this very session is sitting in, even
+                    # if a concurrent audit would judge it clean+merged.
+                    active_path = str(active.get("path") or "")
+                    tree_records = [
+                        record for record in tree_records
+                        if record.path != active_path
+                    ]
+                actions += worktree_gc.reclaim_worktrees(
+                    repo_root, dry_run=dry_run, records=tree_records
+                )
+            if not trees_only:
+                actions += worktree_gc.reclaim_branches(repo_root, dry_run=dry_run)
             if actions:
                 for line in actions:
                     print(f"  {line}")

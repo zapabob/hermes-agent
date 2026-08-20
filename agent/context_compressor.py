@@ -41,6 +41,7 @@ from agent.model_metadata import (
 )
 from agent.redact import redact_sensitive_text
 from agent.turn_context import drop_stale_api_content
+from agent.tool_guardrails import identical_result_reference_call_id
 from tools.todo_tool import TODO_INJECTION_HEADER
 
 logger = logging.getLogger(__name__)
@@ -3656,6 +3657,39 @@ class ContextCompressor(ContextEngine):
             prune_boundary = len(result) - protected_count
         else:
             prune_boundary = len(result) - protect_tail_count
+
+        # Official identical-result stubs point back to the first full result
+        # in the turn.  Compression normally keeps the newest duplicate full
+        # and rewrites older copies, but the stub makes those contents differ:
+        # the old referenced payload can fall into the summarized middle while
+        # the protected tail contains only a dangling reference.  Rehydrate the
+        # newest stub from its referenced message before the ordinary dedupe
+        # pass.  Dedupe then demotes the older copy and keeps the newest payload
+        # verbatim, preserving both the compressor's established policy and the
+        # guardrail's append-only runtime behavior.  Persisted-output previews
+        # are copied the same way, retaining their durable spill path.
+        call_id_to_result_index = {
+            str(msg.get("tool_call_id") or ""): i
+            for i, msg in enumerate(result)
+            if msg.get("role") == "tool" and msg.get("tool_call_id")
+        }
+        rehydrated_references: set[str] = set()
+        for i in range(len(result) - 1, -1, -1):
+            msg = result[i]
+            if msg.get("role") != "tool":
+                continue
+            reference_id = identical_result_reference_call_id(msg.get("content"))
+            if not reference_id or reference_id in rehydrated_references:
+                continue
+            original_idx = call_id_to_result_index.get(reference_id)
+            if original_idx is None or original_idx == i:
+                continue
+            original_content = result[original_idx].get("content")
+            if not isinstance(original_content, str):
+                continue
+            result[i] = {**msg, "content": original_content}
+            drop_stale_api_content(result[i])
+            rehydrated_references.add(reference_id)
 
         # Pass 1: Deduplicate identical tool results.
         # When the same file is read multiple times, keep only the most recent
