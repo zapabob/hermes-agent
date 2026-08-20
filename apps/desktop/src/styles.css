@@ -350,6 +350,7 @@
     --ui-surface-background: var(--ui-bg-editor);
     --ui-sidebar-surface-background: var(--ui-bg-sidebar);
     --ui-chat-surface-background: var(--ui-bg-chrome);
+    --ui-chat-backdrop-shell-background: var(--ui-chat-surface-background);
     --ui-editor-surface-background: var(--ui-bg-chrome);
     /* The integrated terminal wears the transcript's background, not the
        editor's — it reads as part of the conversation surface. Its own token so
@@ -525,6 +526,7 @@
 
   /* Wallpaper mode: keep text legible while letting portrait art show through. */
   :root.has-skin-wallpaper {
+    --ui-chat-backdrop-shell-background: transparent;
     --ui-chat-surface-background: color-mix(in srgb, var(--ui-bg-chrome) 62%, transparent);
     --ui-editor-surface-background: color-mix(in srgb, var(--ui-bg-chrome) 70%, transparent);
   }

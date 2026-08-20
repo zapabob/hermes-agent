@@ -579,7 +579,7 @@ const ChatViewContent = memo(function ChatViewContent({
   return (
     <div
       className={cn(
-        'relative isolate flex h-full min-w-0 flex-col overflow-hidden bg-(--ui-chat-surface-background)',
+        'relative isolate flex h-full min-w-0 flex-col overflow-hidden bg-(--ui-chat-backdrop-shell-background)',
         className
       )}
       data-chat-surface=""

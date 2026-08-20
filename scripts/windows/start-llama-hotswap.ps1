@@ -20,6 +20,9 @@ param(
     [int]$ModelsMax = 1,
     [string]$PresetPath = "",
     [string]$RuntimePresetPath = "",
+    [int]$BasePort = 0,
+    [string]$Model = "",
+    [switch]$VerboseLog,
     # HF-cache stubs (e.g. NousResearch/Hermes-3-Llama-3.1-8B-GGUF:Q4_K_M) must not
     # appear as fake /v1/models entries. Opt in only with -AllowAutoload.
     [switch]$AllowAutoload,
@@ -353,7 +356,13 @@ New-Item -ItemType Directory -Path $env:HF_HUB_CACHE -Force | Out-Null
 
 $ServerExe = Resolve-Default "HERMES_LLAMA_SERVER_EXE" (Join-Path $env:LOCALAPPDATA "Programs\llama-turboquant\bin\llama-server.exe")
 $HostName = Resolve-Default "HERMES_LLAMA_HOST" "127.0.0.1"
-$Port = [int](Resolve-Default "HERMES_LLAMA_PORT" "8080")
+$Port = if ($BasePort -gt 0) { $BasePort } else { [int](Resolve-Default "HERMES_LLAMA_PORT" "8080") }
+if (-not $RuntimePresetPath -and -not $PresetPath) {
+    $defaultPreset = Join-Path $env:USERPROFILE ".hermes\llama\models-hotswap-primary-secondary.ini"
+    if (Test-Path -LiteralPath $defaultPreset) {
+        $RuntimePresetPath = $defaultPreset
+    }
+}
 $UsingRuntimePreset = -not [string]::IsNullOrWhiteSpace($RuntimePresetPath)
 if ($UsingRuntimePreset) {
     if (-not (Test-Path -LiteralPath $RuntimePresetPath)) {

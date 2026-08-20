@@ -902,6 +902,7 @@ export const twilightHakuaTheme: DesktopTheme = {
   name: 'twilight-hakua',
   label: 'Twilight Hakua',
   description: 'はくあ — 宵のインディゴ×黄昏テーマ（壁紙付き）',
+  backgroundImage: 'C:/Users/downl/.hermes/skins/twilight-hakua-portrait-bg.png',
   backgroundImageFit: 'cover',
   backgroundImagePosition: 'center',
   backgroundOverlay: '#120a22ba',
