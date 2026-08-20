@@ -1,0 +1,22 @@
+{
+  "schema": "net_home_probe/hgw-inspect/v1",
+  "label": "hgw-inspect",
+  "captured_at": "2026-08-18T18:13:00+09:00",
+  "device": "RS-500MI",
+  "firmware": "08.00.0021",
+  "firmware_update": "none",
+  "wan_link": "1Gbps full-duplex up",
+  "lan1_link": "1Gbps full-duplex up",
+  "ipv4_pppoe_sessions": "all disconnected/unavailable",
+  "ipoe_dhcpv4_address": null,
+  "ipoe_dhcpv6_prefix": null,
+  "ipoe_dns": ["2404:1a8:7f01:b::3", "2404:1a8:7f01:a::3"],
+  "v6_ipoe_priority": "auto",
+  "power_saving": false,
+  "pppoe_bridge": true,
+  "wifi_24": {"channel": 11, "ext": 7, "width_hint": "40MHz", "clients_ssid2": 2, "phy": "11n"},
+  "wifi_5": {"channel": 52, "ext": [56, 60, 64], "band": "W53-DFS", "clients_ssid3": 2, "phy": "11ac"},
+  "dhcp_leases": 8,
+  "applied_changes": [],
+  "note": "No HGW GUI knob raises wired WAN above measured ~500Mbps aggregate. Credentials not stored."
+}

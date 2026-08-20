@@ -1,0 +1,28 @@
+{
+  "schema": "net_home_probe/extra/v1",
+  "label": "baseline-wired",
+  "note": "Follow-up probes after the main JSON. Not a full rerun.",
+  "captured_at": "2026-08-18T17:45:00+09:00",
+  "upload": {
+    "url": "https://speed.cloudflare.com/__up",
+    "samples": [
+      {"bytes": 2000000, "mbps": 26.86, "note": "too small; handshake-dominated"},
+      {"bytes": 8000000, "mbps": 72.82},
+      {"bytes": 20000000, "mbps": 286.98, "http_status": 200}
+    ]
+  },
+  "traceroute_ipv4_8hops_8.8.8.8": [
+    {"hop": 1, "ip": "192.168.1.1", "rtts_ms": [2, 1, 5]},
+    {"hop": 2, "timeout": true},
+    {"hop": 3, "timeout": true},
+    {"hop": 4, "timeout": true},
+    {"hop": 5, "timeout": true},
+    {"hop": 6, "ip": "209.85.243.1", "rtts_ms": [6, 8, 18]},
+    {"hop": 7, "ip": "8.8.8.8", "rtts_ms": [4, 4, 4]}
+  ],
+  "rdap": {
+    "public_ipv4_153.243.39.137": "OCN 153.128.0.0-153.253.255.255 JP",
+    "local_ipv6_2400:4050::": "OCN-JPNIC-JP 2400:4000::/22",
+    "v6_hop4_2001:380:a120:2a::1": "OCN-JP 2001:380::/32"
+  }
+}

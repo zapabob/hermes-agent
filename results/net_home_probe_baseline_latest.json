@@ -1,0 +1,392 @@
+{
+  "schema": "net_home_probe/v1",
+  "label": "baseline",
+  "captured_at": "2026-08-18T17:35:42+09:00",
+  "hostname": "downl",
+  "platform": "win32",
+  "probe_seconds": 71.79,
+  "wifi": {
+    "available": false,
+    "state": null,
+    "ssid": null,
+    "bssid": null,
+    "radio_type": null,
+    "channel": null,
+    "channel_width_mhz": null,
+    "channel_width_source": null,
+    "signal_pct": null,
+    "rssi_dbm_estimated": null,
+    "rssi_method": null,
+    "noise_dbm": null,
+    "snr_db": null,
+    "noise_snr_note": "Windows netsh does not expose noise/SNR; left null.",
+    "rx_mbps": null,
+    "tx_mbps": null,
+    "profile": null,
+    "authentication": null,
+    "cipher": null,
+    "scan_match": {},
+    "raw_interfaces": "ワイヤレス インターフェイスがシステムにありません。\r\n",
+    "cmd_ok": true
+  },
+  "ipv6": {
+    "global_address_present": false,
+    "default_route_present": false,
+    "global_addresses": [],
+    "default_routes": []
+  },
+  "l3": {
+    "gateway_v4": null,
+    "default_routes_v4": [],
+    "ipv4_addresses": [],
+    "adapters": [
+      {}
+    ],
+    "dns_servers": [
+      {
+        "InterfaceAlias": "Tailscale",
+        "AddressFamily": 2,
+        "ServerAddresses": []
+      },
+      {
+        "InterfaceAlias": "Tailscale",
+        "AddressFamily": 23,
+        "ServerAddresses": [
+          "fec0:0:0:ffff::1",
+          "fec0:0:0:ffff::2",
+          "fec0:0:0:ffff::3"
+        ]
+      },
+      {
+        "InterfaceAlias": "イーサネット",
+        "AddressFamily": 2,
+        "ServerAddresses": [
+          "1.1.1.1",
+          "8.8.8.8"
+        ]
+      },
+      {
+        "InterfaceAlias": "イーサネット",
+        "AddressFamily": 23,
+        "ServerAddresses": [
+          "2606:4700:4700::1001",
+          "2606:4700:4700::1111"
+        ]
+      },
+      {
+        "InterfaceAlias": "Loopback Pseudo-Interface 1",
+        "AddressFamily": 2,
+        "ServerAddresses": []
+      },
+      {
+        "InterfaceAlias": "Loopback Pseudo-Interface 1",
+        "AddressFamily": 23,
+        "ServerAddresses": [
+          "fec0:0:0:ffff::1",
+          "fec0:0:0:ffff::2",
+          "fec0:0:0:ffff::3"
+        ]
+      },
+      {
+        "InterfaceAlias": "vEthernet (Default Switch)",
+        "AddressFamily": 2,
+        "ServerAddresses": []
+      },
+      {
+        "InterfaceAlias": "vEthernet (Default Switch)",
+        "AddressFamily": 23,
+        "ServerAddresses": [
+          "fec0:0:0:ffff::1",
+          "fec0:0:0:ffff::2",
+          "fec0:0:0:ffff::3"
+        ]
+      },
+      {
+        "InterfaceAlias": "vEthernet (WSL)",
+        "AddressFamily": 2,
+        "ServerAddresses": []
+      },
+      {
+        "InterfaceAlias": "vEthernet (WSL)",
+        "AddressFamily": 23,
+        "ServerAddresses": [
+          "fec0:0:0:ffff::1",
+          "fec0:0:0:ffff::2",
+          "fec0:0:0:ffff::3"
+        ]
+      }
+    ]
+  },
+  "latency": {
+    "cloudflare_1.1.1.1": {
+      "host": "1.1.1.1",
+      "sent": 20,
+      "received": 20,
+      "lost": 0,
+      "loss_pct": 0.0,
+      "avg_ms": null,
+      "max_ms": null,
+      "min_ms": null,
+      "stdev_ms": null,
+      "samples_ms": [],
+      "cmd_ok": true,
+      "raw_tail": "1.1.1.1 からの応答: バイト数 =32 時間 =8ms TTL=53\n1.1.1.1 からの応答: バイト数 =32 時間 =7ms TTL=53\n1.1.1.1 からの応答: バイト数 =32 時間 =8ms TTL=53\n\n1.1.1.1 の ping 統計:\n    パケット数: 送信 = 20、受信 = 20、損失 = 0 (0% の損失)、\nラウンド トリップの概算時間 (ミリ秒):\n    最小 = 7ms、最大 = 9ms、平均 = 7ms"
+    },
+    "google_8.8.8.8": {
+      "host": "8.8.8.8",
+      "sent": 20,
+      "received": 20,
+      "lost": 0,
+      "loss_pct": 0.0,
+      "avg_ms": null,
+      "max_ms": null,
+      "min_ms": null,
+      "stdev_ms": null,
+      "samples_ms": [],
+      "cmd_ok": true,
+      "raw_tail": "8.8.8.8 からの応答: バイト数 =32 時間 =4ms TTL=118\n8.8.8.8 からの応答: バイト数 =32 時間 =4ms TTL=118\n8.8.8.8 からの応答: バイト数 =32 時間 =4ms TTL=118\n\n8.8.8.8 の ping 統計:\n    パケット数: 送信 = 20、受信 = 20、損失 = 0 (0% の損失)、\nラウンド トリップの概算時間 (ミリ秒):\n    最小 = 4ms、最大 = 6ms、平均 = 4ms"
+    }
+  },
+  "traceroute_first4": {
+    "target": "1.1.1.1",
+    "max_hops": 4,
+    "hops": [
+      {
+        "hop": 1,
+        "ip": "192.168.1.1",
+        "rtts_ms": [
+          1,
+          1,
+          1
+        ],
+        "avg_ms": 1.0,
+        "timeout": false,
+        "raw": "1    <1 ms    <1 ms    <1 ms  192.168.1.1"
+      },
+      {
+        "hop": 2,
+        "ip": null,
+        "rtts_ms": [],
+        "avg_ms": null,
+        "timeout": true,
+        "raw": "2     *        *        *     要求がタイムアウトしました。"
+      },
+      {
+        "hop": 3,
+        "ip": null,
+        "rtts_ms": [],
+        "avg_ms": null,
+        "timeout": true,
+        "raw": "3     *        *        *     要求がタイムアウトしました。"
+      },
+      {
+        "hop": 4,
+        "ip": null,
+        "rtts_ms": [],
+        "avg_ms": null,
+        "timeout": true,
+        "raw": "4     *        *        *     要求がタイムアウトしました。"
+      }
+    ],
+    "cmd_ok": true,
+    "raw": "\r\n1.1.1.1 へのルートをトレースしています。経由するホップ数は最大 4 です\r\n\r\n  1    <1 ms    <1 ms    <1 ms  192.168.1.1 \r\n  2     *        *        *     要求がタイムアウトしました。\r\n  3     *        *        *     要求がタイムアウトしました。\r\n  4     *        *        *     要求がタイムアウトしました。\r\n\r\nトレースを完了しました。\r\n"
+  },
+  "dns": {
+    "query_name": "www.cloudflare.com",
+    "rounds": 5,
+    "resolvers": {
+      "cloudflare": {
+        "server": "1.1.1.1",
+        "avg_ms": null,
+        "max_ms": null,
+        "min_ms": null,
+        "successes": 0,
+        "failures": 5,
+        "samples": [
+          {
+            "ok": false,
+            "elapsed_ms": 73.7,
+            "answers": [],
+            "timeout": false
+          },
+          {
+            "ok": false,
+            "elapsed_ms": 62.5,
+            "answers": [],
+            "timeout": false
+          },
+          {
+            "ok": false,
+            "elapsed_ms": 45.4,
+            "answers": [],
+            "timeout": false
+          },
+          {
+            "ok": false,
+            "elapsed_ms": 48.3,
+            "answers": [],
+            "timeout": false
+          },
+          {
+            "ok": false,
+            "elapsed_ms": 49.0,
+            "answers": [],
+            "timeout": false
+          }
+        ]
+      },
+      "google": {
+        "server": "8.8.8.8",
+        "avg_ms": null,
+        "max_ms": null,
+        "min_ms": null,
+        "successes": 0,
+        "failures": 5,
+        "samples": [
+          {
+            "ok": false,
+            "elapsed_ms": 66.4,
+            "answers": [],
+            "timeout": false
+          },
+          {
+            "ok": false,
+            "elapsed_ms": 58.7,
+            "answers": [],
+            "timeout": false
+          },
+          {
+            "ok": false,
+            "elapsed_ms": 56.4,
+            "answers": [],
+            "timeout": false
+          },
+          {
+            "ok": false,
+            "elapsed_ms": 44.5,
+            "answers": [],
+            "timeout": false
+          },
+          {
+            "ok": false,
+            "elapsed_ms": 50.8,
+            "answers": [],
+            "timeout": false
+          }
+        ]
+      }
+    }
+  },
+  "throughput": {
+    "url": "https://speed.cloudflare.com/__down?bytes=25000000",
+    "requested_bytes_each": 25000000,
+    "single": {
+      "url": "https://speed.cloudflare.com/__down?bytes=25000000",
+      "bytes": 25000000,
+      "elapsed_s": 0.867,
+      "mbps": 230.68,
+      "http_status": 200,
+      "error": null
+    },
+    "parallel": {
+      "workers": 6,
+      "wall_s": 1.954,
+      "total_bytes": 150000000,
+      "aggregate_mbps": 614.09,
+      "per_connection": [
+        {
+          "url": "https://speed.cloudflare.com/__down?bytes=25000000",
+          "bytes": 25000000,
+          "elapsed_s": 1.946,
+          "mbps": 102.78,
+          "http_status": 200,
+          "error": null
+        },
+        {
+          "url": "https://speed.cloudflare.com/__down?bytes=25000000",
+          "bytes": 25000000,
+          "elapsed_s": 0.804,
+          "mbps": 248.9,
+          "http_status": 200,
+          "error": null
+        },
+        {
+          "url": "https://speed.cloudflare.com/__down?bytes=25000000",
+          "bytes": 25000000,
+          "elapsed_s": 1.671,
+          "mbps": 119.7,
+          "http_status": 200,
+          "error": null
+        },
+        {
+          "url": "https://speed.cloudflare.com/__down?bytes=25000000",
+          "bytes": 25000000,
+          "elapsed_s": 1.877,
+          "mbps": 106.53,
+          "http_status": 200,
+          "error": null
+        },
+        {
+          "url": "https://speed.cloudflare.com/__down?bytes=25000000",
+          "bytes": 25000000,
+          "elapsed_s": 1.745,
+          "mbps": 114.6,
+          "http_status": 200,
+          "error": null
+        },
+        {
+          "url": "https://speed.cloudflare.com/__down?bytes=25000000",
+          "bytes": 25000000,
+          "elapsed_s": 1.876,
+          "mbps": 106.6,
+          "http_status": 200,
+          "error": null
+        }
+      ]
+    }
+  },
+  "bufferbloat": {
+    "networkQuality": {
+      "available": false,
+      "stdout": "",
+      "stderr": "[WinError 2] 指定されたファイルが見つかりません。",
+      "note": "macOS networkQuality; expected unavailable on Windows.",
+      "rpm": null,
+      "idle_latency_ms": null
+    },
+    "loaded_http_probe": {
+      "probe_url": "https://1.1.1.1/cdn-cgi/trace",
+      "samples_ms": [
+        273.6
+      ],
+      "successes": 1,
+      "errors": 0,
+      "loaded_avg_ms": 273.64,
+      "loaded_max_ms": 273.64119999947434,
+      "idle_avg_ms": null,
+      "loaded_minus_idle_ms": null,
+      "rpm_proxy": 219.3,
+      "rpm_proxy_definition": "60 / mean_loaded_http_rtt_s while a single 40MB download is in flight",
+      "load_download": {
+        "url": "https://speed.cloudflare.com/__down?bytes=40000000",
+        "bytes": 40000000,
+        "elapsed_s": 0.544,
+        "mbps": 588.16,
+        "http_status": 200,
+        "error": null
+      }
+    }
+  },
+  "public_hints": {
+    "ipv4": {
+      "ok": true,
+      "elapsed_ms": 27.3,
+      "body": "fl=762f132\nh=1.1.1.1\nip=153.243.39.137\nts=1787042152.000\nvisit_scheme=https\nuag=net-home-probe/1.0\ncolo=NRT\nsliver=none\nhttp=http/1.1\nloc=JP\ntls=TLSv1.3\nsni=off\nwarp=off\ngateway=off\nrbi=off\nkex=X25519\n"
+    },
+    "cloudflare_meta": {
+      "ok": false,
+      "elapsed_ms": 32.9,
+      "error": "HTTPError: HTTP Error 403: Forbidden"
+    }
+  }
+}

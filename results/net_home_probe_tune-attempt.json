@@ -1,0 +1,32 @@
+{
+  "schema": "net_home_probe/tune-attempt/v1",
+  "label": "tune-attempt",
+  "captured_at": "2026-08-18T17:51:00+09:00",
+  "finding": "No host-side lever left. Limit is HGW/ISP path, not this PC.",
+  "nic": {
+    "name": "Realtek PCIe GbE Family Controller RTL8168H",
+    "link_mbps": 1000,
+    "eee": 0,
+    "green_ethernet": 0,
+    "rss": 1,
+    "tx_buffers": 128,
+    "rx_buffers": 512,
+    "mtu": 1466
+  },
+  "tcp": {
+    "autotuning": "normal",
+    "cc": "cubic",
+    "ecn": "disabled",
+    "admin": false
+  },
+  "hgw": {
+    "lan": "192.168.1.1",
+    "auth": "Basic realm=hgw-area",
+    "server": "lighttpd HGW5-FW_08.00.0007B"
+  },
+  "ipv4_vs_ipv6_25MB_cf": {
+    "v4_mbps": 208.28,
+    "v6_mbps": 188.0
+  },
+  "applied_changes": []
+}

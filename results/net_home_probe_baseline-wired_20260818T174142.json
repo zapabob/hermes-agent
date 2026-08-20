@@ -1,0 +1,792 @@
+{
+  "schema": "net_home_probe/v1",
+  "label": "baseline-wired",
+  "captured_at": "2026-08-18T17:41:42+09:00",
+  "hostname": "downl",
+  "platform": "win32",
+  "probe_seconds": 171.23,
+  "wifi": {
+    "available": false,
+    "state": null,
+    "ssid": null,
+    "bssid": null,
+    "radio_type": null,
+    "channel": null,
+    "channel_width_mhz": null,
+    "channel_width_source": null,
+    "signal_pct": null,
+    "rssi_dbm_estimated": null,
+    "rssi_method": null,
+    "noise_dbm": null,
+    "snr_db": null,
+    "noise_snr_note": "Windows netsh does not expose noise/SNR; left null.",
+    "rx_mbps": null,
+    "tx_mbps": null,
+    "profile": null,
+    "authentication": null,
+    "cipher": null,
+    "scan_match": {},
+    "raw_interfaces": "ワイヤレス インターフェイスがシステムにありません。\r\n",
+    "cmd_ok": true
+  },
+  "ipv6": {
+    "global_address_present": true,
+    "default_route_present": true,
+    "global_addresses": [
+      {
+        "interface": "イーサネット",
+        "ip": "2400:4050:c9e2:6900:6a03:97c:af9e:124f"
+      },
+      {
+        "interface": "イーサネット",
+        "ip": "2400:4050:c9e2:6900:1497:33ed:1e3e:a715"
+      }
+    ],
+    "default_routes": [
+      {
+        "destination": "::/0",
+        "nexthop": "fe80::212:e2ff:fe70:1f70",
+        "raw": "いいえ      Manual    256  ::/0                       16  fe80::212:e2ff:fe70:1f70"
+      }
+    ]
+  },
+  "l3": {
+    "gateway_v4": "192.168.1.1",
+    "default_routes_v4": [
+      {
+        "interface": null,
+        "destination": "0.0.0.0/0",
+        "nexthop": "192.168.1.1",
+        "metric": "20",
+        "raw": "0.0.0.0          0.0.0.0      192.168.1.1      192.168.1.4     20"
+      }
+    ],
+    "ipv4_addresses": [
+      {
+        "interface": "Tailscale",
+        "ip": "100.91.183.75"
+      },
+      {
+        "interface": "イーサネット",
+        "ip": "192.168.1.4"
+      },
+      {
+        "interface": "vEthernet (Default Switch)",
+        "ip": "172.23.208.1"
+      },
+      {
+        "interface": "vEthernet (WSL)",
+        "ip": "172.18.32.1"
+      }
+    ],
+    "adapters": [
+      {
+        "name": "Tailscale",
+        "header": "不明なアダプター Tailscale:",
+        "ipv4": [
+          "100.91.183.75"
+        ],
+        "ipv6": [
+          "fd7a:115c:a1e0::301:b794",
+          "fe80::f51d:f268:dc82:4182%10"
+        ],
+        "dns": [],
+        "gateway": [],
+        "dns_suffix": "taile4f666.ts.net",
+        "media_state": null,
+        "description": null
+      },
+      {
+        "name": "イーサネット",
+        "header": "イーサネット アダプター イーサネット:",
+        "ipv4": [
+          "192.168.1.4"
+        ],
+        "ipv6": [
+          "2400:4050:c9e2:6900:6a03:97c:af9e:124f",
+          "2400:4050:c9e2:6900:1497:33ed:1e3e:a715",
+          "fe80::60cf:e41a:9999:93f%16"
+        ],
+        "dns": [
+          "2606:4700:4700::1001",
+          "4700:4700::1111"
+        ],
+        "gateway": [
+          "fe80::212:e2ff:fe70:1f70%16"
+        ],
+        "dns_suffix": "flets-east.jp",
+        "media_state": null,
+        "description": null
+      },
+      {
+        "name": "vEthernet (Default Switch)",
+        "header": "イーサネット アダプター vEthernet (Default Switch):",
+        "ipv4": [
+          "172.23.208.1"
+        ],
+        "ipv6": [
+          "fe80::8454:c9d0:46af:70c9%19"
+        ],
+        "dns": [],
+        "gateway": [],
+        "dns_suffix": null,
+        "media_state": null,
+        "description": null
+      },
+      {
+        "name": "vEthernet (WSL)",
+        "header": "イーサネット アダプター vEthernet (WSL):",
+        "ipv4": [
+          "172.18.32.1"
+        ],
+        "ipv6": [
+          "fe80::93e1:5752:4dfd:16da%29"
+        ],
+        "dns": [],
+        "gateway": [],
+        "dns_suffix": null,
+        "media_state": null,
+        "description": null
+      }
+    ],
+    "dns_servers": [
+      {
+        "interface": "イーサネット",
+        "servers": [
+          "2606:4700:4700::1001",
+          "4700:4700::1111"
+        ]
+      }
+    ],
+    "link_speed": {
+      "nics": [
+        {
+          "AdapterType": "",
+          "speed_mbps": null
+        },
+        {
+          "MACAddress": "",
+          "speed_mbps": null
+        },
+        {
+          "Name": "Tailscale Tunnel",
+          "speed_mbps": null
+        },
+        {
+          "Speed": "100000000000",
+          "speed_mbps": 100000.0
+        },
+        {
+          "AdapterType": "Ethernet 802.3",
+          "speed_mbps": null
+        },
+        {
+          "MACAddress": "9C:6B:00:06:F0:52",
+          "speed_mbps": null
+        },
+        {
+          "Name": "Realtek PCIe GbE Family Controller",
+          "speed_mbps": null
+        },
+        {
+          "Speed": "1000000000",
+          "speed_mbps": 1000.0
+        }
+      ],
+      "cmd_ok": true,
+      "raw": "\r\r\n\r\r\nAdapterType=\r\r\nMACAddress=\r\r\nName=Tailscale Tunnel\r\r\nSpeed=100000000000\r\r\n\r\r\n\r\r\nAdapterType=Ethernet 802.3\r\r\nMACAddress=9C:6B:00:06:F0:52\r\r\nName=Realtek PCIe GbE Family Controller\r\r\nSpeed=1000000000\r\r\n\r\r\n\r\r\n\r\r\n"
+    }
+  },
+  "latency": {
+    "default_gateway": {
+      "host": "192.168.1.1",
+      "sent": 20,
+      "received": 20,
+      "lost": 0,
+      "loss_pct": 0.0,
+      "avg_ms": 1.65,
+      "max_ms": 14.0,
+      "min_ms": 1.0,
+      "stdev_ms": 2.83,
+      "samples_ms": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        14.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "cmd_ok": true,
+      "raw_tail": "192.168.1.1 からの応答: バイト数 =32 時間 <1ms TTL=64\n192.168.1.1 からの応答: バイト数 =32 時間 <1ms TTL=64\n192.168.1.1 からの応答: バイト数 =32 時間 <1ms TTL=64\n\n192.168.1.1 の ping 統計:\n    パケット数: 送信 = 20、受信 = 20、損失 = 0 (0% の損失)、\nラウンド トリップの概算時間 (ミリ秒):\n    最小 = 0ms、最大 = 14ms、平均 = 0ms"
+    },
+    "cloudflare_1.1.1.1": {
+      "host": "1.1.1.1",
+      "sent": 20,
+      "received": 20,
+      "lost": 0,
+      "loss_pct": 0.0,
+      "avg_ms": 7.8,
+      "max_ms": 8.0,
+      "min_ms": 7.0,
+      "stdev_ms": 0.4,
+      "samples_ms": [
+        8.0,
+        8.0,
+        8.0,
+        7.0,
+        8.0,
+        8.0,
+        8.0,
+        7.0,
+        8.0,
+        8.0,
+        8.0,
+        8.0,
+        8.0,
+        8.0,
+        7.0,
+        8.0,
+        8.0,
+        8.0,
+        7.0,
+        8.0
+      ],
+      "cmd_ok": true,
+      "raw_tail": "1.1.1.1 からの応答: バイト数 =32 時間 =8ms TTL=53\n1.1.1.1 からの応答: バイト数 =32 時間 =7ms TTL=53\n1.1.1.1 からの応答: バイト数 =32 時間 =8ms TTL=53\n\n1.1.1.1 の ping 統計:\n    パケット数: 送信 = 20、受信 = 20、損失 = 0 (0% の損失)、\nラウンド トリップの概算時間 (ミリ秒):\n    最小 = 7ms、最大 = 8ms、平均 = 7ms"
+    },
+    "google_8.8.8.8": {
+      "host": "8.8.8.8",
+      "sent": 20,
+      "received": 20,
+      "lost": 0,
+      "loss_pct": 0.0,
+      "avg_ms": 4.15,
+      "max_ms": 5.0,
+      "min_ms": 4.0,
+      "stdev_ms": 0.36,
+      "samples_ms": [
+        4.0,
+        4.0,
+        4.0,
+        5.0,
+        4.0,
+        4.0,
+        4.0,
+        4.0,
+        5.0,
+        4.0,
+        4.0,
+        4.0,
+        4.0,
+        4.0,
+        4.0,
+        4.0,
+        5.0,
+        4.0,
+        4.0,
+        4.0
+      ],
+      "cmd_ok": true,
+      "raw_tail": "8.8.8.8 からの応答: バイト数 =32 時間 =4ms TTL=118\n8.8.8.8 からの応答: バイト数 =32 時間 =4ms TTL=118\n8.8.8.8 からの応答: バイト数 =32 時間 =4ms TTL=118\n\n8.8.8.8 の ping 統計:\n    パケット数: 送信 = 20、受信 = 20、損失 = 0 (0% の損失)、\nラウンド トリップの概算時間 (ミリ秒):\n    最小 = 4ms、最大 = 5ms、平均 = 4ms"
+    },
+    "cloudflare_v6": {
+      "host": "2606:4700:4700::1111",
+      "sent": 20,
+      "received": 20,
+      "lost": 0,
+      "loss_pct": 0.0,
+      "avg_ms": 7.0,
+      "max_ms": 9.0,
+      "min_ms": 6.0,
+      "stdev_ms": 0.95,
+      "samples_ms": [
+        6.0,
+        6.0,
+        6.0,
+        6.0,
+        7.0,
+        9.0,
+        7.0,
+        7.0,
+        7.0,
+        7.0,
+        9.0,
+        7.0,
+        7.0,
+        6.0,
+        7.0,
+        7.0,
+        7.0,
+        7.0,
+        6.0,
+        9.0
+      ],
+      "cmd_ok": true,
+      "raw_tail": "2606:4700:4700::1111 からの応答: 時間 =7ms \n2606:4700:4700::1111 からの応答: 時間 =6ms \n2606:4700:4700::1111 からの応答: 時間 =9ms \n\n2606:4700:4700::1111 の ping 統計:\n    パケット数: 送信 = 20、受信 = 20、損失 = 0 (0% の損失)、\nラウンド トリップの概算時間 (ミリ秒):\n    最小 = 6ms、最大 = 9ms、平均 = 7ms"
+    }
+  },
+  "traceroute_first4": {
+    "target": "1.1.1.1",
+    "max_hops": 4,
+    "hops": [
+      {
+        "hop": 1,
+        "ip": "192.168.1.1",
+        "rtts_ms": [
+          1,
+          1,
+          1
+        ],
+        "avg_ms": 1.0,
+        "timeout": false,
+        "raw": "1    <1 ms    <1 ms    <1 ms  192.168.1.1"
+      },
+      {
+        "hop": 2,
+        "ip": null,
+        "rtts_ms": [],
+        "avg_ms": null,
+        "timeout": true,
+        "raw": "2     *        *        *     要求がタイムアウトしました。"
+      },
+      {
+        "hop": 3,
+        "ip": null,
+        "rtts_ms": [],
+        "avg_ms": null,
+        "timeout": true,
+        "raw": "3     *        *        *     要求がタイムアウトしました。"
+      },
+      {
+        "hop": 4,
+        "ip": null,
+        "rtts_ms": [],
+        "avg_ms": null,
+        "timeout": true,
+        "raw": "4     *        *        *     要求がタイムアウトしました。"
+      }
+    ],
+    "named_hops": [
+      {
+        "hop": 1,
+        "raw": "1    <1 ms    <1 ms    <1 ms  192.168.1.1"
+      },
+      {
+        "hop": 2,
+        "raw": "2     *        *        *     要求がタイムアウトしました。"
+      },
+      {
+        "hop": 3,
+        "raw": "3     *        *        *     要求がタイムアウトしました。"
+      },
+      {
+        "hop": 4,
+        "raw": "4     *        *        *     要求がタイムアウトしました。"
+      },
+      {
+        "hop": 5,
+        "raw": "5     *        *        *     要求がタイムアウトしました。"
+      },
+      {
+        "hop": 6,
+        "raw": "6     4 ms     5 ms     4 ms  122.1.245.206"
+      }
+    ],
+    "ipv6_target": "2606:4700:4700::1111",
+    "ipv6_hops": [
+      {
+        "hop": 1,
+        "ip": "2400:4050:c9e2:6900::fffe",
+        "rtts_ms": [
+          12,
+          2,
+          2
+        ],
+        "avg_ms": 5.3,
+        "timeout": false,
+        "raw": "1    12 ms     2 ms     2 ms  2400:4050:c9e2:6900::fffe"
+      },
+      {
+        "hop": 2,
+        "ip": null,
+        "rtts_ms": [],
+        "avg_ms": null,
+        "timeout": true,
+        "raw": "2     *        *        *     要求がタイムアウトしました。"
+      },
+      {
+        "hop": 3,
+        "ip": null,
+        "rtts_ms": [],
+        "avg_ms": null,
+        "timeout": true,
+        "raw": "3     *        *        *     要求がタイムアウトしました。"
+      },
+      {
+        "hop": 4,
+        "ip": "2001:380:a120:2a::1",
+        "rtts_ms": [
+          4,
+          3,
+          3
+        ],
+        "avg_ms": 3.3,
+        "timeout": false,
+        "raw": "4     4 ms     3 ms     3 ms  2001:380:a120:2a::1"
+      }
+    ],
+    "cmd_ok": true,
+    "raw": "\r\n1.1.1.1 へのルートをトレースしています。経由するホップ数は最大 4 です\r\n\r\n  1    <1 ms    <1 ms    <1 ms  192.168.1.1 \r\n  2     *        *        *     要求がタイムアウトしました。\r\n  3     *        *        *     要求がタイムアウトしました。\r\n  4     *        *        *     要求がタイムアウトしました。\r\n\r\nトレースを完了しました。\r\n",
+    "raw_named": "\r\none.one.one.one [1.1.1.1] へのルートをトレースしています\r\n経由するホップ数は最大 6 です:\r\n\r\n  1    <1 ms    <1 ms    <1 ms  192.168.1.1 \r\n  2     *        *        *     要求がタイムアウトしました。\r\n  3     *        *        *     要求がタイムアウトしました。\r\n  4     *        *        *     要求がタイムアウトしました。\r\n  5     *        *        *     要求がタイムアウトしました。\r\n  6     4 ms     5 ms     4 ms  122.1.245.206 \r\n\r\nトレースを完了しました。\r\n",
+    "raw_ipv6": "\r\n2606:4700:4700::1111 へのルートをトレースしています。経由するホップ数は最大 4 です\r\n\r\n  1    12 ms     2 ms     2 ms  2400:4050:c9e2:6900::fffe \r\n  2     *        *        *     要求がタイムアウトしました。\r\n  3     *        *        *     要求がタイムアウトしました。\r\n  4     4 ms     3 ms     3 ms  2001:380:a120:2a::1 \r\n\r\nトレースを完了しました。\r\n"
+  },
+  "dns": {
+    "query_name": "www.cloudflare.com",
+    "rounds": 5,
+    "resolvers": {
+      "router": {
+        "server": "192.168.1.1",
+        "avg_ms": 64.9,
+        "max_ms": 72.6,
+        "min_ms": 59.6,
+        "successes": 5,
+        "failures": 0,
+        "samples": [
+          {
+            "ok": true,
+            "elapsed_ms": 72.6,
+            "answers": [
+              "2606:4700::6810:7b60",
+              "2606:4700::6810:7c60",
+              "104.16.124.96",
+              "104.16.123.96"
+            ],
+            "timeout": false,
+            "raw_tail": "サーバー:  ntt.setup\nAddress:  192.168.1.1\n\n名前:    www.cloudflare.com\nAddresses:  2606:4700::6810:7b60\n\t  2606:4700::6810:7c60\n\t  104.16.124.96\n\t  104.16.123.96\n\n\n権限のない回答:\n"
+          },
+          {
+            "ok": true,
+            "elapsed_ms": 65.6,
+            "answers": [
+              "2606:4700::6810:7b60",
+              "2606:4700::6810:7c60",
+              "104.16.123.96",
+              "104.16.124.96"
+            ],
+            "timeout": false,
+            "raw_tail": "サーバー:  ntt.setup\nAddress:  192.168.1.1\n\n名前:    www.cloudflare.com\nAddresses:  2606:4700::6810:7b60\n\t  2606:4700::6810:7c60\n\t  104.16.123.96\n\t  104.16.124.96\n\n\n権限のない回答:\n"
+          },
+          {
+            "ok": true,
+            "elapsed_ms": 59.6,
+            "answers": [
+              "2606:4700::6810:7b60",
+              "2606:4700::6810:7c60",
+              "104.16.124.96",
+              "104.16.123.96"
+            ],
+            "timeout": false,
+            "raw_tail": "サーバー:  ntt.setup\nAddress:  192.168.1.1\n\n名前:    www.cloudflare.com\nAddresses:  2606:4700::6810:7b60\n\t  2606:4700::6810:7c60\n\t  104.16.124.96\n\t  104.16.123.96\n\n\n権限のない回答:\n"
+          },
+          {
+            "ok": true,
+            "elapsed_ms": 60.6,
+            "answers": [
+              "2606:4700::6810:7b60",
+              "2606:4700::6810:7c60",
+              "104.16.124.96",
+              "104.16.123.96"
+            ],
+            "timeout": false,
+            "raw_tail": "サーバー:  ntt.setup\nAddress:  192.168.1.1\n\n名前:    www.cloudflare.com\nAddresses:  2606:4700::6810:7b60\n\t  2606:4700::6810:7c60\n\t  104.16.124.96\n\t  104.16.123.96\n\n\n権限のない回答:\n"
+          },
+          {
+            "ok": true,
+            "elapsed_ms": 66.2,
+            "answers": [
+              "2606:4700::6810:7c60",
+              "2606:4700::6810:7b60",
+              "104.16.123.96",
+              "104.16.124.96"
+            ],
+            "timeout": false,
+            "raw_tail": "サーバー:  ntt.setup\nAddress:  192.168.1.1\n\n名前:    www.cloudflare.com\nAddresses:  2606:4700::6810:7c60\n\t  2606:4700::6810:7b60\n\t  104.16.123.96\n\t  104.16.124.96\n\n\n権限のない回答:\n"
+          }
+        ]
+      },
+      "cloudflare": {
+        "server": "1.1.1.1",
+        "avg_ms": 48.1,
+        "max_ms": 50.7,
+        "min_ms": 45.0,
+        "successes": 5,
+        "failures": 0,
+        "samples": [
+          {
+            "ok": true,
+            "elapsed_ms": 47.6,
+            "answers": [
+              "2606:4700::6810:7b60",
+              "2606:4700::6810:7c60",
+              "104.16.123.96",
+              "104.16.124.96"
+            ],
+            "timeout": false,
+            "raw_tail": "サーバー:  one.one.one.one\nAddress:  1.1.1.1\n\n名前:    www.cloudflare.com\nAddresses:  2606:4700::6810:7b60\n\t  2606:4700::6810:7c60\n\t  104.16.123.96\n\t  104.16.124.96\n\n\n権限のない回答:\n"
+          },
+          {
+            "ok": true,
+            "elapsed_ms": 49.4,
+            "answers": [
+              "2606:4700::6810:7c60",
+              "2606:4700::6810:7b60",
+              "104.16.124.96",
+              "104.16.123.96"
+            ],
+            "timeout": false,
+            "raw_tail": "サーバー:  one.one.one.one\nAddress:  1.1.1.1\n\n名前:    www.cloudflare.com\nAddresses:  2606:4700::6810:7c60\n\t  2606:4700::6810:7b60\n\t  104.16.124.96\n\t  104.16.123.96\n\n\n権限のない回答:\n"
+          },
+          {
+            "ok": true,
+            "elapsed_ms": 50.7,
+            "answers": [
+              "2606:4700::6810:7b60",
+              "2606:4700::6810:7c60",
+              "104.16.123.96",
+              "104.16.124.96"
+            ],
+            "timeout": false,
+            "raw_tail": "サーバー:  one.one.one.one\nAddress:  1.1.1.1\n\n名前:    www.cloudflare.com\nAddresses:  2606:4700::6810:7b60\n\t  2606:4700::6810:7c60\n\t  104.16.123.96\n\t  104.16.124.96\n\n\n権限のない回答:\n"
+          },
+          {
+            "ok": true,
+            "elapsed_ms": 45.0,
+            "answers": [
+              "2606:4700::6810:7b60",
+              "2606:4700::6810:7c60",
+              "104.16.123.96",
+              "104.16.124.96"
+            ],
+            "timeout": false,
+            "raw_tail": "サーバー:  one.one.one.one\nAddress:  1.1.1.1\n\n名前:    www.cloudflare.com\nAddresses:  2606:4700::6810:7b60\n\t  2606:4700::6810:7c60\n\t  104.16.123.96\n\t  104.16.124.96\n\n\n権限のない回答:\n"
+          },
+          {
+            "ok": true,
+            "elapsed_ms": 48.0,
+            "answers": [
+              "2606:4700::6810:7b60",
+              "2606:4700::6810:7c60",
+              "104.16.123.96",
+              "104.16.124.96"
+            ],
+            "timeout": false,
+            "raw_tail": "サーバー:  one.one.one.one\nAddress:  1.1.1.1\n\n名前:    www.cloudflare.com\nAddresses:  2606:4700::6810:7b60\n\t  2606:4700::6810:7c60\n\t  104.16.123.96\n\t  104.16.124.96\n\n\n権限のない回答:\n"
+          }
+        ]
+      },
+      "google": {
+        "server": "8.8.8.8",
+        "avg_ms": 57.6,
+        "max_ms": 65.2,
+        "min_ms": 50.0,
+        "successes": 5,
+        "failures": 0,
+        "samples": [
+          {
+            "ok": true,
+            "elapsed_ms": 57.3,
+            "answers": [
+              "2606:4700::6810:7b60",
+              "2606:4700::6810:7c60",
+              "104.16.124.96",
+              "104.16.123.96"
+            ],
+            "timeout": false,
+            "raw_tail": "サーバー:  dns.google\nAddress:  8.8.8.8\n\n名前:    www.cloudflare.com\nAddresses:  2606:4700::6810:7b60\n\t  2606:4700::6810:7c60\n\t  104.16.124.96\n\t  104.16.123.96\n\n\n権限のない回答:\n"
+          },
+          {
+            "ok": true,
+            "elapsed_ms": 62.7,
+            "answers": [
+              "2606:4700::6810:7c60",
+              "2606:4700::6810:7b60",
+              "104.16.123.96",
+              "104.16.124.96"
+            ],
+            "timeout": false,
+            "raw_tail": "サーバー:  dns.google\nAddress:  8.8.8.8\n\n名前:    www.cloudflare.com\nAddresses:  2606:4700::6810:7c60\n\t  2606:4700::6810:7b60\n\t  104.16.123.96\n\t  104.16.124.96\n\n\n権限のない回答:\n"
+          },
+          {
+            "ok": true,
+            "elapsed_ms": 65.2,
+            "answers": [
+              "2606:4700::6810:7b60",
+              "2606:4700::6810:7c60",
+              "104.16.123.96",
+              "104.16.124.96"
+            ],
+            "timeout": false,
+            "raw_tail": "サーバー:  dns.google\nAddress:  8.8.8.8\n\n名前:    www.cloudflare.com\nAddresses:  2606:4700::6810:7b60\n\t  2606:4700::6810:7c60\n\t  104.16.123.96\n\t  104.16.124.96\n\n\n権限のない回答:\n"
+          },
+          {
+            "ok": true,
+            "elapsed_ms": 50.0,
+            "answers": [
+              "2606:4700::6810:7b60",
+              "2606:4700::6810:7c60",
+              "104.16.124.96",
+              "104.16.123.96"
+            ],
+            "timeout": false,
+            "raw_tail": "サーバー:  dns.google\nAddress:  8.8.8.8\n\n名前:    www.cloudflare.com\nAddresses:  2606:4700::6810:7b60\n\t  2606:4700::6810:7c60\n\t  104.16.124.96\n\t  104.16.123.96\n\n\n権限のない回答:\n"
+          },
+          {
+            "ok": true,
+            "elapsed_ms": 53.0,
+            "answers": [
+              "2606:4700::6810:7c60",
+              "2606:4700::6810:7b60",
+              "104.16.123.96",
+              "104.16.124.96"
+            ],
+            "timeout": false,
+            "raw_tail": "サーバー:  dns.google\nAddress:  8.8.8.8\n\n名前:    www.cloudflare.com\nAddresses:  2606:4700::6810:7c60\n\t  2606:4700::6810:7b60\n\t  104.16.123.96\n\t  104.16.124.96\n\n\n権限のない回答:\n"
+          }
+        ]
+      }
+    }
+  },
+  "throughput": {
+    "url": "https://speed.cloudflare.com/__down?bytes=25000000",
+    "requested_bytes_each": 25000000,
+    "single": {
+      "url": "https://speed.cloudflare.com/__down?bytes=25000000",
+      "bytes": 25000000,
+      "elapsed_s": 1.05,
+      "mbps": 190.56,
+      "http_status": 200,
+      "error": null
+    },
+    "parallel": {
+      "workers": 6,
+      "wall_s": 2.305,
+      "total_bytes": 150000000,
+      "aggregate_mbps": 520.6,
+      "per_connection": [
+        {
+          "url": "https://speed.cloudflare.com/__down?bytes=25000000",
+          "bytes": 25000000,
+          "elapsed_s": 2.299,
+          "mbps": 86.99,
+          "http_status": 200,
+          "error": null
+        },
+        {
+          "url": "https://speed.cloudflare.com/__down?bytes=25000000",
+          "bytes": 25000000,
+          "elapsed_s": 1.541,
+          "mbps": 129.8,
+          "http_status": 200,
+          "error": null
+        },
+        {
+          "url": "https://speed.cloudflare.com/__down?bytes=25000000",
+          "bytes": 25000000,
+          "elapsed_s": 2.209,
+          "mbps": 90.55,
+          "http_status": 200,
+          "error": null
+        },
+        {
+          "url": "https://speed.cloudflare.com/__down?bytes=25000000",
+          "bytes": 25000000,
+          "elapsed_s": 2.054,
+          "mbps": 97.39,
+          "http_status": 200,
+          "error": null
+        },
+        {
+          "url": "https://speed.cloudflare.com/__down?bytes=25000000",
+          "bytes": 25000000,
+          "elapsed_s": 1.619,
+          "mbps": 123.53,
+          "http_status": 200,
+          "error": null
+        },
+        {
+          "url": "https://speed.cloudflare.com/__down?bytes=25000000",
+          "bytes": 25000000,
+          "elapsed_s": 1.419,
+          "mbps": 140.9,
+          "http_status": 200,
+          "error": null
+        }
+      ]
+    }
+  },
+  "bufferbloat": {
+    "networkQuality": {
+      "available": false,
+      "stdout": "",
+      "stderr": "[WinError 2] 指定されたファイルが見つかりません。",
+      "note": "macOS networkQuality; expected unavailable on Windows.",
+      "rpm": null,
+      "idle_latency_ms": null
+    },
+    "loaded_http_probe": {
+      "probe_url": "https://1.1.1.1/cdn-cgi/trace",
+      "samples_ms": [
+        39.4,
+        37.9,
+        42.0,
+        33.9,
+        41.1,
+        31.2,
+        43.3,
+        58.3
+      ],
+      "successes": 8,
+      "errors": 0,
+      "loaded_avg_ms": 40.89,
+      "loaded_max_ms": 58.32979999831878,
+      "idle_avg_ms": 7.8,
+      "loaded_minus_idle_ms": 33.09,
+      "rpm_proxy": 1467.4,
+      "rpm_proxy_definition": "60 / mean_loaded_http_rtt_s while a single 40MB download is in flight",
+      "load_download": {
+        "url": "https://speed.cloudflare.com/__down?bytes=200000000",
+        "bytes": 0,
+        "elapsed_s": 0.029,
+        "mbps": null,
+        "http_status": null,
+        "error": "HTTPError: HTTP Error 403: Forbidden"
+      }
+    }
+  },
+  "public_hints": {
+    "ipv4": {
+      "ok": true,
+      "elapsed_ms": 56.9,
+      "body": "fl=762f71\nh=1.1.1.1\nip=153.243.39.137\nts=1787042511.000\nvisit_scheme=https\nuag=net-home-probe/1.0\ncolo=NRT\nsliver=none\nhttp=http/1.1\nloc=JP\ntls=TLSv1.3\nsni=off\nwarp=off\ngateway=off\nrbi=off\nkex=X25519\n"
+    },
+    "cloudflare_meta": {
+      "ok": false,
+      "elapsed_ms": 42.0,
+      "error": "HTTPError: HTTP Error 403: Forbidden"
+    }
+  }
+}

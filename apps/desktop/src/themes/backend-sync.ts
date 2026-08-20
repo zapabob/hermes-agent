@@ -138,11 +138,17 @@ export function ingestBackendSkin(
       const { [name]: _removed, ...rest } = current
       const next = { ...scoped, [scopeKey]: rest }
       $backendThemesByScope.set(next)
-      if (scopeKey === activeScopeKey()) publishActiveScope(next)
+
+      if (scopeKey === activeScopeKey()) {
+        publishActiveScope(next)
+      }
     } else if (theme && JSON.stringify(current[name]) !== JSON.stringify(theme)) {
       const next = { ...scoped, [scopeKey]: { ...current, [name]: theme } }
       $backendThemesByScope.set(next)
-      if (scopeKey === activeScopeKey()) publishActiveScope(next)
+
+      if (scopeKey === activeScopeKey()) {
+        publishActiveScope(next)
+      }
     }
   }
 
