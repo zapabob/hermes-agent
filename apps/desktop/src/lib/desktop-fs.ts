@@ -5,7 +5,6 @@ import type {
   HermesSelectPathsOptions
 } from '@/global'
 import { $connection } from '@/store/session'
-
 import type { DesktopThemeSource } from '@/themes/types'
 
 export type DesktopFsSourceScope = DesktopThemeSource
@@ -74,7 +73,7 @@ function bridge() {
 function remoteFsApi<T>(path: string, body?: Record<string, unknown>, scope?: DesktopFsSourceScope): Promise<T> {
   const connection = $connection.get()
   const profile = scope ? scope.profile.trim() || 'default' : desktopFsProfile()
-  const connectionId = scope ? scope.connectionId : connection?.connectionId ?? null
+  const connectionId = scope ? scope.connectionId : (connection?.connectionId ?? null)
 
   const request = body ? { body, method: 'POST' as const, path, profile } : { path, profile }
 

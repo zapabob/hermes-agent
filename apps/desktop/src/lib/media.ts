@@ -1,4 +1,4 @@
-import { readDesktopFileDataUrl, type DesktopFsSourceScope } from '@/lib/desktop-fs'
+import { type DesktopFsSourceScope, readDesktopFileDataUrl } from '@/lib/desktop-fs'
 import { capitalize } from '@/lib/text'
 import { $connection } from '@/store/session'
 
