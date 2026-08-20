@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  tar: 7.5.22
+
 importers:
 
   .:
@@ -69,8 +72,8 @@ importers:
         specifier: 0.577.0
         version: 0.577.0(react@19.2.7)
       nanostores:
-        specifier: 1.4.0
-        version: 1.4.0
+        specifier: 1.4.2
+        version: 1.4.2
       radix-ui:
         specifier: 1.6.7
         version: 1.6.7(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -161,7 +164,7 @@ importers:
         version: 1.2.3
       '@nanostores/react':
         specifier: 1.1.0
-        version: 1.1.0(nanostores@1.4.0)(react@19.2.7)
+        version: 1.1.0(nanostores@1.4.2)(react@19.2.7)
       '@nous-research/ui':
         specifier: 0.18.2
         version: 0.18.2(@observablehq/plot@0.6.17)(@react-three/fiber@9.6.1(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(three@0.180.0))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(gsap@3.15.0)(leva@0.10.1(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(motion@12.42.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(three@0.180.0)
@@ -207,6 +210,9 @@ importers:
       '@xterm/xterm':
         specifier: 6.0.0
         version: 6.0.0
+      blobatar:
+        specifier: 2.0.0
+        version: 2.0.0(react@19.2.7)
       class-variance-authority:
         specifier: 0.7.1
         version: 0.7.1
@@ -225,6 +231,9 @@ importers:
       dompurify:
         specifier: 3.4.13
         version: 3.4.13
+      driver.js:
+        specifier: 1.8.0
+        version: 1.8.0
       emojibase-data:
         specifier: 16.0.3
         version: 16.0.3(emojibase@17.0.0)
@@ -253,8 +262,8 @@ importers:
         specifier: 12.42.2
         version: 12.42.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       nanostores:
-        specifier: 1.4.0
-        version: 1.4.0
+        specifier: 1.4.2
+        version: 1.4.2
       node-pty:
         specifier: 1.1.0
         version: 1.1.0
@@ -433,13 +442,13 @@ importers:
         version: link:../apps/shared
       '@nanostores/react':
         specifier: 1.1.0
-        version: 1.1.0(nanostores@1.4.0)(react@19.2.7)
+        version: 1.1.0(nanostores@1.4.2)(react@19.2.7)
       ink-text-input:
         specifier: 6.0.0
         version: 6.0.0(ink@7.1.1(@types/react@19.2.17)(react@19.2.7))(react@19.2.7)
       nanostores:
-        specifier: 1.4.0
-        version: 1.4.0
+        specifier: 1.4.2
+        version: 1.4.2
       react:
         specifier: 19.2.7
         version: 19.2.7
@@ -3157,6 +3166,14 @@ packages:
     peerDependencies:
       react: '>=17.0.1'
 
+  blobatar@2.0.0:
+    resolution: {integrity: sha512-46STsjELfKv5hnnRYsWKgN1vlWFkaewSkwnqRRnptCD+LwxejfyXs1lYwek4fkwAtGrXabmJHP4fpzDxjnqAEg==}
+    peerDependencies:
+      react: '>=18'
+    peerDependenciesMeta:
+      react:
+        optional: true
+
   bluebird@3.7.2:
     resolution: {integrity: sha512-XpNj6GDQzdfW+r2Wnn7xiSAd7TM3jzkxGXBGTtWKuSXv1xUV+azxAm8jdWZN06QTQk+2N2XB9jRDkvbmQmcRtg==}
 
@@ -3246,10 +3263,6 @@ packages:
 
   character-reference-invalid@2.0.1:
     resolution: {integrity: sha512-iBZ4F4wRbyORVsu0jPV7gXkOsGYjGHPmAyv+HiHG8gi5PtC9KI2j1+v8/tlibRvjoWX027ypmG/n0HtO5t7unw==}
-
-  chownr@2.0.0:
-    resolution: {integrity: sha512-bIomtDF5KGpdogkLd9VspvFzk9KfpyyGlS8YFVZl7TGPBHL5snIOnxeshwVgPteQ9b4Eydl+pVbIyE1DcvCWgQ==}
-    engines: {node: '>=10'}
 
   chownr@3.0.0:
     resolution: {integrity: sha512-+IxzY9BZOQd/XuYPRmrvEVjF/nqj5kgT4kEq7VofrDoM1MxoRjEWkrCC3EtLi59TVawxTAn+orJwFQcrqEN1+g==}
@@ -3697,6 +3710,9 @@ packages:
     resolution: {integrity: sha512-uBq4egWHTcTt33a72vpSG0z3HnPuIl6NqYcTrKEg2azoEyl2hpW0zqlxysq2pK9HlDIHyHyakeYaYnSAwd8bow==}
     engines: {node: '>=12'}
 
+  driver.js@1.8.0:
+    resolution: {integrity: sha512-+8/IO7h1v14IzWh2GP60N7T3PFZweXwdn5e5POuxRSBoCYUojsBxzqawPeXh3YZIibRy7EehYNEyxe7slwwtdg==}
+
   dunder-proto@1.0.1:
     resolution: {integrity: sha512-KIN/nDJBQRcXw0MLVhZE9iQHmG68qAVIBg9CqmUYjmQIhgij9U5MFvrqkUL5FbtyyzZuOeOt0zdeRe4UY7ct+A==}
     engines: {node: '>= 0.4'}
@@ -4041,10 +4057,6 @@ packages:
   fs-extra@9.1.0:
     resolution: {integrity: sha512-hcg3ZmepS30/7BSFqRvoo3DOMQu7IjqxO5nCDt+zM9XWjb33Wg7ziNT+Qvqbuc3+gWpzO02JubVyk2G4Zvo1OQ==}
     engines: {node: '>=10'}
-
-  fs-minipass@2.1.0:
-    resolution: {integrity: sha512-V/JgOLFCS+R6Vcq0slCuaeWEdNC3ouDlJMNIsacH2VtALiu9mV4LPrHc5cDl8k5aw6J8jwgWWpiTo5RYhmIzvg==}
-    engines: {node: '>= 8'}
 
   fs-minipass@3.0.3:
     resolution: {integrity: sha512-XUBA9XClHbnJWSfBzjkm6RvPsyg3sryZt06BEQoXcF7EK/xpGaQYJgQKDJSUH5SGZ76Y7pFx1QBnXz09rU5Fbw==}
@@ -4980,10 +4992,6 @@ packages:
     resolution: {integrity: sha512-DxiNidxSEK+tHG6zOIklvNOwm3hvCrbUrdtzY74U6HKTJxvIDfOUL5W5P2Ghd3DTkhhKPYGqeNUIh5qcM4YBfw==}
     engines: {node: '>=8'}
 
-  minipass@5.0.0:
-    resolution: {integrity: sha512-3FnjYuehv9k6ovOEbyOswadCDPX1piCfhV8ncmYtHOjuPwylVWsghTLo7rabjC3Rx5xD4HDx8Wm1xnMF7S5qFQ==}
-    engines: {node: '>=8'}
-
   minipass@7.1.3:
     resolution: {integrity: sha512-tEBHqDnIoM/1rXME1zgka9g6Q2lcoCkxHLuc7ODJ5BxbP5d4c2Z5cGgtXAku59200Cx7diuHTOYfSBD8n6mm8A==}
     engines: {node: '>=16 || 14 >=14.17'}
@@ -5002,11 +5010,6 @@ packages:
 
   mkdirp@0.5.6:
     resolution: {integrity: sha512-FP+p8RB8OWpF3YZBCrP5gtADmtXApB5AMLn+vdyA+PyxCjrCs00mjyUozssO33cwDeT3wNGdLxJ5M//YqtHAJw==}
-    hasBin: true
-
-  mkdirp@1.0.4:
-    resolution: {integrity: sha512-vVqVZQyf3WLx2Shd0qJ9xuvqgAyKPLAiqITEtqW0oIUjzo3PePDd6fW9iFz30ef7Ysp/oiWqbhszeGWW2T6Gzw==}
-    engines: {node: '>=10'}
     hasBin: true
 
   motion-dom@12.43.0:
@@ -5047,8 +5050,8 @@ packages:
     engines: {node: ^22 || ^24 || >=26}
     hasBin: true
 
-  nanostores@1.4.0:
-    resolution: {integrity: sha512-i0tloweeudshAEuddpDxcg9Ik6pkPfVsHIgKyf143JrgG7/MOh0+q7BypdLXZPoOP7fOYt1eTcwGkyiVmhJFkA==}
+  nanostores@1.4.2:
+    resolution: {integrity: sha512-Wxv8Roefr2nqtiRG0bnaFlpYqpIVtOEeJZHaH+4nGgOK1/7n6OHOuHCb/bhqrNQgZM8fyd0s1PqhdrJc9Ib44g==}
     engines: {node: ^20.0.0 || >=22.0.0}
 
   natural-compare@1.4.0:
@@ -5868,11 +5871,6 @@ packages:
   tapable@2.3.3:
     resolution: {integrity: sha512-uxc/zpqFg6x7C8vOE7lh6Lbda8eEL9zmVm/PLeTPBRhh1xCgdWaQ+J1CUieGpIfm2HdtsUpRv+HshiasBMcc6A==}
     engines: {node: '>=6'}
-
-  tar@6.2.1:
-    resolution: {integrity: sha512-DZ4yORTwrbTj/7MZYq2w+/ZFdI6OZ/f9SFHR+71gIVUZhOQPHzVCLpvRnPgyaMpfWxxk/4ONva3GQSyNIKRv6A==}
-    engines: {node: '>=10'}
-    deprecated: Old versions of tar are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
 
   tar@7.5.22:
     resolution: {integrity: sha512-MFO/QzvtAOmJbkhOaCTvbGcFN9L9b+JunIsDwaKljSOdcLMea3NJ1k9Usz/rjdfSXTq4dfzfeS7W4p4YOAAHeA==}
@@ -7429,7 +7427,7 @@ snapshots:
       npmlog: 5.0.1
       rimraf: 3.0.2
       semver: 7.8.5
-      tar: 6.2.1
+      tar: 7.5.22
     transitivePeerDependencies:
       - encoding
       - supports-color
@@ -7454,9 +7452,9 @@ snapshots:
     dependencies:
       '@chevrotain/types': 11.1.2
 
-  '@nanostores/react@1.1.0(nanostores@1.4.0)(react@19.2.7)':
+  '@nanostores/react@1.1.0(nanostores@1.4.2)(react@19.2.7)':
     dependencies:
-      nanostores: 1.4.0
+      nanostores: 1.4.2
       react: 19.2.7
 
   '@noble/hashes@1.4.0': {}
@@ -7465,11 +7463,11 @@ snapshots:
 
   '@nous-research/ui@0.18.2(@observablehq/plot@0.6.17)(@react-three/fiber@9.6.1(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(three@0.180.0))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(gsap@3.15.0)(leva@0.10.1(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(motion@12.42.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(three@0.180.0)':
     dependencies:
-      '@nanostores/react': 1.1.0(nanostores@1.4.0)(react@19.2.7)
+      '@nanostores/react': 1.1.0(nanostores@1.4.2)(react@19.2.7)
       class-variance-authority: 0.7.1
       clsx: 2.1.1
       motion: 12.42.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      nanostores: 1.4.0
+      nanostores: 1.4.2
       radix-ui: 1.6.7(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
@@ -9288,6 +9286,10 @@ snapshots:
     dependencies:
       react: 19.2.7
 
+  blobatar@2.0.0(react@19.2.7):
+    optionalDependencies:
+      react: 19.2.7
+
   bluebird@3.7.2: {}
 
   boolean@3.2.0:
@@ -9361,7 +9363,7 @@ snapshots:
       minipass-pipeline: 1.2.4
       p-map: 4.0.0
       ssri: 10.0.6
-      tar: 6.2.1
+      tar: 7.5.22
       unique-filename: 3.0.0
     optional: true
 
@@ -9404,9 +9406,6 @@ snapshots:
   character-entities@2.0.2: {}
 
   character-reference-invalid@2.0.1: {}
-
-  chownr@2.0.0:
-    optional: true
 
   chownr@3.0.0: {}
 
@@ -9871,6 +9870,8 @@ snapshots:
 
   dotenv@16.6.1: {}
 
+  driver.js@1.8.0: {}
+
   dunder-proto@1.0.1:
     dependencies:
       call-bind-apply-helpers: 1.0.2
@@ -10276,11 +10277,6 @@ snapshots:
       graceful-fs: 4.2.11
       jsonfile: 6.2.1
       universalify: 2.0.1
-
-  fs-minipass@2.1.0:
-    dependencies:
-      minipass: 3.3.6
-    optional: true
 
   fs-minipass@3.0.3:
     dependencies:
@@ -11547,9 +11543,6 @@ snapshots:
       yallist: 4.0.0
     optional: true
 
-  minipass@5.0.0:
-    optional: true
-
   minipass@7.1.3: {}
 
   minizlib@2.1.2:
@@ -11570,9 +11563,6 @@ snapshots:
   mkdirp@0.5.6:
     dependencies:
       minimist: 1.2.8
-
-  mkdirp@1.0.4:
-    optional: true
 
   motion-dom@12.43.0:
     dependencies:
@@ -11596,7 +11586,7 @@ snapshots:
 
   nanoid@6.0.1: {}
 
-  nanostores@1.4.0: {}
+  nanostores@1.4.2: {}
 
   natural-compare@1.4.0: {}
 
@@ -11634,7 +11624,7 @@ snapshots:
       nopt: 7.2.1
       proc-log: 4.2.0
       semver: 7.8.5
-      tar: 6.2.1
+      tar: 7.5.22
       which: 4.0.0
     transitivePeerDependencies:
       - supports-color
@@ -12567,16 +12557,6 @@ snapshots:
   tailwindcss@4.3.3: {}
 
   tapable@2.3.3: {}
-
-  tar@6.2.1:
-    dependencies:
-      chownr: 2.0.0
-      fs-minipass: 2.1.0
-      minipass: 5.0.0
-      minizlib: 2.1.2
-      mkdirp: 1.0.4
-      yallist: 4.0.0
-    optional: true
 
   tar@7.5.22:
     dependencies:

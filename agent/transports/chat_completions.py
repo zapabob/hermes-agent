@@ -971,7 +971,11 @@ class ChatCompletionsTransport(ProviderTransport):
                 )
 
         if not tool_calls:
-            gemma_tool = _parse_gemma_tool_marker(msg.content)
+            # OpenAI-compatible providers may omit ``message`` entirely on a
+            # sparse completion.  Treat that the same as a message without
+            # content; optional response fields must not make normalization
+            # fail before the agent can inspect the finish reason.
+            gemma_tool = _parse_gemma_tool_marker(getattr(msg, "content", None))
             if gemma_tool is not None:
                 gemma_name, gemma_arguments = gemma_tool
                 tool_calls = [

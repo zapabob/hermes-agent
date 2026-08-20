@@ -13,7 +13,11 @@ def test_fork_defaults_use_official_config_defaults_api():
     defaults = config_defaults.DEFAULT_CONFIG
 
     assert config_api.DEFAULT_CONFIG is defaults
-    assert defaults["web"]["backend"] == "cloakbrowser"
+    # The distribution leaves the shared selector unset so the provider
+    # registry can choose an available keyed backend, or the keyless free
+    # tier on a fresh install.  CloakBrowser remains an explicit opt-in.
+    assert defaults["web"]["backend"] == ""
+    assert defaults["web"]["keyless_fallback"] is True
     assert defaults["browser"]["allow_sensitive_cdp_methods"] is False
     assert defaults["display"]["skin"] == "hakua"
     assert defaults["auxiliary"]["vrchat_autonomy"]["timeout"] == 60
@@ -29,7 +33,9 @@ def test_fork_defaults_use_official_config_defaults_api():
         "port": 18794,
         "script_path": "",
     }
-    assert defaults["cron"]["script_timeout_seconds"] == 120
+    # Upstream increased the default to cover long-running maintenance jobs;
+    # assert the current API default rather than preserving the old snapshot.
+    assert defaults["cron"]["script_timeout_seconds"] == 3600
 
 
 def test_fork_extension_env_metadata_remains_discoverable():

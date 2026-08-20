@@ -336,6 +336,11 @@ def test_scm_rail_fetch_and_pull(client, tmp_path):
     peer = tmp_path / "peer"
     peer.mkdir()
     subprocess.run(["git", "clone", "-q", str(origin), str(peer)], check=True, capture_output=True)
+    # Clones do not inherit the local repository identity.  Configure the
+    # disposable peer explicitly so this test is independent of the runner's
+    # global Git configuration (notably on CI images without user.name/email).
+    _git(peer, "config", "user.email", "t@example.com")
+    _git(peer, "config", "user.name", "Test")
     (peer / "b.txt").write_text("two\n", encoding="utf-8")
     _git(peer, "add", "-A")
     _git(peer, "commit", "-qm", "peer commit")
