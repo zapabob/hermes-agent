@@ -6081,7 +6081,7 @@ async function openRosterBot(bot) {
   saveSelectedRosterBot(bot)
   setBotsWorkspaceOwner(botWorkspaceOwnerKey(bot), bot)
 
-  $groupChatWorkspace.set(null)
+  dismissGroupChatForLocalBotOpen()
 
   if ($botUnread.get()[key]) {
     const next = { ...$botUnread.get() }
@@ -14154,6 +14154,20 @@ function releaseStaleOpenBotChat(focusedStoredId) {
   if (stale) {
     $openBotChat.set(null)
   }
+}
+
+/** Bot-open handoff: capture the selected group and retire its registered
+ * main tab (or clear the in-panel selection) before async source prep /
+ * canonical open. */
+function dismissGroupChatForLocalBotOpen() {
+  const group = $groupChatWorkspace.get()
+
+  if (!group) {
+    return null
+  }
+
+  closeGroupChatMainTab(group)
+  return group
 }
 
 /** Main-window wrapper: seats the member roster reactively (live roster +
