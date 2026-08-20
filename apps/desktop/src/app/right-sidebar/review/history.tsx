@@ -109,13 +109,12 @@ export function ReviewHistory() {
                   onClick={() => void selectReviewCommit(commit)}
                   type="button"
                 >
-                  <CommitGraphCell
-                    maxLane={maxLane}
-                    row={graphRow}
-                    selected={selected}
-                  />
+                  <CommitGraphCell maxLane={maxLane} row={graphRow} selected={selected} />
                   <div className="flex min-w-0 flex-1 flex-col gap-0.5 py-2 pr-2.5">
-                    <span className="truncate text-[0.72rem] font-medium text-(--ui-text-primary)" title={commit.subject}>
+                    <span
+                      className="truncate text-[0.72rem] font-medium text-(--ui-text-primary)"
+                      title={commit.subject}
+                    >
                       {commit.subject || commit.shortSha}
                     </span>
                     <span className="flex min-w-0 items-center gap-1.5 text-[0.62rem] text-(--ui-text-tertiary)">

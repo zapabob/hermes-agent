@@ -167,6 +167,7 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
       }
 
       const sessionId = route.sessionId
+
       // Privileged renderer replies must return to the exact websocket that
       // emitted the request. Untagged events fail closed instead of falling
       // back to whichever profile is active when the user responds.

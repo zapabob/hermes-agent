@@ -13,7 +13,7 @@ const LANE_COLORS = [
   '#38BDF8', // Sky Blue
   '#A855F7', // Purple
   '#EC4899', // Pink
-  '#10B981'  // Emerald
+  '#10B981' // Emerald
 ]
 
 export function getLaneColor(lane: number): string {
@@ -32,13 +32,7 @@ interface CommitGraphCellProps {
  * Render an individual commit's graph cell (SVG nodes, through lines, branching & merge curves).
  * Perfectly aligns with the commit list item row height.
  */
-export function CommitGraphCell({
-  row,
-  selected = false,
-  laneWidth = 14,
-  height = 42,
-  maxLane
-}: CommitGraphCellProps) {
+export function CommitGraphCell({ row, selected = false, laneWidth = 14, height = 42, maxLane }: CommitGraphCellProps) {
   const totalWidth = Math.max(1, maxLane + 1) * laneWidth + 8
   const cy = height / 2
   const nodeX = row.lane * laneWidth + 10
@@ -47,6 +41,7 @@ export function CommitGraphCell({
   const throughLines = useMemo(() => {
     return row.through.map(lane => {
       const x = lane * laneWidth + 10
+
       return { lane, x }
     })
   }, [row.through, laneWidth])
@@ -56,6 +51,7 @@ export function CommitGraphCell({
       const parentX = parentLane * laneWidth + 10
       // Draw bezier curve from child node (nodeX, cy) to parent lane bottom (parentX, height)
       const d = `M ${nodeX} ${cy} C ${nodeX} ${cy + (height - cy) * 0.6}, ${parentX} ${cy + (height - cy) * 0.4}, ${parentX} ${height}`
+
       return { d, parentLane }
     })
   }, [row.branchIn, nodeX, cy, height, laneWidth])
@@ -83,24 +79,10 @@ export function CommitGraphCell({
       ))}
 
       {/* 2. Top half line connecting from previous commit in this lane to current node */}
-      <line
-        stroke={getLaneColor(row.lane)}
-        strokeWidth={1.75}
-        x1={nodeX}
-        x2={nodeX}
-        y1={0}
-        y2={cy}
-      />
+      <line stroke={getLaneColor(row.lane)} strokeWidth={1.75} x1={nodeX} x2={nodeX} y1={0} y2={cy} />
 
       {/* 3. Bottom half line if this lane continues down */}
-      <line
-        stroke={getLaneColor(row.lane)}
-        strokeWidth={1.75}
-        x1={nodeX}
-        x2={nodeX}
-        y1={cy}
-        y2={height}
-      />
+      <line stroke={getLaneColor(row.lane)} strokeWidth={1.75} x1={nodeX} x2={nodeX} y1={cy} y2={height} />
 
       {/* 4. Branch-in / Merge curves */}
       {branchInCurves.map(({ d, parentLane }) => (
@@ -115,15 +97,7 @@ export function CommitGraphCell({
       ))}
 
       {/* 5. Commit Node (circle) */}
-      {selected ? (
-        <circle
-          cx={nodeX}
-          cy={cy}
-          fill={getLaneColor(row.lane)}
-          fillOpacity={0.3}
-          r={7}
-        />
-      ) : null}
+      {selected ? <circle cx={nodeX} cy={cy} fill={getLaneColor(row.lane)} fillOpacity={0.3} r={7} /> : null}
       <circle
         cx={nodeX}
         cy={cy}
@@ -132,12 +106,7 @@ export function CommitGraphCell({
         stroke={getLaneColor(row.lane)}
         strokeWidth={2}
       />
-      <circle
-        cx={nodeX}
-        cy={cy}
-        fill={getLaneColor(row.lane)}
-        r={2.5}
-      />
+      <circle cx={nodeX} cy={cy} fill={getLaneColor(row.lane)} r={2.5} />
     </svg>
   )
 }

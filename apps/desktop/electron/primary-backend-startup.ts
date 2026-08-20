@@ -1,6 +1,12 @@
 import type { FirstRunSetupDecision } from './first-run-setup-gate'
 
-export interface PrimaryBackendStartupOptions<Backend, RuntimeBackend, Remote, Connection, PrewarmedConnection = Connection> {
+export interface PrimaryBackendStartupOptions<
+  Backend,
+  RuntimeBackend,
+  Remote,
+  Connection,
+  PrewarmedConnection = Connection
+> {
   connectRemote: (remote: Remote) => Promise<Connection>
   ensureLocalRuntime: (backend: Backend) => Promise<RuntimeBackend>
   prepareLocalBackend: () => Backend | Promise<Backend>
