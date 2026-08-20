@@ -258,6 +258,7 @@ export function useModelControls({ queryClient, requestGateway }: ModelControlsO
           key: 'model',
           value: `${selection.model} --provider ${selection.provider} ${scope}`
         }
+
         const result = await requestGateway<ModelSwitchGatewayResponse>('config.set', params)
 
         if (result?.confirm_required) {
