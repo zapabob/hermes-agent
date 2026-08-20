@@ -12363,14 +12363,67 @@ def test_respond_unpacks_sid_tuple_correctly():
 def test_config_set_model_defers_while_running(monkeypatch):
     """/model via config.set queues the pick during an in-flight turn instead
     of rejecting or racing the worker thread."""
-    seen = {"called": False}
+    seen = {"called": False, "kwargs": {}}
 
-    def _fake_apply(sid, session, raw, **_kwargs):
+    def _fake_apply(sid, session, raw, **kwargs):
         seen["called"] = True
-        return {"value": raw, "warning": ""}
+        seen["kwargs"] = kwargs
+        return {
+            "value": "anthropic/claude-sonnet-4.6",
+            "provider": "anthropic",
+            "warning": "",
+            "confirm_required": False,
+        }
 
     monkeypatch.setattr(server, "_apply_model_switch", _fake_apply)
 
+    server._sessions["sid"] = _session(running=True)
+    server._sessions["sid"]["model_options_catalogue"] = frozenset(
+        {("anthropic", "anthropic/claude-sonnet-4.6")}
+    )
+    server._sessions["sid"]["model_options_catalogue_at"] = time.monotonic()
+    try:
+        resp = server.handle_request(
+            {
+                "id": "1",
+                "method": "config.set",
+                "params": {
+                    "session_id": "sid",
+                    "key": "model",
+                    "value": "anthropic/claude-sonnet-4.6 --provider anthropic",
+                },
+            }
+        )
+        assert not resp.get("error")
+        result = resp["result"]
+        assert result["deferred"] is True
+        assert result["value"] == "anthropic/claude-sonnet-4.6"
+        assert seen["called"]
+        assert seen["kwargs"]["prepare_only"] is True
+        assert seen["kwargs"]["catalogue_validated"] is True
+        pending = server._sessions["sid"].get("pending_model_switch")
+        assert pending and pending["raw"] == (
+            "anthropic/claude-sonnet-4.6 --provider anthropic"
+        )
+        assert pending["catalogue_validated"] is True
+    finally:
+        server._sessions.pop("sid", None)
+
+
+def test_config_set_model_surfaces_guard_before_deferring_running_switch(monkeypatch):
+    """A guarded picker choice must be confirmed before it is painted pending."""
+    calls = []
+
+    def _fake_apply(_sid, _session, _raw, **kwargs):
+        calls.append(kwargs)
+        return {
+            "value": "openai/gpt-5.5-pro",
+            "warning": "Confirm this expensive model.",
+            "confirm_required": True,
+            "confirm_message": "Confirm this expensive model.",
+        }
+
+    monkeypatch.setattr(server, "_apply_model_switch", _fake_apply)
     server._sessions["sid"] = _session(running=True)
     try:
         resp = server.handle_request(
@@ -12380,20 +12433,16 @@ def test_config_set_model_defers_while_running(monkeypatch):
                 "params": {
                     "session_id": "sid",
                     "key": "model",
-                    "value": "anthropic/claude-sonnet-4.6",
+                    "value": "openai/gpt-5.5-pro --provider openrouter",
                 },
             }
         )
-        assert not resp.get("error")
-        result = resp["result"]
-        assert result["deferred"] is True
-        assert result["value"] == "anthropic/claude-sonnet-4.6"
-        assert not seen["called"], (
-            "_apply_model_switch ran mid-turn — would race the worker thread "
-            "reading agent.model / agent.client; it must defer to turn start"
-        )
-        pending = server._sessions["sid"].get("pending_model_switch")
-        assert pending and pending["raw"] == "anthropic/claude-sonnet-4.6"
+
+        assert resp["result"]["confirm_required"] is True
+        assert resp["result"]["deferred"] is False
+        assert resp["result"]["confirm_message"] == "Confirm this expensive model."
+        assert "pending_model_switch" not in server._sessions["sid"]
+        assert calls[0]["prepare_only"] is True
     finally:
         server._sessions.pop("sid", None)
 
@@ -12404,7 +12453,7 @@ def test_apply_pending_model_switch_runs_queued_pick(monkeypatch):
     calls = []
 
     def _fake_apply(sid, session, raw, **kwargs):
-        calls.append(raw)
+        calls.append((raw, kwargs))
         return {"value": raw, "warning": "", "confirm_required": False}
 
     monkeypatch.setattr(server, "_apply_model_switch", _fake_apply)
@@ -12413,16 +12462,22 @@ def test_apply_pending_model_switch_runs_queued_pick(monkeypatch):
     session["agent"] = object()
     session["pending_model_switch"] = {
         "raw": "anthropic/claude-sonnet-4.6",
+        "catalogue_validated": True,
         "confirm_expensive_model": False,
     }
 
     server._apply_pending_model_switch("sid", session)
-    assert calls == ["anthropic/claude-sonnet-4.6"]
+    assert calls == [
+        (
+            "anthropic/claude-sonnet-4.6",
+            {"catalogue_validated": True, "confirm_expensive_model": False},
+        )
+    ]
     assert "pending_model_switch" not in session
 
     # Idempotent: a second turn start with nothing queued is a no-op.
     server._apply_pending_model_switch("sid", session)
-    assert calls == ["anthropic/claude-sonnet-4.6"]
+    assert len(calls) == 1
 
 
 def test_config_set_model_allowed_when_idle(monkeypatch):
@@ -14179,6 +14234,58 @@ def test_model_options_hides_unconfigured_providers_by_default(monkeypatch):
     )
     assert "result" in resp, resp
     assert calls[-1]["include_unconfigured"] is True
+
+
+def test_model_options_records_only_server_served_catalogue_pairs(monkeypatch):
+    """config.set's fast path is derived from model.options, not client input."""
+    session = _session()
+    server._sessions["catalogue-session"] = session
+    monkeypatch.setattr(
+        "hermes_cli.inventory.build_model_options_payload",
+        lambda *_args, **_kwargs: {
+            "model": "qwen3.6:35b-65k",
+            "provider": "custom:local-ollama",
+            "providers": [
+                {
+                    "aliases": ["custom:local-ollama", "Local Ollama"],
+                    "models": ["qwen3.6:35b-65k", "qwen3.6:8b"],
+                    "name": "Local Ollama",
+                    "slug": "local-ollama",
+                }
+            ],
+        },
+    )
+
+    try:
+        resp = server._methods["model.options"](
+            102, {"session_id": "catalogue-session"}
+        )
+        assert "result" in resp, resp
+        served = session["model_options_catalogue"]
+        assert ("local-ollama", "qwen3.6:35b-65k") in served
+        assert ("custom:local-ollama", "qwen3.6:35b-65k") in served
+        assert ("local ollama", "qwen3.6:8b") in served
+        assert ("local-ollama", "not-served") not in served
+        assert server._picker_catalogue_validates(
+            session,
+            types.SimpleNamespace(
+                explicit_provider="custom:local-ollama",
+                model_input="qwen3.6:35b-65k",
+            ),
+        )
+
+        session["model_options_catalogue_at"] -= (
+            server._PICKER_CATALOGUE_PROOF_TTL_SECONDS + 1.0
+        )
+        assert not server._picker_catalogue_validates(
+            session,
+            types.SimpleNamespace(
+                explicit_provider="custom:local-ollama",
+                model_input="qwen3.6:35b-65k",
+            ),
+        )
+    finally:
+        server._sessions.pop("catalogue-session", None)
 
 
 def test_model_options_preserves_canonical_custom_row_after_agent_init(monkeypatch):
