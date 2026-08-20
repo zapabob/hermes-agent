@@ -110,6 +110,7 @@ test('valid prewarmed local succeeds before a broken runtime install is entered'
     mode: 'local' as const,
     source: 'watchdog'
   }
+
   const options = startupOptions({
     ensureLocalRuntime: vi.fn(async () => {
       throw new Error('managed runtime is broken')
@@ -127,6 +128,7 @@ test('valid prewarmed local succeeds before a broken runtime install is entered'
 
 test('invalid prewarmed local falls through to the runtime resolver', async () => {
   const runtimeBackend = { ...bootstrapBackend, command: 'hermes' }
+
   const options = startupOptions({
     ensureLocalRuntime: vi.fn(async () => runtimeBackend),
     resolvePrewarmedLocal: vi.fn(async () => null)

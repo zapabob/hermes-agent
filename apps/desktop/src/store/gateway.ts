@@ -229,7 +229,8 @@ export function gatewayForScope(scope: GatewayScope): HermesGateway | null {
     return g.primaryGateway
   }
 
-  const secondary = g.secondaries.get(registryBackendScopeKey(normalized.connectionId, normalized.profile))?.gateway ?? null
+  const secondary =
+    g.secondaries.get(registryBackendScopeKey(normalized.connectionId, normalized.profile))?.gateway ?? null
 
   return isOpen(secondary) ? secondary : null
 }

@@ -1,20 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
 import { group } from '@/components/pane-shell/tree/model'
-import {
-  $activeTreeGroup,
-  $layoutTree,
-  closeTreePane,
-  watchContributedPanes
-} from '@/components/pane-shell/tree/store'
+import { $activeTreeGroup, $layoutTree, closeTreePane, watchContributedPanes } from '@/components/pane-shell/tree/store'
 import { registry } from '@/contrib/registry'
-import {
-  $previewTabs,
-  closeRightRailTab,
-  openPreview,
-  previewTabId,
-  type PreviewTarget
-} from '@/store/preview'
+import { $previewTabs, closeRightRailTab, openPreview, previewTabId, type PreviewTarget } from '@/store/preview'
 
 import { watchPreviewTiles } from './preview-tile'
 import { previewConsoleState } from './right-rail/preview-console-store'

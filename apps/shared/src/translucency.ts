@@ -385,8 +385,10 @@ export function resolveTranslucency(
 ): TranslucencyState {
   const fallback = defaultTranslucencyValues(appearance, isWindows)
   const slot = book[appearance]
+
   const hasExplicitValues =
     Object.keys(book.base).length > 0 || Object.keys(book.light).length > 0 || Object.keys(book.dark).length > 0
+
   const freshUnsupportedWindows = isWindows && !glassSupported && !hasExplicitValues
 
   return {

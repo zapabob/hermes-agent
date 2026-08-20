@@ -515,6 +515,7 @@ test('tightenSecretFileMode tightens a pre-existing world-readable config in pla
     })
 
     fs.writeFileSync(target, legacy, { mode: 0o644 })
+
     if (supportsPosixCredentialModes) {
       assert.equal(modeOf(target), 0o644)
     }
@@ -614,10 +615,12 @@ test('tightenSecretFileMode only touches a regular file the current user owns', 
     tightenSecretFileMode('/x/connection.json', { fs: fakeFs({ isFile: () => false }), platform: 'linux' }),
     false
   )
+
   const foreignOwnerResult = tightenSecretFileMode('/x/connection.json', {
     fs: fakeFs({ uid: uid + 1 }),
     platform: 'linux'
   })
+
   assert.equal(
     foreignOwnerResult,
     supportsPosixOwnership ? false : true,
