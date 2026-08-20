@@ -303,10 +303,12 @@ describe('useModelControls', () => {
     setCurrentProvider('nous')
     const olderAcknowledgement = deferred<{ key: string; value: string }>()
     const latestAcknowledgement = deferred<{ key: string; value: string }>()
+
     const requestGateway = vi
       .fn()
       .mockReturnValueOnce(olderAcknowledgement.promise)
       .mockReturnValueOnce(latestAcknowledgement.promise)
+
     let controls!: Controls
 
     render(<Harness onReady={value => (controls = value)} requestGateway={requestGateway} />)
@@ -330,10 +332,12 @@ describe('useModelControls', () => {
     $activeSessionId.set('primary-session')
     const firstAcknowledgement = deferred<{ key: string; value: string }>()
     const secondAcknowledgement = deferred<{ key: string; value: string }>()
+
     const requestGateway = vi
       .fn()
       .mockReturnValueOnce(firstAcknowledgement.promise)
       .mockReturnValueOnce(secondAcknowledgement.promise)
+
     const updateSession = vi.fn()
     sessionTileDelegateMock.mockReturnValue({ updateSession } as never)
     let controls!: Controls
@@ -356,6 +360,7 @@ describe('useModelControls', () => {
     $activeSessionId.set('session-1')
     setCurrentModel('fable-5')
     setCurrentProvider('nous')
+
     const requestGateway = vi.fn(
       async () =>
         ({
@@ -364,13 +369,12 @@ describe('useModelControls', () => {
           value: 'gpt-5.5-pro'
         }) as never
     )
+
     let controls!: Controls
 
     render(<Harness onReady={value => (controls = value)} requestGateway={requestGateway} />)
 
-    await expect(
-      controls.selectModel({ model: 'gpt-5.5-pro', provider: 'openrouter' })
-    ).resolves.toBe(false)
+    await expect(controls.selectModel({ model: 'gpt-5.5-pro', provider: 'openrouter' })).resolves.toBe(false)
     expect(requestGateway).toHaveBeenCalledTimes(1)
     expect($currentModel.get()).toBe('fable-5')
     expect($currentProvider.get()).toBe('nous')
@@ -398,6 +402,7 @@ describe('useModelControls', () => {
 
   it('uses the acknowledged runtime identity without another catalogue refetch', async () => {
     $activeSessionId.set('session-1')
+
     const requestGateway = vi.fn(
       async () =>
         ({
@@ -407,6 +412,7 @@ describe('useModelControls', () => {
           value: 'grok-4.5-normalized'
         }) as never
     )
+
     const invalidate = vi.spyOn(QueryClient.prototype, 'invalidateQueries')
     let controls!: Controls
 
