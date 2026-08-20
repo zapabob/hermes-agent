@@ -17,8 +17,8 @@
  * authoring/activating a skin from a prompt, or `/skin` elsewhere) repaints.
  */
 
-import type { HermesSkin } from '@hermes/shared/skin'
 import { registryBackendScopeKey } from '@hermes/shared'
+import type { HermesSkin } from '@hermes/shared/skin'
 import { atom } from 'nanostores'
 
 import { $connection } from '@/store/session'

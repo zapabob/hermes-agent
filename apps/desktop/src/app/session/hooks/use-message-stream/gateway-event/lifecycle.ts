@@ -1,5 +1,6 @@
 import type { HermesSkin } from '@hermes/shared/skin'
 
+import { activeGatewayConnectionId, gatewayScope } from '@/store/gateway'
 import {
   notifyCronChanged,
   notifyPairingChanged,
@@ -10,7 +11,6 @@ import {
   setChangeEventsAvailable
 } from '@/store/live-sync'
 import { dropSessionState, unbindTileRuntime } from '@/store/session-states'
-import { activeGatewayConnectionId, gatewayScope } from '@/store/gateway'
 // Leaf import (not the `@/themes` barrel) to avoid pulling the ThemeProvider
 // module graph into the gateway event hot path.
 import { ingestBackendSkin } from '@/themes/backend-sync'
