@@ -206,16 +206,18 @@ export function useModelControls({ queryClient, requestGateway }: ModelControlsO
           return false
         }
 
-        if (touchesPrimary) {
-          setCurrentModel(applied.model)
-          setCurrentProvider(applied.provider)
-          markComposerSelectionManual()
-        } else if (liveSessionId) {
+        if (liveSessionId) {
           sessionTileDelegate()?.updateSession(liveSessionId, state => ({
             ...state,
             model: applied.model,
             provider: applied.provider
           }))
+        }
+
+        if (touchesPrimary) {
+          setCurrentModel(applied.model)
+          setCurrentProvider(applied.provider)
+          markComposerSelectionManual()
         }
 
         updateModelOptionsCache(
@@ -236,22 +238,10 @@ export function useModelControls({ queryClient, requestGateway }: ModelControlsO
       }
 
       try {
-        // The PRIMARY profile's main agent is the profile's default — its
-        // model/provider choice IS the default, so persist it to config.yaml
-        // (model.default + model.provider) via --global. This is what makes
-        // the selection "stick": a set model.provider outranks a leftover
-        // OPENAI_API_KEY env var in resolve_provider(), so the main agent
-        // keeps the chosen (e.g. subscription) provider across restarts
-        // instead of silently falling back to an env key.
-        //
-        // Two things stay --session, deliberately:
-        //  - a SECONDARY chat tile: picking a model there must not rewrite the
-        //    profile default (the cross-session-contamination guard).
-        //  - MoA (mixture-of-agents) presets: a transient orchestration choice
-        //    that must never become the persisted global gateway default.
-        const isSessionOnlyPreset = (selection.provider || '').toLowerCase() === 'moa'
-        const persistsAsDefault = touchesPrimary && !isSessionOnlyPreset
-        const scope = persistsAsDefault ? '--global' : '--session'
+        // Model switches made from a session tab/tile/composer are strictly session-scoped
+        // (--session) to prevent cross-tab and cross-session model routing contamination.
+        // The global profile default is configured explicitly in Settings → Model.
+        const scope = '--session'
 
         const params: Record<string, unknown> = {
           session_id: liveSessionId,
