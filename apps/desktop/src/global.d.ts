@@ -218,6 +218,8 @@ declare global {
         saved: boolean
       }>
       saveImageFromUrl: (url: string) => Promise<boolean>
+      /** Fetch a public image URL through the main-process SSRF-safe proxy. */
+      readImageDataUrl?: (url: string) => Promise<string>
       /** Edit verb against the window's focused element (the custom context
        *  menu's Cut/Copy/Paste/Select all). */
       contextMenuEdit?: (command: 'copy' | 'cut' | 'paste' | 'selectAll') => Promise<void>

@@ -85,6 +85,12 @@ export interface DesktopTerminalPalette {
   brightWhite?: string
 }
 
+/** Backend identity that owns renderer-only skin metadata such as wallpapers. */
+export interface DesktopThemeSource {
+  readonly connectionId: null | string
+  readonly profile: string
+}
+
 export interface DesktopTheme {
   name: string
   label: string
@@ -103,4 +109,6 @@ export interface DesktopTheme {
   backgroundImageFit?: string
   backgroundImagePosition?: string
   backgroundOverlay?: string
+  /** Source route used when resolving a backend-owned wallpaper. */
+  backgroundImageSource?: DesktopThemeSource
 }

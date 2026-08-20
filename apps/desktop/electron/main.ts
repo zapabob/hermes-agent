@@ -5418,6 +5418,15 @@ async function saveImageFromUrl(rawUrl) {
   return true
 }
 
+// Keep backend-provided HTTP(S) skin images on the same constrained path as
+// image downloads.  The renderer receives only a data URL, so it cannot make
+// an arbitrary direct request or expose redirects/cookies to the page.
+async function readImageDataUrlFromUrl(rawUrl) {
+  const { buffer, mimeType } = (await resourceBufferFromUrl(rawUrl)) as any
+
+  return `data:${mimeType};base64,${buffer.toString('base64')}`
+}
+
 async function writeComposerImage(buffer, ext = '.png') {
   const rawExt = String(ext || '.png')
     .trim()
@@ -13762,6 +13771,7 @@ ipcMain.handle('hermes:readClipboard', () => clipboard.readText())
 ipcMain.handle('hermes:saveGatewayFile', (_event, payload) => saveGatewayFile(payload))
 
 ipcMain.handle('hermes:saveImageFromUrl', (_event, url) => saveImageFromUrl(String(url || '')))
+ipcMain.handle('hermes:readImageDataUrl', (_event, url) => readImageDataUrlFromUrl(String(url || '')))
 
 // The custom context menu's edit verbs. They act on the SENDER's focused
 // element, so the renderer restores focus to the editable before invoking.

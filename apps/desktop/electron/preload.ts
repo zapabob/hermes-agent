@@ -190,6 +190,10 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
   readWindowBelow: () => ipcRenderer.invoke('hermes:window:readBelow'),
   readFileDataUrl: filePath => ipcRenderer.invoke('hermes:readFileDataUrl', filePath),
   readFileDataUrlForAttach: filePath => ipcRenderer.invoke('hermes:readFileDataUrlForAttach', filePath),
+  // Fetch public image URLs in the main process.  The renderer must not use
+  // <img src=https://...> for backend-provided skins because that bypasses
+  // the URL validation and redirect limits shared by image downloads.
+  readImageDataUrl: url => ipcRenderer.invoke('hermes:readImageDataUrl', url),
   dataUrlReadMax: {
     get: () => ipcRenderer.invoke('hermes:data-url-read-max:get'),
     set: maxMb => ipcRenderer.invoke('hermes:data-url-read-max:set', maxMb)
