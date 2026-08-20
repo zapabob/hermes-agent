@@ -35,6 +35,12 @@ test('the selected model is acknowledged, painted, and used for inference', asyn
   const submit = page.locator('[data-slot="composer-root"] button[type="submit"]')
 
   await composer.waitFor({ state: 'visible', timeout: 10_000 })
+  // The fork's split-pane layout can uncover the viewport centre before the
+  // inference catalogue is ready. Start the selection only once the real
+  // gateway health surface confirms that inference is available.
+  await expect(page.getByRole('contentinfo').getByRole('button', { name: /^Gateway ready$/ })).toBeVisible({
+    timeout: 120_000
+  })
 
   const modelPill = page.locator('[data-slot="composer-root"] button[aria-label*="Model ·"]').first()
   await expect(modelPill).toHaveAttribute('aria-label', new RegExp(`${ORIGINAL_MODEL}$`))
