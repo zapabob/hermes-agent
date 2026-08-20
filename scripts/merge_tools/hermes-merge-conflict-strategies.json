@@ -51,6 +51,16 @@
       "note": "Official desktop split moved this hook into use-prompt-actions/; drop the deleted legacy file during sync."
     },
     {
+      "pattern": "apps/desktop/src/app/session/hooks/use-message-stream/gateway-event.ts",
+      "action": "upstream",
+      "note": "Official desktop split moved the legacy gateway event hook into gateway-event/ modules. Take the deletion, then reapply the fork source-scoped privileged-reply hardening to the new module boundary."
+    },
+    {
+      "pattern": "contributors/emails/agent@agents-Mac-mini.local",
+      "action": "upstream",
+      "note": "Both histories converge on the lowercase contributor identity; take upstream to avoid a Windows case-collision."
+    },
+    {
       "pattern": "apps/desktop/src/app/chat/composer/status-stack/surface-var-lifecycle.test.tsx",
       "action": "upstream",
       "note": "Official composer-strip refactor removed this obsolete lifecycle test; take the upstream deletion."
