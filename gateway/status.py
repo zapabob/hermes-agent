@@ -16,6 +16,7 @@ import hashlib
 import json
 import logging
 import os
+import posixpath
 import re
 import shlex
 import signal
@@ -1092,14 +1093,25 @@ def write_runtime_status(
         # must not inherit those entries from the prior process: they would
         # otherwise keep /api/status degraded until every old adapter emitted
         # a new state (and removed profiles would remain degraded forever).
-        platforms = payload["platforms"]
-        if not isinstance(platforms, dict):
-            platforms = {}
+        stored_platforms = payload["platforms"]
+        if not isinstance(stored_platforms, dict):
+            stored_platforms = {}
         payload["platforms"] = {
             key: value
-            for key, value in platforms.items()
+            for key, value in stored_platforms.items()
             if not isinstance(key, str) or ":" not in key
         }
+        # Keep the cleanup atomic even when the caller supplies a complete
+        # platform mapping in the same update.  Do not let the incoming
+        # mapping reintroduce profile-qualified entries that were just
+        # removed from the persisted state.
+        if platforms is not _UNSET:
+            requested_platforms = platforms if isinstance(platforms, dict) else {}
+            platforms = {
+                key: value
+                for key, value in requested_platforms.items()
+                if not isinstance(key, str) or ":" not in key
+            }
     payload["kind"] = current_record["kind"]
     payload["pid"] = current_record["pid"]
     payload["argv"] = current_record["argv"]

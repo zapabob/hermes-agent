@@ -46,6 +46,7 @@ const branch = (over: Partial<HermesGitBranch> = {}): HermesGitBranch => ({
   isDefault: false,
   isRemote: false,
   worktreePath: null,
+  sha: '1234567890abcdef1234567890abcdef12345678',
   ...over
 })
 
@@ -123,8 +124,22 @@ describe('ReviewScmRail', () => {
 
   it('lists branches and marks the checked-out one', () => {
     $scmBranches.set([
-      { checkedOut: true, isDefault: true, isRemote: false, name: 'main', worktreePath: '' },
-      { checkedOut: false, isDefault: false, isRemote: false, name: 'feature/scm', worktreePath: '' }
+      {
+        checkedOut: true,
+        isDefault: true,
+        isRemote: false,
+        name: 'main',
+        sha: '1234567890abcdef1234567890abcdef12345678',
+        worktreePath: ''
+      },
+      {
+        checkedOut: false,
+        isDefault: false,
+        isRemote: false,
+        name: 'feature/scm',
+        sha: 'abcdef1234567890abcdef1234567890abcdef12',
+        worktreePath: ''
+      }
     ])
     renderRail()
 

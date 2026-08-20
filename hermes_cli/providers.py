@@ -525,6 +525,37 @@ def get_provider(name: str, *, allow_network: bool = True) -> Optional[ProviderD
             source="hermes",
         )
 
+    # Plugin-registered provider profiles (plugins/model-providers/<name>/).
+    # Providers that ship only as plugin profiles (e.g. commandcode,
+    # tencent-tokenhub) are absent from models.dev and HERMES_OVERLAYS, so
+    # without this fallback they resolve as "Unknown provider" in /model,
+    # --provider, and the model-switch path even though the picker lists them
+    # (CANONICAL_PROVIDERS auto-extends from the same plugin registry).
+    try:
+        from providers import get_provider_profile as _profile
+
+        _prof = _profile(canonical)
+        # Only profiles with a concrete endpoint resolve here. Placeholder
+        # profiles like ``custom`` (aliases: ollama/local/vllm) ship with an
+        # empty base_url and are completed by config.yaml custom_providers —
+        # resolving them here would preempt resolve_provider_full's
+        # custom-provider step and collapse keyed IDs
+        # (``custom:local-...``) back to a bare, endpoint-less ``custom``.
+        if _prof is not None and (_prof.base_url or "").strip():
+            _api_mode_to_transport = {v: k for k, v in TRANSPORT_TO_API_MODE.items()}
+            _transport = _api_mode_to_transport.get(_prof.api_mode, "openai_chat")
+            return ProviderDef(
+                id=canonical,
+                name=_prof.display_name or _prof.name or canonical,
+                transport=_transport,
+                api_key_env_vars=tuple(_prof.env_vars or ()),
+                base_url=_prof.base_url or "",
+                auth_type=_prof.auth_type or "api_key",
+                source="plugin-profile",
+            )
+    except Exception:
+        pass
+
     return None
 
 
@@ -734,7 +765,7 @@ def resolve_user_provider(name: str, user_config: Dict[str, Any]) -> Optional[Pr
     # Extract fields
     display_name = entry.get("name", "") or name
     api_url = entry.get("api", "") or entry.get("url", "") or entry.get("base_url", "") or ""
-    key_env = entry.get("key_env", "") or ""
+    key_env = entry.get("key_env") or entry.get("api_key_env") or ""
     transport = entry.get("transport", "openai_chat") or "openai_chat"
 
     env_vars: List[str] = []

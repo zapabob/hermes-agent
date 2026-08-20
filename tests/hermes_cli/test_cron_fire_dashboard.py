@@ -102,6 +102,25 @@ def test_missing_job_id_400(monkeypatch):
         client.close()
 
 
+def test_missing_fire_at_400(monkeypatch):
+    """A signed job capability is incomplete without its fire timestamp."""
+    monkeypatch.setattr(
+        "plugins.cron_providers.chronos.verify.get_fire_verifier",
+        lambda: (lambda **kw: _bound_claims("j-missing-at")),
+    )
+    client, pa, ph = _client(auth_required=False)
+    try:
+        resp = client.post(
+            "/api/cron/fire",
+            headers={"Authorization": "Bearer good"},
+            json={"job_id": "j-missing-at"},
+        )
+        assert resp.status_code == 400
+    finally:
+        _restore(pa, ph)
+        client.close()
+
+
 def test_unknown_job_200_gone(monkeypatch):
     """Valid token but the job isn't found in any profile -> 200 'gone'
     (NAS shouldn't retry a fire for a cancelled/completed job)."""
@@ -295,12 +314,12 @@ def test_gateway_unreachable_503_carries_retry_after(monkeypatch):
     the scheduler spaces retries past the window instead of exhausting its
     budget inside it (OOF-266)."""
 
-    async def fake_forward(profile, job_id, authorization):
+    async def fake_forward(profile, job_id, fire_at, authorization):
         return None  # unreachable
 
     monkeypatch.setattr(
         "plugins.cron_providers.chronos.verify.get_fire_verifier",
-        lambda: (lambda **kw: {"purpose": "cron_fire"}),
+        lambda: (lambda **kw: _bound_claims("j4")),
     )
     monkeypatch.setattr(web_server, "_find_cron_job_profile", lambda jid: "default")
     monkeypatch.setattr(web_server, "_forward_cron_fire_to_gateway", fake_forward)
@@ -312,7 +331,7 @@ def test_gateway_unreachable_503_carries_retry_after(monkeypatch):
     try:
         resp = client.post("/api/cron/fire",
                            headers={"Authorization": "Bearer nas-jwt"},
-                           json={"job_id": "j4"})
+                           json={"job_id": "j4", "fire_at": FIRE_AT})
         assert resp.status_code == 503
         assert resp.headers.get("Retry-After") == "60"
     finally:
@@ -328,12 +347,12 @@ def test_gateway_intentionally_stopped_drops_with_200(monkeypatch):
     reconcile on the next gateway start."""
     executed = []
 
-    async def fake_forward(profile, job_id, authorization):
+    async def fake_forward(profile, job_id, fire_at, authorization):
         return None  # unreachable — gateway process is down
 
     monkeypatch.setattr(
         "plugins.cron_providers.chronos.verify.get_fire_verifier",
-        lambda: (lambda **kw: {"purpose": "cron_fire"}),
+        lambda: (lambda **kw: _bound_claims("j5")),
     )
     monkeypatch.setattr(web_server, "_find_cron_job_profile", lambda jid: "default")
     monkeypatch.setattr(web_server, "_forward_cron_fire_to_gateway", fake_forward)
@@ -347,7 +366,7 @@ def test_gateway_intentionally_stopped_drops_with_200(monkeypatch):
     try:
         resp = client.post("/api/cron/fire",
                            headers={"Authorization": "Bearer nas-jwt"},
-                           json={"job_id": "j5"})
+                           json={"job_id": "j5", "fire_at": FIRE_AT})
         assert resp.status_code == 200
         assert resp.json().get("status") == "gateway_stopped"
         assert executed == []  # dropped, never locally executed
@@ -362,7 +381,7 @@ def test_stopped_check_only_consulted_when_gateway_unreachable(monkeypatch):
     never shadow a live gateway)."""
     consulted = []
 
-    async def fake_forward(profile, job_id, authorization):
+    async def fake_forward(profile, job_id, fire_at, authorization):
         return 202, {"status": "accepted", "job_id": job_id}
 
     def fake_stopped(profile):
@@ -371,7 +390,7 @@ def test_stopped_check_only_consulted_when_gateway_unreachable(monkeypatch):
 
     monkeypatch.setattr(
         "plugins.cron_providers.chronos.verify.get_fire_verifier",
-        lambda: (lambda **kw: {"purpose": "cron_fire"}),
+        lambda: (lambda **kw: _bound_claims("j6")),
     )
     monkeypatch.setattr(web_server, "_find_cron_job_profile", lambda jid: "default")
     monkeypatch.setattr(web_server, "_forward_cron_fire_to_gateway", fake_forward)
@@ -381,7 +400,7 @@ def test_stopped_check_only_consulted_when_gateway_unreachable(monkeypatch):
     try:
         resp = client.post("/api/cron/fire",
                            headers={"Authorization": "Bearer nas-jwt"},
-                           json={"job_id": "j6"})
+                           json={"job_id": "j6", "fire_at": FIRE_AT})
         assert resp.status_code == 202
         assert consulted == []
     finally:
@@ -394,12 +413,12 @@ def test_gateway_own_503_also_carries_retry_after(monkeypatch):
     transient — the pass-through stamps the same Retry-After hint. Other
     statuses stay header-free."""
 
-    async def fake_forward(profile, job_id, authorization):
+    async def fake_forward(profile, job_id, fire_at, authorization):
         return 503, {"error": "gateway draining"}
 
     monkeypatch.setattr(
         "plugins.cron_providers.chronos.verify.get_fire_verifier",
-        lambda: (lambda **kw: {"purpose": "cron_fire"}),
+        lambda: (lambda **kw: _bound_claims("j7")),
     )
     monkeypatch.setattr(web_server, "_find_cron_job_profile", lambda jid: "default")
     monkeypatch.setattr(web_server, "_forward_cron_fire_to_gateway", fake_forward)
@@ -408,7 +427,7 @@ def test_gateway_own_503_also_carries_retry_after(monkeypatch):
     try:
         resp = client.post("/api/cron/fire",
                            headers={"Authorization": "Bearer nas-jwt"},
-                           json={"job_id": "j7"})
+                           json={"job_id": "j7", "fire_at": FIRE_AT})
         assert resp.status_code == 503
         assert resp.headers.get("Retry-After") == "60"
     finally:
@@ -486,7 +505,7 @@ def test_forward_failure_stamps_last_fire_error(monkeypatch):
     `cronjob list` / the dashboard instead of only in gui.log."""
     stamped = []
 
-    async def fake_forward(profile, job_id, authorization):
+    async def fake_forward(profile, job_id, fire_at, authorization):
         return None  # unreachable
 
     def fake_call_cron(profile, func_name, *args, **kwargs):
@@ -495,7 +514,7 @@ def test_forward_failure_stamps_last_fire_error(monkeypatch):
 
     monkeypatch.setattr(
         "plugins.cron_providers.chronos.verify.get_fire_verifier",
-        lambda: (lambda **kw: {"purpose": "cron_fire"}),
+        lambda: (lambda **kw: _bound_claims("j8")),
     )
     monkeypatch.setattr(web_server, "_find_cron_job_profile", lambda jid: "default")
     monkeypatch.setattr(web_server, "_forward_cron_fire_to_gateway", fake_forward)
@@ -506,7 +525,7 @@ def test_forward_failure_stamps_last_fire_error(monkeypatch):
     try:
         resp = client.post("/api/cron/fire",
                            headers={"Authorization": "Bearer nas-jwt"},
-                           json={"job_id": "j8"})
+                           json={"job_id": "j8", "fire_at": FIRE_AT})
         assert resp.status_code == 503  # retry contract unchanged
         assert len(stamped) == 1
         profile, func_name, args = stamped[0]
@@ -523,7 +542,7 @@ def test_forward_failure_stamp_error_never_breaks_retry_contract(monkeypatch):
     """Stamping is best-effort observability: if the jobs store write blows
     up, the webhook still returns the retryable 503 + Retry-After."""
 
-    async def fake_forward(profile, job_id, authorization):
+    async def fake_forward(profile, job_id, fire_at, authorization):
         return None
 
     def boom(profile, func_name, *args, **kwargs):
@@ -531,7 +550,7 @@ def test_forward_failure_stamp_error_never_breaks_retry_contract(monkeypatch):
 
     monkeypatch.setattr(
         "plugins.cron_providers.chronos.verify.get_fire_verifier",
-        lambda: (lambda **kw: {"purpose": "cron_fire"}),
+        lambda: (lambda **kw: _bound_claims("j9")),
     )
     monkeypatch.setattr(web_server, "_find_cron_job_profile", lambda jid: "default")
     monkeypatch.setattr(web_server, "_forward_cron_fire_to_gateway", fake_forward)
@@ -542,7 +561,7 @@ def test_forward_failure_stamp_error_never_breaks_retry_contract(monkeypatch):
     try:
         resp = client.post("/api/cron/fire",
                            headers={"Authorization": "Bearer nas-jwt"},
-                           json={"job_id": "j9"})
+                           json={"job_id": "j9", "fire_at": FIRE_AT})
         assert resp.status_code == 503
         assert resp.headers.get("Retry-After") == "60"
     finally:
@@ -554,12 +573,12 @@ def test_reachable_gateway_does_not_stamp(monkeypatch):
     """A successful forward must not touch the job record."""
     stamped = []
 
-    async def fake_forward(profile, job_id, authorization):
+    async def fake_forward(profile, job_id, fire_at, authorization):
         return 202, {"status": "accepted", "job_id": job_id}
 
     monkeypatch.setattr(
         "plugins.cron_providers.chronos.verify.get_fire_verifier",
-        lambda: (lambda **kw: {"purpose": "cron_fire"}),
+        lambda: (lambda **kw: _bound_claims("j10")),
     )
     monkeypatch.setattr(web_server, "_find_cron_job_profile", lambda jid: "default")
     monkeypatch.setattr(web_server, "_forward_cron_fire_to_gateway", fake_forward)
@@ -572,7 +591,7 @@ def test_reachable_gateway_does_not_stamp(monkeypatch):
     try:
         resp = client.post("/api/cron/fire",
                            headers={"Authorization": "Bearer nas-jwt"},
-                           json={"job_id": "j10"})
+                           json={"job_id": "j10", "fire_at": FIRE_AT})
         assert resp.status_code == 202
         assert stamped == []
     finally:

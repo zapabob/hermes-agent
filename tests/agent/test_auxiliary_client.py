@@ -5014,6 +5014,39 @@ class TestAutoRoutedProviderProfileHooks:
             "Authorization": "Bearer token-2",
         }
 
+    def test_build_call_kwargs_passes_runtime_session_to_generic_profile(self):
+        """Provider hooks receive the active main session as generic context."""
+        import agent.auxiliary_client as aux
+        from providers.base import ProviderProfile
+
+        hook_calls = []
+
+        class ContextProfile(ProviderProfile):
+            def build_api_kwargs_extras(self, *, reasoning_config=None, **context):
+                hook_calls.append(context)
+                return {}, {}
+
+        token = aux.set_runtime_main(
+            "agentgateway",
+            "gateway/model",
+            session_id="main-session-42",
+        )
+        try:
+            with patch(
+                "providers.get_provider_profile",
+                return_value=ContextProfile(name="agentgateway"),
+            ):
+                aux._build_call_kwargs(
+                    "agentgateway",
+                    "gateway/model",
+                    [{"role": "user", "content": "hello"}],
+                )
+        finally:
+            aux.reset_runtime_main(token)
+
+        assert hook_calls
+        assert hook_calls[0]["session_id"] == "main-session-42"
+
 
 class TestFastModelTier:
     """The opt-in titling fast tier: rot-proof and scoped to titling only."""

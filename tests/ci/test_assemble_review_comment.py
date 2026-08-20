@@ -228,11 +228,11 @@ def test_assemble_review_status_detail_renders_sensitive_file_links():
         "kind": "action_required",
         "title": "CI-sensitive file review",
         "summary": "Changes detected.",
-        "detail": "**Sensitive files:**\n- [`ci.yml`](https://example.test/ci.yml)",
+        "detail": "**Sensitive files:**\n- [`ci.yaml`](https://example.test/ci.yaml)",
     }])
     body = _mod.assemble(review_statuses_json=statuses)
     assert "**Sensitive files:**" in body
-    assert "[`ci.yml`](https://example.test/ci.yml)" in body
+    assert "[`ci.yaml`](https://example.test/ci.yaml)" in body
 
 
 def test_assemble_info_keeps_screenshot_details_visible_below_its_summary():
@@ -353,5 +353,4 @@ def test_render_both_emitted_link_and_job_url():
     assert "[View job](https://github.com/run/1/job/5)" in body
     # Both links on the same line, separated by ·
     assert " · " in body
-
 

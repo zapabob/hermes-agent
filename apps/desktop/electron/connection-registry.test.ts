@@ -28,7 +28,10 @@ import {
   REGISTRY_VERSION,
   rememberSshEnumeration,
   removeConnection,
+  resolvedConnectionId,
   resolveRegistryLocalRoute,
+  setConnectionLaunchMode,
+  setLastUsedConnection,
   setPrimaryConnection,
   shouldDeferLocalEnumeration,
   shouldRetrySshInventory,
@@ -52,6 +55,49 @@ test('labelSlug kebab-cases and never returns empty for non-empty input', () => 
   assert.equal(labelSlug('Work Laptop'), 'work-laptop')
   assert.equal(labelSlug('Spark Box #2'), 'spark-box-2')
   assert.equal(labelSlug('!!!'), 'connection')
+})
+
+test('resolvedConnectionId identifies local and migrated remote descriptors', () => {
+  const registry = migrateV1ToRegistry({
+    mode: 'local',
+    profiles: {
+      personal: { mode: 'remote', url: 'https://personal.example:9443/', authMode: 'token' },
+      work: { mode: 'ssh', host: 'work-host', user: 'root' }
+    }
+  })
+
+  const personal = registry.connections.find(connection => connection.kind === 'remote')
+  const work = registry.connections.find(connection => connection.kind === 'ssh')
+
+  assert.equal(resolvedConnectionId(registry, { mode: 'local' }), LOCAL_CONNECTION_ID)
+  assert.equal(
+    resolvedConnectionId(registry, {
+      baseUrl: 'https://personal.example:9443',
+      mode: 'remote',
+      remoteKind: 'url'
+    }),
+    personal?.id
+  )
+  assert.equal(
+    resolvedConnectionId(registry, {
+      baseUrl: 'http://127.0.0.1:49152',
+      mode: 'remote',
+      remoteHost: 'root@work-host',
+      remoteKind: 'ssh'
+    }),
+    work?.id
+  )
+})
+
+test('resolvedConnectionId does not guess an unregistered remote', () => {
+  assert.equal(
+    resolvedConnectionId(emptyRegistry(), {
+      baseUrl: 'https://unknown.example',
+      mode: 'remote',
+      remoteKind: 'url'
+    }),
+    null
+  )
 })
 
 test('agentHandle bare when unique, @name-device shape when duplicated', () => {
@@ -284,6 +330,135 @@ test('roster: duplicate profiles from one connection remain one routable agent',
   )
 })
 
+// --- buildAgentRoster: same-backend (install_id) collapse ---
+
+test('roster: two connections with the same install_id collapse to one row per profile', () => {
+  const hostname = { id: 'spark', kind: 'remote' as const, label: 'Spark', url: 'http://spark:8642' }
+  const tailscale = { id: 'spark-ts', kind: 'remote' as const, label: 'Spark TS', url: 'http://100.1.2.3:8642' }
+
+  const roster = buildAgentRoster([
+    { connection: hostname, profiles: ['default', 'research'], installId: 'aaa' },
+    { connection: tailscale, profiles: ['default', 'research'], installId: 'aaa' }
+  ])
+
+  // One row per (install, profile) — no duplicate bots for the same box.
+  assert.deepEqual(roster.map(agent => `${agent.connectionId}/${agent.profile}`).sort(), [
+    'spark/default',
+    'spark/research'
+  ])
+  // Handle disambiguation runs AFTER the collapse: no more suffixed names.
+  assert.deepEqual(roster.map(agent => agent.handle).sort(), ['default', 'research'])
+})
+
+test('roster: collapse prefers the active (primary) connection', () => {
+  const hostname = { id: 'spark', kind: 'remote' as const, label: 'Spark', url: 'http://spark:8642' }
+  const tailscale = { id: 'spark-ts', kind: 'remote' as const, label: 'Spark TS', url: 'http://100.1.2.3:8642' }
+
+  const roster = buildAgentRoster(
+    [
+      { connection: hostname, profiles: ['default'], installId: 'aaa' },
+      { connection: tailscale, profiles: ['default'], installId: 'aaa' }
+    ],
+    { primaryConnectionId: 'spark-ts' }
+  )
+
+  assert.equal(roster.length, 1)
+  assert.equal(roster[0].connectionId, 'spark-ts')
+})
+
+test('roster: collapse pick order is local > ssh > remote > cloud, then registration order', () => {
+  const local = { id: 'local', kind: 'local' as const, label: 'This device' }
+  const remote = { id: 'loop', kind: 'remote' as const, label: 'Loopback', url: 'http://127.0.0.1:8642' }
+  const cloud = { id: 'cl', kind: 'cloud' as const, label: 'Cloud twin', url: 'http://cl:1' }
+  const ssh = { id: 'tun', kind: 'ssh' as const, label: 'Tunnel', host: 'box' }
+
+  // Same box registered four ways; primary is NOT one of them (unset).
+  const roster = buildAgentRoster([
+    { connection: cloud, profiles: ['default'], installId: 'aaa' },
+    { connection: remote, profiles: ['default'], installId: 'aaa' },
+    { connection: ssh, profiles: ['default'], installId: 'aaa' },
+    { connection: local, profiles: ['default'], installId: 'aaa' }
+  ])
+
+  assert.equal(roster.length, 1)
+  assert.equal(roster[0].connectionId, 'local')
+
+  // Without the local candidate, ssh wins over remote/cloud.
+  const noLocal = buildAgentRoster([
+    { connection: cloud, profiles: ['default'], installId: 'aaa' },
+    { connection: remote, profiles: ['default'], installId: 'aaa' },
+    { connection: ssh, profiles: ['default'], installId: 'aaa' }
+  ])
+
+  assert.equal(noLocal[0].connectionId, 'tun')
+
+  // Same kind → earliest-registered (enumeration order) wins.
+  const twin = { id: 'loop2', kind: 'remote' as const, label: 'Loopback 2', url: 'http://[::1]:8642' }
+
+  const sameKind = buildAgentRoster([
+    { connection: remote, profiles: ['default'], installId: 'aaa' },
+    { connection: twin, profiles: ['default'], installId: 'aaa' }
+  ])
+
+  assert.equal(sameKind[0].connectionId, 'loop')
+})
+
+test('roster: missing install_id bypasses the collapse (older backends keep current behavior)', () => {
+  const hostname = { id: 'spark', kind: 'remote' as const, label: 'Spark', url: 'http://spark:8642' }
+  const tailscale = { id: 'spark-ts', kind: 'remote' as const, label: 'Spark TS', url: 'http://100.1.2.3:8642' }
+
+  // Neither reports an id → both rows survive, handles disambiguate.
+  const roster = buildAgentRoster([
+    { connection: hostname, profiles: ['default'] },
+    { connection: tailscale, profiles: ['default'] }
+  ])
+
+  assert.equal(roster.length, 2)
+  assert.deepEqual(roster.map(a => a.handle).sort(), ['default-spark', 'default-spark-ts'])
+
+  // One id + one missing must NOT collapse either (undefined never matches).
+  const mixed = buildAgentRoster([
+    { connection: hostname, profiles: ['default'], installId: 'aaa' },
+    { connection: tailscale, profiles: ['default'] }
+  ])
+
+  assert.equal(mixed.length, 2)
+})
+
+test('roster: different install_ids stay separate rows with disambiguated handles', () => {
+  const spark = { id: 'spark', kind: 'remote' as const, label: 'Spark', url: 'http://spark:8642' }
+  const mini = { id: 'mini', kind: 'remote' as const, label: 'Mini', url: 'http://mini:8642' }
+
+  const roster = buildAgentRoster([
+    { connection: spark, profiles: ['default'], installId: 'aaa' },
+    { connection: mini, profiles: ['default'], installId: 'bbb' }
+  ])
+
+  assert.equal(roster.length, 2)
+  assert.deepEqual(roster.map(a => a.handle).sort(), ['default-mini', 'default-spark'])
+})
+
+test('roster: collapse also folds a third same-box connection from a per-profile v1 override import', () => {
+  // The reporter's "profile with cron appears as another duplicate": the v1
+  // migration imports per-profile override blocks as EXTRA connections, so a
+  // cron profile pinned to the same box via a third URL becomes a third
+  // registry entry. Same install_id → still one row per profile.
+  const hostname = { id: 'spark', kind: 'remote' as const, label: 'Spark', url: 'http://spark:8642' }
+  const tailscale = { id: 'spark-ts', kind: 'remote' as const, label: 'Spark TS', url: 'http://100.1.2.3:8642' }
+  const override = { id: 'spark-lan', kind: 'remote' as const, label: 'Spark LAN', url: 'http://192.168.1.5:8642' }
+
+  const roster = buildAgentRoster([
+    { connection: hostname, profiles: ['default', 'cron-bot'], installId: 'aaa' },
+    { connection: tailscale, profiles: ['default', 'cron-bot'], installId: 'aaa' },
+    { connection: override, profiles: ['default', 'cron-bot'], installId: 'aaa' }
+  ])
+
+  assert.deepEqual(roster.map(agent => `${agent.profile}:${agent.handle}`).sort(), [
+    'cron-bot:cron-bot',
+    'default:default'
+  ])
+})
+
 // --- updateEligibility ---
 
 test('update fan-out: cloud is platform-managed, everything else eligible', () => {
@@ -417,6 +592,58 @@ test('editing an entry does not collide with its own label', () => {
   assert.equal(edited.url, 'http://10.0.0.6:9119')
 })
 
+test('duplicate gateway URLs are rejected across remote and cloud kinds', () => {
+  let registry = emptyRegistry()
+  registry = upsertConnection(
+    registry,
+    normalizeConnectionInput({ kind: 'remote', label: 'Homelab', url: 'http://10.0.0.5:9119' }, registry)
+  )
+
+  // Same URL modulo trailing slash → dupe, even as a different kind.
+  assert.throws(
+    () => normalizeConnectionInput({ kind: 'remote', label: 'Twin', url: 'http://10.0.0.5:9119/' }, registry),
+    /already exists/
+  )
+  assert.throws(
+    () => normalizeConnectionInput({ kind: 'cloud', label: 'Cloud twin', url: 'http://10.0.0.5:9119' }, registry),
+    /already exists/
+  )
+  // Editing the entry itself keeps its own URL without self-colliding.
+  const existing = registry.connections.find(c => c.kind === 'remote')!
+
+  const edited = normalizeConnectionInput(
+    { id: existing.id, kind: 'remote', label: 'Homelab', url: 'http://10.0.0.5:9119' },
+    registry
+  )
+
+  assert.equal(edited.id, existing.id)
+})
+
+test('duplicate ssh targets are rejected on user@host:port + remote profile', () => {
+  let registry = emptyRegistry()
+  registry = upsertConnection(
+    registry,
+    normalizeConnectionInput({ kind: 'ssh', label: 'Box', host: 'alice@box:22', remoteProfile: 'work' }, registry)
+  )
+
+  assert.throws(
+    () =>
+      normalizeConnectionInput(
+        { kind: 'ssh', label: 'Box twin', host: 'alice@box:22', remoteProfile: 'work' },
+        registry
+      ),
+    /already exists/
+  )
+
+  // A different remote profile on the same host is a distinct agent source.
+  const otherProfile = normalizeConnectionInput(
+    { kind: 'ssh', label: 'Box other', host: 'alice@box:22', remoteProfile: 'other' },
+    registry
+  )
+
+  assert.equal(otherProfile.kind, 'ssh')
+})
+
 test('remote input normalizes URL and auth mode; cloud keeps org', () => {
   const registry = emptyRegistry()
 
@@ -463,6 +690,8 @@ test('normalizeRegistry degrades junk to a local-only registry', () => {
 
     assert.equal(registry.version, REGISTRY_VERSION)
     assert.equal(registry.primary, LOCAL_CONNECTION_ID)
+    assert.equal(registry.launchMode, 'primary')
+    assert.equal(registry.lastUsed, LOCAL_CONNECTION_ID)
     assert.equal(registry.connections.length, 1)
     assert.equal(registry.connections[0].kind, 'local')
   }
@@ -494,6 +723,8 @@ test('normalizeRegistry round-trips a valid registry unchanged in shape', () => 
   const input = {
     version: 2,
     primary: 'homelab',
+    launchMode: 'last-used',
+    lastUsed: 'homelab',
     connections: [
       { id: 'local', kind: 'local', label: 'This device' },
       {
@@ -519,6 +750,8 @@ test('normalizeRegistry round-trips a valid registry unchanged in shape', () => 
   const registry = normalizeRegistry(input)
 
   assert.equal(registry.primary, 'homelab')
+  assert.equal(registry.launchMode, 'last-used')
+  assert.equal(registry.lastUsed, 'homelab')
   assert.equal(registry.connections.length, 4)
   assert.deepEqual(
     registry.connections.map(c => c.id),
@@ -526,6 +759,22 @@ test('normalizeRegistry round-trips a valid registry unchanged in shape', () => 
   )
   assert.deepEqual(registry.connections[1].token, { v: 1 })
   assert.equal(registry.connections[3].port, 2222)
+})
+
+test('normalizeRegistry falls back to Primary when the last-used source is missing', () => {
+  const registry = normalizeRegistry({
+    version: 2,
+    primary: 'homelab',
+    launchMode: 'last-used',
+    lastUsed: 'retired-host',
+    connections: [
+      { id: 'local', kind: 'local', label: 'This device' },
+      { id: 'homelab', kind: 'remote', label: 'Homelab', url: 'http://10.0.0.5:9119' }
+    ]
+  })
+
+  assert.equal(registry.launchMode, 'last-used')
+  assert.equal(registry.lastUsed, 'homelab')
 })
 
 // --- v1 → v2 migration ---
@@ -612,17 +861,19 @@ test('migrate: duplicate host labels are suffixed, not dropped', () => {
 
 // --- registry operations ---
 
-test('removeConnection: local refuses, primary retargets to local', () => {
+test('removeConnection: local refuses, primary and last-used retarget safely', () => {
   let registry = emptyRegistry()
   const entry = normalizeConnectionInput({ kind: 'remote', label: 'Homelab', url: 'http://10.0.0.5:9119' }, registry)
   registry = upsertConnection(registry, entry)
   registry = setPrimaryConnection(registry, entry.id)
+  registry = setLastUsedConnection(registry, entry.id)
 
   assert.throws(() => removeConnection(registry, LOCAL_CONNECTION_ID), /cannot be removed/)
 
   const after = removeConnection(registry, entry.id)
 
   assert.equal(after.primary, LOCAL_CONNECTION_ID)
+  assert.equal(after.lastUsed, LOCAL_CONNECTION_ID)
   assert.equal(after.connections.length, 1)
   // Removing an unknown id is a no-op, not an error.
   assert.equal(removeConnection(after, 'ghost'), after)
@@ -633,6 +884,17 @@ test('setPrimaryConnection validates the target id', () => {
 
   assert.throws(() => setPrimaryConnection(registry, 'ghost'), /No connection/)
   assert.equal(setPrimaryConnection(registry, LOCAL_CONNECTION_ID).primary, LOCAL_CONNECTION_ID)
+})
+
+test('last-used source and launch mode validate their persisted values', () => {
+  let registry = emptyRegistry()
+  const entry = normalizeConnectionInput({ kind: 'remote', label: 'Homelab', url: 'http://10.0.0.5:9119' }, registry)
+  registry = upsertConnection(registry, entry)
+
+  assert.throws(() => setLastUsedConnection(registry, 'ghost'), /No connection/)
+  assert.equal(setLastUsedConnection(registry, entry.id).lastUsed, entry.id)
+  assert.equal(setConnectionLaunchMode(registry, 'last-used').launchMode, 'last-used')
+  assert.throws(() => setConnectionLaunchMode(registry, 'sometimes'), /Unknown connection launch mode/)
 })
 
 test('upsertConnection replaces by id and appends new ids', () => {

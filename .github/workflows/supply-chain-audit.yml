@@ -9,7 +9,7 @@ name: Supply Chain Audit
 # yourself adding WARNING-tier patterns here again, make a separate
 # advisory-only workflow instead.
 #
-# Path-gating is handled centrally by the ``ci.yml`` orchestrator's
+# Path-gating is handled centrally by the ``ci.yaml`` orchestrator's
 # ``detect`` job. The orchestrator passes ``scan`` / ``deps`` booleans as
 # inputs; this workflow's jobs gate on those inputs instead of re-computing
 # the diff. MCP catalog review was previously here but has moved to

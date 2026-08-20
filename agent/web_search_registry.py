@@ -167,6 +167,40 @@ _LEGACY_PREFERENCE = (
     "ddgs",
 )
 
+# Keyless free-tier walk — strictly LAST-resort, tried only after the
+# availability-filtered legacy walk finds nothing (i.e. the user has zero
+# web credentials and no importable ddgs). These providers expose public
+# anonymous MCP endpoints (see plugins/web/keyless_mcp.py). Like opencode,
+# unpinned keyless traffic is split 50/50 between Exa and Parallel per
+# process (see _keyless_preference()); an explicit `hermes tools` pick
+# (web.backend / web.<capability>_backend) bypasses this walk entirely.
+# Disable the tier with ``web.keyless_fallback: false``.
+_KEYLESS_PREFERENCE = (
+    "exa",
+    "parallel",
+)
+
+
+def _keyless_preference() -> tuple:
+    """Return the keyless walk order, split 50/50 per process.
+
+    Mirrors opencode's session-checksum A/B split between Exa and
+    Parallel: the per-process random session id (also used as Parallel's
+    free-tier rate-limit token) picks which vendor goes first, so keyless
+    load spreads evenly across both free tiers fleet-wide while staying
+    stable within one process. The runner-up stays in the walk as a
+    fallback if the first isn't registered. Explicit user selection never
+    reaches this function — configured names resolve in step 1.
+    """
+    try:
+        from plugins.web.keyless_mcp import _SESSION_ID
+
+        if int(_SESSION_ID, 16) % 2:
+            return ("parallel", "exa")
+    except Exception as exc:  # noqa: BLE001 — split is best-effort
+        logger.debug("keyless 50/50 split unavailable: %s", exc)
+    return _KEYLESS_PREFERENCE
+
 
 def _resolve(configured: Optional[str], *, capability: str) -> Optional[WebSearchProvider]:
     """Resolve the active provider for a capability ("search" | "extract").
@@ -255,7 +289,37 @@ def _resolve(configured: Optional[str], *, capability: str) -> Optional[WebSearc
         ):
             return provider
 
+    # 4. Keyless free-tier walk — the user has NO credentialed/importable
+    #    backend at all. Fall back to providers that can serve anonymously
+    #    (public MCP free tiers), unless disabled via
+    #    ``web.keyless_fallback: false``. This tier never pre-empts a keyed
+    #    setup: it is only reachable when the legacy walk found nothing.
+    if _keyless_tier_enabled():
+        for name in _keyless_preference():
+            provider = snapshot.get(name)
+            if provider is None or not _capable(provider):
+                continue
+            try:
+                if provider.is_keyless_available():
+                    return provider
+            except Exception as exc:  # noqa: BLE001 — buggy provider skipped
+                logger.debug(
+                    "provider %s.is_keyless_available() raised %s", name, exc
+                )
+
     return None
+
+
+def _keyless_tier_enabled() -> bool:
+    """Read ``web.keyless_fallback`` from config.yaml (default: enabled)."""
+    try:
+        from hermes_cli.config import load_config
+
+        web_cfg = load_config().get("web") or {}
+        return bool(web_cfg.get("keyless_fallback", True))
+    except Exception as exc:  # noqa: BLE001 — config layer optional
+        logger.debug("keyless_fallback config read failed: %s", exc)
+        return True
 
 
 def _disabled_web_plugin_for(configured: Optional[str] = None, *, capability: Optional[str] = None) -> Optional[str]:
@@ -335,6 +399,76 @@ def get_active_extract_provider() -> Optional[WebSearchProvider]:
     """
     explicit = _read_config_key("web", "extract_backend") or _read_config_key("web", "backend")
     return _resolve(explicit, capability="extract")
+
+
+def get_fallback_provider(
+    capability: str,
+    *,
+    exclude: Optional[str] = None,
+) -> Optional[WebSearchProvider]:
+    """Return an available *different* provider for an automatic retry.
+
+    Automatic retries are deliberately disabled when the user selected a
+    backend in ``config.yaml``.  An explicit selection is a contract: a
+    missing credential or provider error must be reported by that provider,
+    rather than silently changing vendors.  For an unconfigured install we
+    reuse the normal preference walk and keyless tier while excluding the
+    provider that just failed.  This keeps the fork's CloakBrowser default
+    and still lets the official Exa/Parallel anonymous endpoints serve as a
+    genuine second provider instead of invoking CloakBrowser recursively.
+    """
+    if capability not in ("search", "extract"):
+        return None
+    if _read_config_key("web", f"{capability}_backend") or _read_config_key("web", "backend"):
+        return None
+
+    excluded = {exclude.strip()} if isinstance(exclude, str) and exclude.strip() else set()
+    with _lock:
+        snapshot = dict(_providers)
+        snapshot.update(_scoped_providers.get(hermes_home_key(), {}))
+
+    def capable(provider: WebSearchProvider) -> bool:
+        return (
+            provider.supports_search()
+            if capability == "search"
+            else provider.supports_extract()
+        )
+
+    def available(provider: WebSearchProvider) -> bool:
+        try:
+            return bool(provider.is_available())
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("provider %s.is_available() raised %s", provider.name, exc)
+            return False
+
+    for name in _LEGACY_PREFERENCE:
+        if name in excluded:
+            continue
+        provider = snapshot.get(name)
+        if provider is not None and capable(provider) and available(provider):
+            return provider
+
+    # Preserve deterministic custom-provider behavior before entering the
+    # anonymous tier; list_providers() already sorts by stable provider name.
+    for provider in sorted(snapshot.values(), key=lambda item: item.name):
+        if provider.name in excluded or provider.name in _LEGACY_PREFERENCE:
+            continue
+        if capable(provider) and available(provider):
+            return provider
+
+    if _keyless_tier_enabled():
+        for name in _keyless_preference():
+            if name in excluded:
+                continue
+            provider = snapshot.get(name)
+            if provider is None or not capable(provider):
+                continue
+            try:
+                if provider.is_keyless_available():
+                    return provider
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("provider %s.is_keyless_available() raised %s", name, exc)
+    return None
 
 
 def _reset_for_tests() -> None:

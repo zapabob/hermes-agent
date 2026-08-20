@@ -10,6 +10,7 @@ import {
   ATTACHMENT_UPLOAD_DEFAULT_MAX_BYTES,
   clampDataUrlReadMaxMb,
   DATA_URL_READ_DEFAULT_MAX_MB,
+  DATA_URL_READ_MAX_BYTES,
   dataUrlReadMaxBytesFromMb,
   DEFAULT_FETCH_TIMEOUT_MS,
   enableBasicPasswordStoreEncryption,
@@ -50,6 +51,21 @@ function modeOf(filePath: string) {
   return fs.statSync(filePath).mode & 0o777
 }
 
+// Windows exposes a read-only attribute through Node's chmod API rather than
+// POSIX owner/group/other mode bits. Keep the strict 0600 assertions active on
+// POSIX hosts, while still exercising the write/read behavior on Windows.
+const supportsPosixCredentialModes = process.platform !== 'win32'
+const supportsPosixOwnership = typeof process.getuid === 'function'
+
+function assertOwnerOnlyMode(filePath: string, message = 'file is owner-only') {
+  if (!supportsPosixCredentialModes) {
+    return
+  }
+
+  assert.equal(modeOf(filePath), SECRET_FILE_MODE, message)
+  assert.equal(modeOf(filePath) & 0o077, 0, 'no group/other bits')
+}
+
 /**
  * No file other than the target may survive a write, and nothing left in the
  * directory may contain the payload. Asserts the CONTRACT (no readable debris)
@@ -85,6 +101,7 @@ test('clampDataUrlReadMaxMb defaults and bounds the attach size preference', () 
   assert.equal(clampDataUrlReadMaxMb(256), 256)
   assert.equal(clampDataUrlReadMaxMb(99999), 4096)
   assert.equal(dataUrlReadMaxBytesFromMb(16), 16 * 1024 * 1024)
+  assert.equal(DATA_URL_READ_MAX_BYTES, dataUrlReadMaxBytesFromMb(DATA_URL_READ_DEFAULT_MAX_MB))
 })
 
 test('attachment upload cap is bounded above the preview default', () => {
@@ -164,8 +181,7 @@ test('writeSecretFileAtomic creates the file owner-only, not at the 0644 umask d
 
     writeSecretFileAtomic(target, payload)
 
-    assert.equal(modeOf(target), SECRET_FILE_MODE)
-    assert.equal(modeOf(target) & 0o077, 0, 'no group/other bits')
+    assertOwnerOnlyMode(target)
     assert.equal(fs.readFileSync(target, 'utf8'), payload, 'content round-trips')
     assertNoSecretDebris(dir, 'connection.json', 'BLOB')
   })
@@ -395,7 +411,7 @@ test('writeSecretFileAtomic does not inherit loose bits from a stale temp file',
 
     writeSecretFileAtomic(target, 'fresh')
 
-    assert.equal(modeOf(target), SECRET_FILE_MODE)
+    assertOwnerOnlyMode(target)
     assert.equal(fs.readFileSync(target, 'utf8'), 'fresh')
   })
 })
@@ -433,7 +449,7 @@ test('the written file is owner-only even where chmod does nothing', () => {
       process.umask(previousUmask)
     }
 
-    assert.equal(modeOf(target), SECRET_FILE_MODE, 'created owner-only, not tightened after the fact')
+    assertOwnerOnlyMode(target, 'created owner-only, not tightened after the fact')
   })
 })
 
@@ -447,7 +463,7 @@ test('the written file is owner-only even when a stale temp cannot be removed', 
 
     writeSecretFileAtomic(target, 'tok', { fs: fsWith({ rmSync: () => void 0 }) })
 
-    assert.equal(modeOf(target), SECRET_FILE_MODE, 'tightened before the rename handed the bits over')
+    assertOwnerOnlyMode(target, 'tightened before the rename handed the bits over')
     assert.equal(fs.readFileSync(target, 'utf8'), 'tok')
   })
 })
@@ -499,11 +515,13 @@ test('tightenSecretFileMode tightens a pre-existing world-readable config in pla
     })
 
     fs.writeFileSync(target, legacy, { mode: 0o644 })
-    assert.equal(modeOf(target), 0o644)
+    if (supportsPosixCredentialModes) {
+      assert.equal(modeOf(target), 0o644)
+    }
 
     assert.equal(tightenSecretFileMode(target), true)
 
-    assert.equal(modeOf(target), SECRET_FILE_MODE)
+    assertOwnerOnlyMode(target)
     assert.deepEqual(JSON.parse(fs.readFileSync(target, 'utf8')), JSON.parse(legacy), 'contents untouched')
   })
 })
@@ -525,7 +543,7 @@ test('tightenSecretFileMode leaves a non-safeStorage token payload readable', ()
 
     tightenSecretFileMode(target)
 
-    assert.equal(modeOf(target), SECRET_FILE_MODE)
+    assertOwnerOnlyMode(target)
     assert.equal(JSON.parse(fs.readFileSync(target, 'utf8')).remote.token.value, 'tok-live-42')
   })
 })
@@ -537,11 +555,17 @@ test('tightenSecretFileMode is idempotent and never throws on an unusable path',
 
     assert.equal(tightenSecretFileMode(target), true)
     assert.equal(tightenSecretFileMode(target), true)
-    assert.equal(modeOf(target), SECRET_FILE_MODE)
+    assertOwnerOnlyMode(target)
 
     // Missing file (fresh install, nothing saved yet) reports failure quietly
     // instead of breaking the read path it is called from.
-    assert.equal(tightenSecretFileMode(path.join(dir, 'absent.json')), false)
+    assert.equal(
+      tightenSecretFileMode(path.join(dir, 'absent.json')),
+      supportsPosixCredentialModes ? false : true,
+      supportsPosixCredentialModes
+        ? 'missing POSIX files report failure'
+        : 'Windows deliberately reports success without chmod/stat'
+    )
   })
 })
 
@@ -590,16 +614,25 @@ test('tightenSecretFileMode only touches a regular file the current user owns', 
     tightenSecretFileMode('/x/connection.json', { fs: fakeFs({ isFile: () => false }), platform: 'linux' }),
     false
   )
+  const foreignOwnerResult = tightenSecretFileMode('/x/connection.json', {
+    fs: fakeFs({ uid: uid + 1 }),
+    platform: 'linux'
+  })
   assert.equal(
-    tightenSecretFileMode('/x/connection.json', { fs: fakeFs({ uid: uid + 1 }), platform: 'linux' }),
-    false,
-    'a file owned by another user is left alone'
+    foreignOwnerResult,
+    supportsPosixOwnership ? false : true,
+    supportsPosixOwnership
+      ? 'a file owned by another user is left alone'
+      : 'ownership cannot be checked when process.getuid is unavailable'
   )
-  assert.deepEqual(chmodded, [], 'nothing was chmodded on the rejected paths')
+  assert.deepEqual(chmodded, supportsPosixOwnership ? [] : ['/x/connection.json'])
 
   // The same fs shape, but ours and loose: now it tightens.
   assert.equal(tightenSecretFileMode('/x/connection.json', { fs: fakeFs({ uid }), platform: 'linux' }), true)
-  assert.deepEqual(chmodded, ['/x/connection.json'])
+  assert.deepEqual(
+    chmodded,
+    supportsPosixOwnership ? ['/x/connection.json'] : ['/x/connection.json', '/x/connection.json']
+  )
 })
 
 test('tightenSecretFileMode leaves Windows alone rather than flipping the read-only bit', () => {
@@ -1000,6 +1033,22 @@ function readMain() {
   return fs.readFileSync(path.join(__dirname, 'main.ts'), 'utf8').replace(/\r\n/g, '\n')
 }
 
+test('registry JSON helpers retain native OAuth bearer authentication', () => {
+  const source = readMain()
+  const postStart = source.indexOf('async function postJsonForBackend(')
+  const fetchStart = source.indexOf('async function fetchJsonForBackend(', postStart)
+  const helpers = source.slice(postStart, fetchStart)
+
+  assert.notEqual(postStart, -1)
+  assert.notEqual(fetchStart, -1)
+  assert.match(
+    helpers,
+    /return fetchJsonForBackend\(descriptor, path, \{ \.\.\.opts, body: body \?\? \{\}, method: 'POST' \}\)/
+  )
+  assert.match(helpers, /return fetchJsonForBackend\(descriptor, path, opts\)/)
+  assert.doesNotMatch(helpers, /fetchJsonViaOauthSession/)
+})
+
 test('coerceDesktopConnectionConfig routes token persistence through resolvePersistedRemoteToken', () => {
   const source = readMain()
   const fnStart = source.indexOf('function coerceDesktopConnectionConfig(')
@@ -1040,6 +1089,25 @@ test('connection-config save and apply IPC handlers route payloads through coerc
       `${channel} must coerce its payload (the propagation seam) before persisting`
     )
   }
+})
+
+test('approval notification actions preserve source identity through the renderer IPC payload', () => {
+  const source = readMain()
+  const notifyStart = source.indexOf("ipcMain.handle('hermes:notify'")
+  assert.notEqual(notifyStart, -1, 'hermes:notify handler must exist')
+
+  const actionStart = source.indexOf("notification.on('action'", notifyStart)
+  assert.notEqual(actionStart, -1, 'notification action handler must exist')
+
+  const approvalStart = source.indexOf('// Approvals keep the existing session-scoped channel.', actionStart)
+  assert.notEqual(approvalStart, -1, 'approval action branch must exist')
+
+  const approvalBranch = source.slice(approvalStart, source.indexOf('\n    }', approvalStart) + 6)
+  assert.match(approvalBranch, /connectionId: payload\?\.connectionId/)
+  assert.match(approvalBranch, /profile: payload\?\.profile/)
+  assert.match(approvalBranch, /requestId: payload\?\.requestId/)
+  assert.match(approvalBranch, /sessionId: payload\.sessionId/)
+  assert.match(approvalBranch, /mainWindow\.webContents\.send\('hermes:notification-action'/)
 })
 
 test('whenReady enables basic password-store encryption before createWindow', () => {

@@ -321,19 +321,21 @@ class TestRegistryResolution:
     def test_no_config_no_credentials_returns_none(
         self,
     ) -> None:
-        """No backend configured AND no available providers → typically None.
+        """No backend configured AND no credentials → keyless tier or ddgs.
 
-        ``cloakbrowser`` / ``ddgs`` are no-credential fallbacks; if either
-        Python package is installed in the test env, one of them will be
-        picked. Otherwise the resolver returns None. Either outcome is correct.
+        Resolution order with zero credentials: ddgs if its Python package
+        is importable, else the keyless free tier (Parallel/Exa public
+        endpoints — resolves with ``is_available() == False`` but
+        ``is_keyless_available() == True``), else None (keyless tier
+        disabled). All three outcomes are correct; a provider that is
+        neither keyed nor keyless-capable means an env var leaked in.
         """
         _ensure_plugins_loaded()
         from agent.web_search_registry import _resolve
 
         result = _resolve(None, capability="search")
         if result is not None:
-            # No-credential providers: cloakbrowser, ddgs.
-            assert result.is_available() is True
+            assert result.is_available() or result.is_keyless_available()
 
     def test_cloakbrowser_extract_is_async(self) -> None:
         _ensure_plugins_loaded()

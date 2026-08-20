@@ -79,7 +79,9 @@ def _unmerged() -> list[str]:
 
 def _collect_blockers(report_path: Path) -> list[str]:
     payload = json.loads(report_path.read_text(encoding="utf-8"))
-    return list(payload.get("blocked_paths") or [])
+    blocked_paths = list(payload.get("blocked_paths") or [])
+    unresolved_conflicts = list(payload.get("unresolved_conflicts") or [])
+    return list(dict.fromkeys([*blocked_paths, *unresolved_conflicts]))
 
 
 def stage_inventory(upstream_ref: str, strategy_file: Path) -> dict[str, object]:
@@ -201,7 +203,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "blockers. The blocker list is still recorded in the report."
         ),
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.dry_run and args.merge:
+        parser.error("--dry-run cannot be combined with --merge")
+    if args.dry_run and args.openclaw_execute:
+        parser.error("--dry-run cannot be combined with --openclaw-execute")
+    return args
 
 
 def main() -> int:

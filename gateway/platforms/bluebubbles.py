@@ -17,7 +17,7 @@ import uuid
 from collections import OrderedDict
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urljoin, urlsplit
 
 import httpx
 
@@ -96,6 +96,7 @@ DEFAULT_WEBHOOK_PATH = "/bluebubbles-webhook"
 MAX_TEXT_LENGTH = 4000
 DEFAULT_MAX_INBOUND_MEDIA_BYTES = 128 * 1024 * 1024
 MAX_INBOUND_MEDIA_BYTES_ENV = "HERMES_MAX_INBOUND_MEDIA_BYTES"
+_MAX_ATTACHMENT_REDIRECTS = 5
 
 # BlueBubbles/iMessage does not expose a stable bot mention identity like
 # Slack (<@U...>), Telegram (@botname), or Matrix (MXID). When users opt into
@@ -295,6 +296,34 @@ class BlueBubblesAdapter(BasePlatformAdapter):
         res = await self.client.post(self._api_url(path), json=payload)
         res.raise_for_status()
         return res.json()
+
+    @staticmethod
+    def _origin(url: str) -> Optional[tuple[str, str, int]]:
+        """Return a normalized HTTP origin, including the effective port."""
+        try:
+            parsed = urlsplit(url)
+            scheme = parsed.scheme.lower()
+            hostname = parsed.hostname
+            if scheme not in {"http", "https"} or not hostname:
+                return None
+            port = parsed.port
+        except ValueError:
+            return None
+        if port is None:
+            port = 443 if scheme == "https" else 80
+        return scheme, hostname.rstrip(".").lower(), port
+
+    @staticmethod
+    def _build_attachment_http_client() -> httpx.AsyncClient:
+        """Build the connect-time SSRF-guarded client for foreign origins."""
+        from gateway.platforms._http_client_limits import platform_httpx_limits
+        from tools.url_safety import create_ssrf_safe_async_client
+
+        return create_ssrf_safe_async_client(
+            timeout=60.0,
+            limits=platform_httpx_limits(),
+            follow_redirects=False,
+        )
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -916,34 +945,69 @@ class BlueBubblesAdapter(BasePlatformAdapter):
             return None
 
     async def _download_attachment_bytes(self, url: str, *, max_bytes: int) -> bytes:
-        """Stream an attachment with a hard byte cap before caching."""
-        total = 0
-        chunks = bytearray()
-        async with self.client.stream(
-            "GET",
-            url,
-            timeout=60,
-            follow_redirects=True,
-        ) as resp:
-            resp.raise_for_status()
-            content_length = resp.headers.get("content-length")
-            if content_length:
-                try:
-                    declared = int(content_length)
-                except ValueError:
-                    declared = None
-                if declared is not None and declared > max_bytes:
-                    raise ValueError(
-                        f"Attachment content-length {declared} exceeds cap {max_bytes}"
-                    )
-            async for chunk in resp.aiter_bytes():
-                total += len(chunk)
-                if total > max_bytes:
-                    raise ValueError(
-                        f"Attachment download exceeded cap {max_bytes}"
-                    )
-                chunks.extend(chunk)
-        return bytes(chunks)
+        """Stream an attachment with redirect SSRF checks and a byte cap.
+
+        The configured BlueBubbles origin is user-trusted and is commonly a
+        private or loopback address. Redirects that remain on that exact
+        origin therefore keep using the adapter client. A hop to any other
+        origin switches to Hermes' connect-time SSRF-safe client, which blocks
+        private, link-local, and metadata destinations and closes DNS-rebinding
+        between preflight and TCP connect. Redirects are followed manually so
+        no foreign hop can fall back to the trusted-origin client.
+        """
+        assert self.client is not None
+        trusted_origin = self._origin(self.server_url)
+        current_url = url
+        safe_client = self._build_attachment_http_client()
+        try:
+            for _ in range(_MAX_ATTACHMENT_REDIRECTS + 1):
+                current_origin = self._origin(current_url)
+                client = (
+                    self.client
+                    if trusted_origin is not None and current_origin == trusted_origin
+                    else safe_client
+                )
+                async with client.stream(
+                    "GET",
+                    current_url,
+                    timeout=60,
+                    follow_redirects=False,
+                ) as resp:
+                    status_code = getattr(resp, "status_code", 200)
+                    if status_code in {301, 302, 303, 307, 308}:
+                        location = resp.headers.get("location")
+                        if not location:
+                            resp.raise_for_status()
+                            raise ValueError("Attachment redirect omitted Location")
+                        current_url = urljoin(current_url, location)
+                        continue
+
+                    resp.raise_for_status()
+                    content_length = resp.headers.get("content-length")
+                    if content_length:
+                        try:
+                            declared = int(content_length)
+                        except ValueError:
+                            declared = None
+                        if declared is not None and declared > max_bytes:
+                            raise ValueError(
+                                f"Attachment content-length {declared} exceeds cap {max_bytes}"
+                            )
+
+                    total = 0
+                    chunks = bytearray()
+                    async for chunk in resp.aiter_bytes():
+                        total += len(chunk)
+                        if total > max_bytes:
+                            raise ValueError(
+                                f"Attachment download exceeded cap {max_bytes}"
+                            )
+                        chunks.extend(chunk)
+                    return bytes(chunks)
+
+            raise ValueError("Attachment download exceeded redirect limit")
+        finally:
+            await safe_client.aclose()
 
     # ------------------------------------------------------------------
     # Webhook handling

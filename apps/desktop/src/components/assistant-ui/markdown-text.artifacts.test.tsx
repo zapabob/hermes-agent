@@ -2,7 +2,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { artifactsForSession, clearArtifactRegistry } from '@/store/artifacts'
-import { $previewTabs } from '@/store/preview'
+import { $previewTabs, closeRightRail } from '@/store/preview'
 import { $activeSessionId, $selectedStoredSessionId } from '@/store/session'
 
 import { MarkdownTextContent } from './markdown-text'
@@ -31,6 +31,7 @@ describe('MarkdownTextContent artifacts', () => {
   beforeEach(() => {
     $activeSessionId.set('session-artifacts')
     $selectedStoredSessionId.set(null)
+    closeRightRail()
     window.localStorage.clear()
     clearArtifactRegistry()
   })
@@ -39,6 +40,7 @@ describe('MarkdownTextContent artifacts', () => {
     cleanup()
     $activeSessionId.set(null)
     $selectedStoredSessionId.set(null)
+    closeRightRail()
     clearArtifactRegistry()
     window.localStorage.clear()
   })

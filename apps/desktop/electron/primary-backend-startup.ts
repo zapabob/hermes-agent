@@ -1,16 +1,57 @@
 import type { FirstRunSetupDecision } from './first-run-setup-gate'
 
-export interface PrimaryBackendStartupOptions<Backend, RuntimeBackend, Remote, Connection> {
+export interface PrimaryBackendStartupOptions<Backend, RuntimeBackend, Remote, Connection, PrewarmedConnection = Connection> {
   connectRemote: (remote: Remote) => Promise<Connection>
   ensureLocalRuntime: (backend: Backend) => Promise<RuntimeBackend>
   prepareLocalBackend: () => Backend | Promise<Backend>
+  resolvePrewarmedLocal?: (backend: Backend) => Promise<PrewarmedConnection | null>
   resolveRemote: () => Promise<Remote | null>
   waitForDecision: (backend: Backend) => Promise<FirstRunSetupDecision>
   waitForLocalStart: () => Promise<unknown>
 }
 
-export type PrimaryBackendStartupResult<RuntimeBackend, Connection> =
-  { kind: 'local'; backend: RuntimeBackend } | { kind: 'remote'; connection: Connection }
+export type PrimaryBackendStartupResult<RuntimeBackend, Connection, PrewarmedConnection = Connection> =
+  | { kind: 'local'; backend: RuntimeBackend }
+  | { kind: 'prewarmed-local'; connection: PrewarmedConnection }
+  | { kind: 'remote'; connection: Connection }
+
+interface ResolvedPrimaryRemote {
+  authMode?: 'oauth' | 'token'
+  baseUrl: string
+  connectionId?: string
+  remoteHermesVersion?: string
+  remoteHost?: string
+  remoteKind?: 'cloud' | 'ssh' | 'url'
+  source?: string
+  token: unknown
+  wsUrl: string
+}
+
+/**
+ * Build the renderer-facing primary remote descriptor without dropping route
+ * identity. Tests cross this same seam, so adding a field to the resolved
+ * remote cannot silently disappear during primary startup.
+ */
+export function createPrimaryRemoteConnection<State extends object>(
+  remote: ResolvedPrimaryRemote,
+  logs: string[],
+  windowState: State
+) {
+  return {
+    baseUrl: remote.baseUrl,
+    mode: 'remote' as const,
+    source: remote.source,
+    authMode: remote.authMode || 'token',
+    remoteHost: remote.remoteHost,
+    remoteKind: remote.remoteKind,
+    remoteHermesVersion: remote.remoteHermesVersion,
+    ...(remote.connectionId ? { connectionId: remote.connectionId } : {}),
+    token: remote.token,
+    wsUrl: remote.wsUrl,
+    logs,
+    ...windowState
+  }
+}
 
 export class FirstRunSetupResetError extends Error {
   readonly firstRunSetupReset = true
@@ -26,15 +67,16 @@ export class FirstRunSetupResetError extends Error {
 // test: an already-saved remote wins immediately; otherwise update exclusion
 // and local backend resolution happen before the setup gate, and a remote Apply
 // re-resolves persisted config without ever entering ensureRuntime/bootstrap.
-export async function runPrimaryBackendStartup<Backend, RuntimeBackend, Remote, Connection>({
+export async function runPrimaryBackendStartup<Backend, RuntimeBackend, Remote, Connection, PrewarmedConnection>({
   connectRemote,
   ensureLocalRuntime,
   prepareLocalBackend,
+  resolvePrewarmedLocal,
   resolveRemote,
   waitForDecision,
   waitForLocalStart
-}: PrimaryBackendStartupOptions<Backend, RuntimeBackend, Remote, Connection>): Promise<
-  PrimaryBackendStartupResult<RuntimeBackend, Connection>
+}: PrimaryBackendStartupOptions<Backend, RuntimeBackend, Remote, Connection, PrewarmedConnection>): Promise<
+  PrimaryBackendStartupResult<RuntimeBackend, Connection, PrewarmedConnection>
 > {
   const savedRemote = await resolveRemote()
 
@@ -59,6 +101,12 @@ export async function runPrimaryBackendStartup<Backend, RuntimeBackend, Remote, 
 
   if (decision === 'reset') {
     throw new FirstRunSetupResetError()
+  }
+
+  const prewarmed = await resolvePrewarmedLocal?.(backend)
+
+  if (prewarmed) {
+    return { kind: 'prewarmed-local', connection: prewarmed }
   }
 
   return { kind: 'local', backend: await ensureLocalRuntime(backend) }

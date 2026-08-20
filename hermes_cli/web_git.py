@@ -840,15 +840,19 @@ def branch_list(cwd: str) -> list[dict]:
     trees = worktree_list(cwd)
     path_by_branch = {t["branch"]: t["path"] for t in trees if t["branch"]}
     trunk = _default_branch(cwd)
-    sepParse = lambda line: line.split(_SEP) if _SEP in line else [line, ""]
-    locals_ = [{"name": line.split(_SEP)[0], "sha": _SEP.join(line.split(_SEP)[1:])} for line in out.split("\n") if line.strip()]
+    def _parse_ref(line: str) -> dict[str, str]:
+        parts = line.split(_SEP, 2)
+        if len(parts) != 3:
+            return {"name": "", "sha": ""}
+        return {"name": parts[1], "sha": parts[2]}
+    locals_ = [_parse_ref(line) for line in out.split("\n") if line.strip()]
     local_set = set(l["name"] for l in locals_)
     remote_out = _git_out(
         cwd, ["for-each-ref", f"--format={_SEP}%(refname:short){_SEP}%(objectname)", "--sort=-committerdate", "refs/remotes"]
     )
     remotes = [
         entry
-        for entry in [sepParse(line) for line in remote_out.split("\n") if line.strip()]
+        for entry in [_parse_ref(line) for line in remote_out.split("\n") if line.strip()]
         if entry["name"]
         # "origin/HEAD" is a symbolic alias for the remote's default branch —
         # not a branch, and a duplicate row in the list.

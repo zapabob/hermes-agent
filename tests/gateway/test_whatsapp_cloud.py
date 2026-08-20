@@ -35,6 +35,17 @@ def _whatsapp_open_optin(monkeypatch):
     monkeypatch.setenv("WHATSAPP_ALLOW_ALL_USERS", "true")
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_url_safety(monkeypatch):
+    """Keep Graph media tests deterministic and free of real DNS lookups."""
+    import tools.url_safety as url_safety
+
+    async def _always_safe(_url: str) -> bool:
+        return True
+
+    monkeypatch.setattr(url_safety, "async_is_safe_url", _always_safe)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -805,6 +816,67 @@ class TestDownloadMedia:
         local_path, mime = await adapter._download_media_to_cache("missing")
         assert local_path is None and mime is None
 
+    @pytest.mark.asyncio
+    async def test_unsafe_graph_url_is_refused_without_byte_fetch(
+        self, tmp_path, monkeypatch
+    ):
+        import tools.url_safety as url_safety
+        from gateway.platforms import whatsapp_cloud as wac
+
+        checked = []
+
+        async def _unsafe(url: str) -> bool:
+            checked.append(url)
+            return False
+
+        monkeypatch.setattr(url_safety, "async_is_safe_url", _unsafe)
+        adapter = _make_adapter()
+        adapter._http_client = MagicMock()
+        meta_resp = MagicMock(status_code=200)
+        meta_resp.json = MagicMock(return_value={
+            "url": "http://169.254.169.254/latest/meta-data/",
+            "mime_type": "image/jpeg",
+        })
+        adapter._http_client.get = AsyncMock(return_value=meta_resp)
+
+        with _patch.object(wac, "_INBOUND_MEDIA_CACHE", tmp_path):
+            local_path, mime = await adapter._download_media_to_cache("media_bad")
+
+        assert local_path is None and mime is None
+        assert checked == ["http://169.254.169.254/latest/meta-data/"]
+        assert adapter._http_client.get.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_safe_graph_url_byte_fetch_disables_redirects(self, tmp_path):
+        from gateway.platforms import whatsapp_cloud as wac
+
+        adapter = _make_adapter()
+        adapter._http_client = MagicMock()
+        meta_resp = MagicMock(status_code=200)
+        meta_resp.json = MagicMock(return_value={
+            "url": "https://lookaside.fbsbx.com/whatsapp/m/ok",
+            "mime_type": "image/jpeg",
+        })
+        blob_resp = MagicMock(status_code=200, content=b"\xff\xd8\xff\xe0ok")
+        adapter._http_client.get = AsyncMock(side_effect=[meta_resp, blob_resp])
+
+        with _patch.object(wac, "_INBOUND_MEDIA_CACHE", tmp_path):
+            local_path, _ = await adapter._download_media_to_cache("media_ok")
+
+        assert local_path is not None
+        blob_call = adapter._http_client.get.await_args_list[-1]
+        assert blob_call.args[0] == "https://lookaside.fbsbx.com/whatsapp/m/ok"
+        assert blob_call.kwargs["follow_redirects"] is False
+
+    def test_adapter_uses_ssrf_safe_client_factory(self):
+        import inspect
+
+        from gateway.platforms import whatsapp_cloud as wac
+
+        src = inspect.getsource(wac.WhatsAppCloudAdapter.connect)
+        assert "create_ssrf_safe_async_client" in src
+        assert "httpx.AsyncClient(" not in src
+
 
 class TestInboundMediaDispatch:
     """End-to-end: webhook with image_id -> adapter downloads -> MessageEvent.media_urls populated."""
@@ -1399,4 +1471,3 @@ class TestReplyContextResolution:
         assert event.reply_to_message_id is None
         assert event.reply_to_text is None
         assert event.reply_to_is_own_message is False
-

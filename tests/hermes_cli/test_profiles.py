@@ -67,6 +67,22 @@ def profile_env(tmp_path, monkeypatch):
     return tmp_path
 
 
+def _require_symlink_support(tmp_path):
+    """Skip symlink-contract tests when the host lacks symlink privileges."""
+    target = tmp_path / ".symlink-probe-target"
+    link = tmp_path / ".symlink-probe-link"
+    target.write_text("probe", encoding="utf-8")
+    try:
+        link.symlink_to(target)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"symlink support is unavailable: {exc}")
+    finally:
+        if link.is_symlink():
+            link.unlink()
+        if target.exists():
+            target.unlink()
+
+
 # ===================================================================
 # TestValidateProfileName
 # ===================================================================
@@ -130,7 +146,8 @@ class TestCreateProfile:
             for line in content.splitlines()
         )
         mode = stat.S_IMODE(env_path.stat().st_mode)
-        assert mode == 0o600
+        if os.name != "nt":
+            assert mode == 0o600
 
 
 
@@ -145,11 +162,13 @@ class TestCreateProfile:
 
         profile_dir = create_profile("coder", clone_config=True, no_alias=True)
 
-        cloned_config = yaml.safe_load((profile_dir / "config.yaml").read_text())
+        cloned_config = yaml.safe_load(
+            (profile_dir / "config.yaml").read_text(encoding="utf-8")
+        )
         assert cloned_config["_config_version"] == DEFAULT_CONFIG["_config_version"]
         assert cloned_config["model"] == "test"
-        assert (profile_dir / ".env").read_text().strip() == "KEY=val"
-        assert (profile_dir / "SOUL.md").read_text() == "Be helpful."
+        assert (profile_dir / ".env").read_text(encoding="utf-8").strip() == "KEY=val"
+        assert (profile_dir / "SOUL.md").read_text(encoding="utf-8") == "Be helpful."
 
 
 
@@ -231,8 +250,9 @@ class TestBackfillProfileEnvs:
 
         assert sorted(backfilled) == ["old1", "old2"]
         for p in (p1, p2):
-            assert (p / ".env").read_text() == "OPENROUTER_API_KEY=root-key\n"
-            assert stat.S_IMODE((p / ".env").stat().st_mode) == 0o600
+            assert (p / ".env").read_text(encoding="utf-8") == "OPENROUTER_API_KEY=root-key\n"
+            if os.name != "nt":
+                assert stat.S_IMODE((p / ".env").stat().st_mode) == 0o600
 
 
     def test_placeholder_when_default_has_no_env(self, profile_env):
@@ -570,6 +590,7 @@ class TestAliasCollision:
 class TestWrapperScript:
     """Tests for create_wrapper_script() and remove_wrapper_script()."""
 
+    @pytest.mark.skipif(os.name != "posix", reason="POSIX shell wrapper contract")
     def test_creates_sh_on_posix(self, profile_env, monkeypatch):
         monkeypatch.setattr("hermes_cli.profiles.shutil.which", lambda name: "/opt/hermes/bin/hermes")
         from hermes_cli.profiles import create_wrapper_script
@@ -655,7 +676,8 @@ class TestFindAliasForProfile:
         info = next(p for p in list_profiles() if p.name == "steve")
         assert info.alias_name == "qiaobusi"
         assert info.alias_path is not None
-        assert info.alias_path.name == "qiaobusi"
+        expected_name = "qiaobusi" if os.name == "posix" else "qiaobusi.bat"
+        assert info.alias_path.name == expected_name
 
 
 # ===================================================================
@@ -764,6 +786,7 @@ class TestExportImport:
         # following and crashing.
         broken_dir = default_dir / "skills" / "with-broken-links"
         broken_dir.mkdir(parents=True)
+        _require_symlink_support(tmp_path)
         (broken_dir / "broken_link").symlink_to("/nonexistent/path")
         # Valid symlink for comparison
         (broken_dir / "valid_target.txt").write_text("real data")
@@ -939,6 +962,7 @@ class TestWriteProfileMetaDurability:
         real_dir.mkdir()
         real = real_dir / "profile.yaml"
         real.write_text("description: from dotfiles\n", encoding="utf-8")
+        _require_symlink_support(tmp_path)
         (profile_dir / "profile.yaml").symlink_to(real)
 
         profiles.write_profile_meta(profile_dir, description="updated")
@@ -1024,10 +1048,12 @@ class TestEdgeCases:
         target_dir = create_profile(
             "target", clone_from="source", clone_config=True, no_alias=True,
         )
-        cloned_config = yaml.safe_load((target_dir / "config.yaml").read_text())
+        cloned_config = yaml.safe_load(
+            (target_dir / "config.yaml").read_text(encoding="utf-8")
+        )
         assert cloned_config["_config_version"] == DEFAULT_CONFIG["_config_version"]
         assert cloned_config["model"] == "cloned"
-        assert (target_dir / ".env").read_text().strip() == "SECRET=yes"
+        assert (target_dir / ".env").read_text(encoding="utf-8").strip() == "SECRET=yes"
 
 
 
@@ -1123,5 +1149,4 @@ class TestResolveProfileEnvSpelling:
         # No HERMES_HOME: the platform default root applies (existing contract).
         monkeypatch.delenv("HERMES_HOME", raising=False)
         assert Path(resolve_profile_env("default")) == _get_default_hermes_home()
-
 

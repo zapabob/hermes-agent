@@ -182,6 +182,8 @@ class Resolver:
         if action == "drop_generated":
             self.resolve_drop_generated(path)
             return "resolved"
+        if action == "manual_api_followup" and self.dry_run:
+            return "manual_approval_required"
         if action in OVERLAY_ACTIONS:
             if self.dry_run:
                 return "overlay_planned"

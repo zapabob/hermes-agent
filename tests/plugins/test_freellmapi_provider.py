@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -40,6 +41,28 @@ def test_sticky_session_header(freellmapi_profile):
         session_id="hermes-session-abc123"
     )
     assert top_level["extra_headers"]["X-Session-Id"] == "hermes-session-abc123"
+
+
+def test_build_call_kwargs_projects_runtime_session_header(freellmapi_profile):
+    """Auxiliary calls preserve the active turn's FreeLLMAPI affinity."""
+    import agent.auxiliary_client as aux
+
+    token = aux.set_runtime_main(
+        "freellmapi",
+        "gemini-2.5-flash",
+        session_id="hermes-session-runtime",
+    )
+    try:
+        with patch("providers.get_provider_profile", return_value=freellmapi_profile):
+            kwargs = aux._build_call_kwargs(
+                "freellmapi",
+                "gemini-2.5-flash",
+                [{"role": "user", "content": "hello"}],
+            )
+    finally:
+        aux.reset_runtime_main(token)
+
+    assert kwargs["extra_headers"]["X-Session-Id"] == "hermes-session-runtime"
 
 
 def test_no_session_header_when_absent(freellmapi_profile):

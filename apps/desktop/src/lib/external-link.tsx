@@ -2,7 +2,7 @@ import type { ComponentProps, ReactNode } from 'react'
 import { useEffect, useMemo, useState } from 'react'
 
 import { ArrowUpRight } from '@/lib/icons'
-import { openPreview } from '@/store/preview'
+import { IS_MAC } from '@/lib/keybinds/combo'
 
 import { resolveBrandIcon } from './brand-icon'
 import { cn } from './utils'
@@ -200,17 +200,50 @@ export function openExternalLink(href: string): void {
   if (href) {
     const url = normalizeExternalUrl(href)
 
-    if (/^https?:\/\//i.test(url)) {
-      openPreview({
-        kind: 'url',
-        label: shortHostLabel(url),
-        source: url,
-        url
-      })
-    } else {
-      void window.hermesDesktop?.openExternal?.(url)
-    }
+    void window.hermesDesktop?.openExternal?.(url)
   }
+}
+
+/**
+ * True when a click asked for the SYSTEM browser — ⌘ on macOS, Ctrl elsewhere,
+ * the modifier every app uses for "open this somewhere else". Middle-click
+ * counts too: it is the other half of the same convention.
+ */
+export function wantsNativeBrowser(event: Pick<MouseEvent, 'button' | 'ctrlKey' | 'metaKey'>): boolean {
+  return event.button === 1 || (IS_MAC ? event.metaKey : event.ctrlKey)
+}
+
+/**
+ * Where a link the user clicked should open.
+ *
+ * A web page opens in the in-app browser — that pane exists so reading a doc
+ * doesn't cost a context switch out of Hermes, and it is the surface the agent
+ * can see. ⌘/Ctrl-click (or middle-click) escapes to the real browser, which is
+ * where you go for anything needing your logged-in session or a password.
+ *
+ * Everything that ISN'T a web page — `mailto:`, `file:`, a custom scheme — has
+ * no business in the webview and always hands off to the OS.
+ */
+export function openLink(href: string, options: { native?: boolean } = {}): void {
+  const target = normalizeExternalUrl(href)
+
+  if (!target) {
+    return
+  }
+
+  if (options.native || !/^https?:$/i.test(parseUrl(target)?.protocol ?? '')) {
+    openExternalLink(target)
+
+    return
+  }
+
+  // Lazy: this module is a leaf every surface imports, and the preview store
+  // pulls the layout/session graph behind it. A static edge would make one
+  // link helper drag that whole tree into anything that renders a link. The
+  // tab lands a microtask later, which is invisible.
+  void import('@/store/preview').then(({ openPreview }) =>
+    openPreview({ kind: 'url', label: hostPathLabel(target), source: target, url: target }, 'explicit-link')
+  )
 }
 
 interface ExternalLinkProps extends Omit<ComponentProps<'a'>, 'href' | 'target'> {
@@ -249,10 +282,24 @@ export function ExternalLink({
 }: ExternalLinkProps) {
   const target = normalizeExternalUrl(href)
 
+  // No menu wiring here: the app context-menu coordinator resolves a
+  // right-click on any `a[href]` to the link menu (open in-app / open
+  // external / copy URL / copy resolved URL).
   return (
     <a
       className={cn('ref', className)}
       href={target}
+      // Middle-click never fires `click`; it's the other half of the
+      // open-elsewhere convention, so it has to be caught on its own.
+      onAuxClick={event => {
+        if (event.button !== 1) {
+          return
+        }
+
+        event.preventDefault()
+        event.stopPropagation()
+        openExternalLink(target)
+      }}
       onClick={event => {
         event.stopPropagation()
         onClick?.(event)
@@ -262,7 +309,7 @@ export function ExternalLink({
         }
 
         event.preventDefault()
-        openExternalLink(target)
+        openLink(target, { native: wantsNativeBrowser(event.nativeEvent) })
       }}
       rel="noopener noreferrer"
       target="_blank"
