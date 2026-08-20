@@ -1,0 +1,12 @@
+name: lmcache
+description: LMCache KV cache management plugin for Hermes Agent
+category: tools
+version: 0.1.0
+author: zapabob
+requires_env: []
+dependencies:
+  - lmcache >= 0.1.0
+exposed_tools:
+  - lmcache_status
+  - lmcache_manage
+  - lmcache_optimize
