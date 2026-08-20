@@ -56,7 +56,7 @@ export function Backdrop() {
       }
 
       if (event.shiftKey && event.code === 'KeyY') {
-        setControlsOpen(open => !open)
+        setControlsOpen((open: boolean) => !open)
       }
     }
 

@@ -157,14 +157,14 @@ export function ingestBackendSkin(
   if (!apply) {
     // Connect-time seed: record without painting. A reconnect re-seed keeps an
     // earlier real apply's flag so repeat events can't override a manual switch.
-    if (lastSynced?.name !== name || !lastSynced.applied) {
+    if (lastSynced?.name !== name || !lastSynced?.applied) {
       lastSyncedByScope.set(scopeKey, { applied: false, name })
     }
 
     return
   }
 
-  if (name !== lastSynced?.name || !lastSynced.applied) {
+  if (name !== lastSynced?.name || !lastSynced?.applied) {
     lastSyncedByScope.set(scopeKey, { applied: true, name })
     $pendingSkinApply.set(name)
   }
