@@ -42,6 +42,7 @@ def test_allow_preflight_blockers_flag_can_be_enabled():
     [
         ["--dry-run", "--merge"],
         ["--dry-run", "--openclaw-execute"],
+        ["--dry-run", "--allow-preflight-blockers"],
     ],
 )
 def test_dry_run_rejects_write_capable_modes(argv):
@@ -51,6 +52,30 @@ def test_dry_run_rejects_write_capable_modes(argv):
         sync_all.parse_args(argv)
 
     assert exc_info.value.code == 2
+
+
+def test_working_tree_clean_rejects_untracked_paths(monkeypatch):
+    sync_all = load_sync_all_module()
+
+    monkeypatch.setattr(
+        sync_all,
+        "_git",
+        lambda *args, **kwargs: type("Proc", (), {"returncode": 0, "stdout": "?? local.txt\n"})(),
+    )
+
+    assert sync_all._working_tree_clean() is False
+
+
+def test_working_tree_clean_accepts_empty_porcelain(monkeypatch):
+    sync_all = load_sync_all_module()
+
+    monkeypatch.setattr(
+        sync_all,
+        "_git",
+        lambda *args, **kwargs: type("Proc", (), {"returncode": 0, "stdout": ""})(),
+    )
+
+    assert sync_all._working_tree_clean() is True
 
 
 def test_collect_blockers_includes_unresolved_conflicts(tmp_path):

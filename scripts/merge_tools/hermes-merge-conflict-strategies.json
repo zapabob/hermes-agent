@@ -400,6 +400,66 @@
       "context": "overlap_only"
     },
     {
+      "pattern": "agent/conversation_loop.py",
+      "action": "official_with_overlay",
+      "note": "Take official output-cap and relay recovery fixes, then retain fork conversation-loop extensions at their non-overlapping seams.",
+      "context": "overlap_only"
+    },
+    {
+      "pattern": "agent/system_prompt.py",
+      "action": "official_with_overlay",
+      "note": "Take official memory-surface guidance while retaining fork prompt sections through the current prompt API.",
+      "context": "overlap_only"
+    },
+    {
+      "pattern": "cli.py",
+      "action": "official_with_overlay",
+      "note": "Take official terminal-key handling fixes while retaining fork CLI integrations at separate key-map seams.",
+      "context": "overlap_only"
+    },
+    {
+      "pattern": "gateway/platforms/api_server.py",
+      "action": "official_with_overlay",
+      "note": "Take official reasoning-ladder API support while preserving fork API-server routes at non-overlapping seams.",
+      "context": "overlap_only"
+    },
+    {
+      "pattern": "tests/run_agent/test_in_place_compaction.py",
+      "action": "official_with_overlay",
+      "note": "Retain fork durable in-place compaction coverage and add official salvage and anti-thrash cases.",
+      "context": "overlap_only"
+    },
+    {
+      "pattern": "tools/memory_tool.py",
+      "action": "official_with_overlay",
+      "note": "Take official memory availability gating while retaining fork memory-provider integrations through the registry API.",
+      "context": "overlap_only"
+    },
+    {
+      "pattern": "tui_gateway/server.py",
+      "action": "official_with_overlay",
+      "note": "Take official profile-scoped Projects RPC changes while preserving fork gateway methods at non-overlapping registration seams.",
+      "context": "overlap_only"
+    },
+    {
+      "pattern": "apps/desktop/electron/session-windows.ts",
+      "action": "manual_api_followup",
+      "note": "Manually compose official peer-window URL routing with fork isAllowedChatNavigation hardening; both exports are required.",
+      "context": "overlap_only"
+    },
+    {
+      "pattern": "apps/desktop/electron/session-windows.test.ts",
+      "action": "manual_api_followup",
+      "note": "Retain navigation-origin hardening tests and add official peer-window URL tests in one suite.",
+      "context": "overlap_only"
+    },
+    {
+      "pattern": "cli-config.yaml.example",
+      "action": "manual_api_followup",
+      "note": "Remove the obsolete flush_min_turns example while retaining fork Ebbinghaus provider documentation.",
+      "context": "overlap_only"
+    },
+    {
       "pattern": "scripts/sync_upstream.py",
       "action": "preserve_custom",
       "note": "Fork merge automation scripts."

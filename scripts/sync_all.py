@@ -69,7 +69,8 @@ def _write_report(name: str, payload: dict[str, object]) -> Path:
 
 
 def _working_tree_clean() -> bool:
-    return _git("diff-index", "--quiet", "HEAD", "--", check=False).returncode == 0
+    proc = _git("status", "--porcelain=v1", "--untracked-files=normal", check=False)
+    return proc.returncode == 0 and not proc.stdout.strip()
 
 
 def _unmerged() -> list[str]:
@@ -208,6 +209,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--dry-run cannot be combined with --merge")
     if args.dry_run and args.openclaw_execute:
         parser.error("--dry-run cannot be combined with --openclaw-execute")
+    if args.allow_preflight_blockers and not args.merge:
+        parser.error("--allow-preflight-blockers requires --merge")
     return args
 
 

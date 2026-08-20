@@ -52,6 +52,46 @@ def test_config_defaults_overlap_overlay(strategy):
     assert item.action == "official_with_overlay"
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "agent/conversation_loop.py",
+        "agent/system_prompt.py",
+        "cli.py",
+        "gateway/platforms/api_server.py",
+        "tests/run_agent/test_in_place_compaction.py",
+        "tools/memory_tool.py",
+        "tui_gateway/server.py",
+    ],
+)
+def test_incremental_official_api_paths_overlay_cleanly(path, strategy):
+    item = classify_path_with_context(
+        path,
+        strategy,
+        touched_upstream=True,
+        touched_custom=True,
+    )
+    assert item.action == "official_with_overlay"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "apps/desktop/electron/session-windows.ts",
+        "apps/desktop/electron/session-windows.test.ts",
+        "cli-config.yaml.example",
+    ],
+)
+def test_incremental_same_hunk_paths_require_manual_followup(path, strategy):
+    item = classify_path_with_context(
+        path,
+        strategy,
+        touched_upstream=True,
+        touched_custom=True,
+    )
+    assert item.action == "manual_api_followup"
+
+
 def test_upstream_only_defaults_upstream(strategy):
     item = classify_path_with_context(
         "agent/context_compressor.py",
