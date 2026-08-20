@@ -62,6 +62,8 @@ def test_config_defaults_overlap_overlay(strategy):
         "tests/run_agent/test_in_place_compaction.py",
         "tools/memory_tool.py",
         "tui_gateway/server.py",
+        "hermes_cli/commands.py",
+        "hermes_cli/main.py",
     ],
 )
 def test_incremental_official_api_paths_overlay_cleanly(path, strategy):

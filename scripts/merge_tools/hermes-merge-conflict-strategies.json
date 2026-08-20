@@ -400,6 +400,18 @@
       "context": "overlap_only"
     },
     {
+      "pattern": "hermes_cli/commands.py",
+      "action": "official_with_overlay",
+      "note": "Take the official attended worktree prune command surface while retaining fork command registrations.",
+      "context": "overlap_only"
+    },
+    {
+      "pattern": "hermes_cli/main.py",
+      "action": "official_with_overlay",
+      "note": "Take the official worktree CLI parser and built-in fast-path while retaining fork harness and extension subcommands.",
+      "context": "overlap_only"
+    },
+    {
       "pattern": "agent/conversation_loop.py",
       "action": "official_with_overlay",
       "note": "Take official output-cap and relay recovery fixes, then retain fork conversation-loop extensions at their non-overlapping seams.",
