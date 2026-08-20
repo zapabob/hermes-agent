@@ -182,7 +182,9 @@ if (-not $SkipGateway) {
     $gatewayScript = Join-Path $PSScriptRoot "start-hermes-gateway.ps1"
     if (Test-Path -LiteralPath $gatewayScript) {
         Write-Step "Starting Hermes Gateway..."
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $gatewayScript -StartLlama:(-not $SkipLlama)
+        $gwArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $gatewayScript)
+        if (-not $SkipLlama) { $gwArgs += "-StartLlama" }
+        & powershell.exe @gwArgs
     }
 
     Write-Step "Starting Hermes Harness daemon..."
