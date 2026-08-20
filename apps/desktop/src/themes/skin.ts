@@ -23,6 +23,8 @@ import type { DesktopTheme, DesktopThemeColors } from './types'
 // The accent labels the sidebar in small uppercase text, so it must clear WCAG AA
 // for normal text or section headers go invisible — mirrors the VS Code importer.
 const ACCENT_MIN_CONTRAST = 4.5
+const WALLPAPER_FITS = new Set(['contain', 'cover', 'fill', 'none', 'scale-down'])
+const WALLPAPER_OVERLAY = /^#(?:[\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})$/i
 
 /** First normalizable hex among `keys`, alpha flattened over `backdrop`. */
 const pick = (colors: SkinColors, keys: string[], backdrop: string): string | null => {
@@ -78,6 +80,8 @@ export function skinToDesktopTheme(skin: HermesSkin): DesktopTheme | null {
     pick(colors, ['banner_dim', 'session_border'], background) ?? mix(foreground, background, 0.45)
 
   const destructive = pick(colors, ['ui_error'], background) ?? '#e25563'
+  const backgroundImageFit = (skin.background_image_fit ?? 'cover').trim()
+  const backgroundOverlay = (skin.background_overlay ?? '').trim()
 
   const palette: DesktopThemeColors = {
     background,
@@ -117,8 +121,8 @@ export function skinToDesktopTheme(skin: HermesSkin): DesktopTheme | null {
     colors: palette,
     darkColors: palette,
     backgroundImage: (skin.background_image ?? '').trim() || undefined,
-    backgroundImageFit: (skin.background_image_fit ?? 'cover').trim() || 'cover',
+    backgroundImageFit: WALLPAPER_FITS.has(backgroundImageFit) ? backgroundImageFit : 'cover',
     backgroundImagePosition: (skin.background_image_position ?? 'center').trim() || 'center',
-    backgroundOverlay: (skin.background_overlay ?? '').trim() || undefined
+    backgroundOverlay: WALLPAPER_OVERLAY.test(backgroundOverlay) ? backgroundOverlay : undefined
   }
 }

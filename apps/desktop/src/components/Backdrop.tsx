@@ -2,6 +2,7 @@ import { useStore } from '@nanostores/react'
 import { Leva, useControls } from 'leva'
 import { type CSSProperties, useEffect, useMemo, useState } from 'react'
 
+import { isFileMediaPath, resolveMediaDisplaySrc } from '@/lib/media'
 import { $backdrop } from '@/store/backdrop'
 import { useTheme } from '@/themes/context'
 
@@ -26,11 +27,6 @@ const BLEND_MODES = [
 
 type BlendMode = (typeof BLEND_MODES)[number]
 const assetPath = (path: string) => `${import.meta.env.BASE_URL}${path.replace(/^\/+/, '')}`
-
-const isHttpUrl = (value: string) =>
-  /^https?:\/\//i.test(value) || value.startsWith('data:') || value.startsWith('file:')
-
-const isAbsPath = (value: string) => /^([A-Za-z]:[\\/]|\\\\|\/)/.test(value)
 
 export function Backdrop() {
   const [controlsOpen, setControlsOpen] = useState(false)
@@ -72,34 +68,26 @@ export function Backdrop() {
   // Resolve skin wallpaper 竊・data URL via Electron when needed.
   useEffect(() => {
     let cancelled = false
-    const raw = wallpaper
 
-    if (!raw) {
+    if (!wallpaper) {
       setSkinWallpaperUrl(null)
 
       return
     }
 
-    if (isHttpUrl(raw)) {
-      setSkinWallpaperUrl(raw)
-
-      return
-    }
-
-    const path = isAbsPath(raw) ? raw : undefined
-
-    if (!path || !window.hermesDesktop?.readFileDataUrl) {
-      // Relative skin filenames need HERMES_HOME; fall back to default statue.
+    // A backend skin may be remote. Keep the renderer from making arbitrary
+    // outbound requests: files use the existing authenticated media path and
+    // inline data must identify itself as an image.
+    if (!isFileMediaPath(wallpaper) && !/^data:image\//i.test(wallpaper)) {
       setSkinWallpaperUrl(null)
 
       return
     }
 
-    void window.hermesDesktop
-      .readFileDataUrl(path)
-      .then(url => {
+    void resolveMediaDisplaySrc(wallpaper)
+      .then(src => {
         if (!cancelled) {
-          setSkinWallpaperUrl(url || null)
+          setSkinWallpaperUrl(src || null)
         }
       })
       .catch(() => {
@@ -162,7 +150,7 @@ export function Backdrop() {
     }
 
     return (
-      <div aria-hidden className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
+      <div aria-hidden className="pointer-events-none absolute inset-0 z-0 overflow-hidden" data-hermes-skin-wallpaper>
         <img
           alt=""
           className="h-full w-full"
@@ -173,7 +161,9 @@ export function Backdrop() {
             objectPosition: skinPosition
           }}
         />
-        {skinOverlay ? <div className="absolute inset-0" style={{ background: skinOverlay }} /> : null}
+        {skinOverlay ? (
+          <div className="absolute inset-0" data-hermes-skin-wallpaper-overlay style={{ background: skinOverlay }} />
+        ) : null}
       </div>
     )
   }, [skinFit, skinOverlay, skinPosition, skinWallpaperUrl])
