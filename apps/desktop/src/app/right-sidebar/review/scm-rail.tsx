@@ -33,8 +33,10 @@ import {
   scmBranchCreate,
   scmBranchDelete,
   scmBranchRename,
+  scmBranchSwitch,
   scmFetch,
   scmPull,
+  scmPush,
   scmStashApply,
   scmStashCreate,
   scmStashDrop,
@@ -374,6 +376,18 @@ export function ReviewScmRail() {
               <Codicon name="arrow-down" size="0.8125rem" spinning={busy === 'pull'} />
             </Button>
           </Tip>
+          <Tip label={c.push ?? 'Push'}>
+            <Button
+              aria-label={c.push ?? 'Push'}
+              className="size-5"
+              disabled={busy != null}
+              onClick={() => void scmPush().catch(err => notifyError(err, c.push ?? 'Push'))}
+              size="icon-xs"
+              variant="ghost"
+            >
+              <Codicon name="arrow-up" size="0.8125rem" spinning={busy === 'push'} />
+            </Button>
+          </Tip>
         </div>
       )}
 
@@ -403,6 +417,18 @@ export function ReviewScmRail() {
                   actions={
                     canMutate ? (
                       <>
+                        {!branch.checkedOut && (
+                          <ScmActionButton
+                            busy={busy != null}
+                            icon="check"
+                            label={c.checkoutBranch ?? 'Switch to branch'}
+                            onClick={() =>
+                              void scmBranchSwitch(branch.name).catch(err =>
+                                notifyError(err, c.checkoutBranch ?? 'Switch to branch')
+                              )
+                            }
+                          />
+                        )}
                         <ScmActionButton
                           busy={busy != null}
                           icon="edit"

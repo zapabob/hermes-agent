@@ -24,6 +24,7 @@ import { $scmBranches, $scmTags } from '@/store/scm-refs'
 import { PaneEmptyState } from '../index'
 
 import { buildCommitGraph } from './history-graph'
+import { CommitGraphCell } from './history-graph-canvas'
 
 const ACTION_BTN = 'size-5'
 
@@ -78,8 +79,9 @@ export function ReviewHistory() {
                 </SelectContent>
               </Select>
             </div>
-            {commits.map(commit => {
+            {commits.map((commit, index) => {
               const selected = commit.sha === selectedSha
+              const graphRow = rows[index] ?? { branchIn: [], lane: 0, through: [] }
 
               const matchingBranches =
                 refFilter === 'all'
@@ -98,7 +100,7 @@ export function ReviewHistory() {
                 <button
                   aria-current={selected ? 'true' : undefined}
                   className={cn(
-                    'flex w-full flex-col gap-0.5 border-l-2 px-2.5 py-2 text-left transition-colors',
+                    'flex w-full flex-row items-center border-l-2 text-left transition-colors',
                     selected
                       ? 'border-(--ui-accent) bg-(--ui-bg-tertiary)'
                       : 'border-transparent hover:bg-(--ui-bg-tertiary)/70'
@@ -107,35 +109,44 @@ export function ReviewHistory() {
                   onClick={() => void selectReviewCommit(commit)}
                   type="button"
                 >
-                  <span className="truncate text-[0.72rem] font-medium text-(--ui-text-primary)" title={commit.subject}>
-                    {commit.subject || commit.shortSha}
-                  </span>
-                  <span className="flex min-w-0 items-center gap-1.5 text-[0.62rem] text-(--ui-text-tertiary)">
-                    <span className="shrink-0 font-mono text-(--ui-text-secondary)">{commit.shortSha}</span>
-                    {commit.author && <span className="truncate">{commit.author}</span>}
-                    <time className="ml-auto shrink-0" dateTime={commit.authoredAt}>
-                      {formatCommitTime(commit.authoredAt)}
-                    </time>
-                  </span>
-                  {/* ref markers: branch pills (accent) and tag pills (neutral) */}
-                  {matchingBranches.length > 0 ||
-                    (matchingTags.length > 0 && (
-                      <span className="flex min-w-0 items-center gap-1 pt-1 text-[0.55rem]">
+                  <CommitGraphCell
+                    maxLane={maxLane}
+                    row={graphRow}
+                    selected={selected}
+                  />
+                  <div className="flex min-w-0 flex-1 flex-col gap-0.5 py-2 pr-2.5">
+                    <span className="truncate text-[0.72rem] font-medium text-(--ui-text-primary)" title={commit.subject}>
+                      {commit.subject || commit.shortSha}
+                    </span>
+                    <span className="flex min-w-0 items-center gap-1.5 text-[0.62rem] text-(--ui-text-tertiary)">
+                      <span className="shrink-0 font-mono text-(--ui-text-secondary)">{commit.shortSha}</span>
+                      {commit.author && <span className="truncate">{commit.author}</span>}
+                      <time className="ml-auto shrink-0" dateTime={commit.authoredAt}>
+                        {formatCommitTime(commit.authoredAt)}
+                      </time>
+                    </span>
+                    {/* ref markers: branch pills (accent) and tag pills (neutral) */}
+                    {(matchingBranches.length > 0 || matchingTags.length > 0) && (
+                      <span className="flex min-w-0 flex-wrap items-center gap-1 pt-0.5 text-[0.55rem]">
                         {matchingBranches.map(name => (
                           <span
-                            className="shrink-0 rounded-full border border-(--ui-accent)/40 px-1 py-1 text-[0.55rem] leading-none text-(--ui-accent)"
+                            className="shrink-0 rounded-full border border-(--ui-accent)/40 bg-(--ui-accent)/10 px-1 py-0.5 text-[0.55rem] font-medium leading-none text-(--ui-accent)"
                             key={name}
                           >
                             {name}
                           </span>
                         ))}
-                        {matchingTags.length > 0 && (
-                          <span className="shrink-0 rounded-full border border-(--ui-stroke-secondary) px-1 py-1 text-[0.55rem] leading-none text-(--ui-text-secondary)">
-                            {matchingTags.join(' ')}
+                        {matchingTags.map(name => (
+                          <span
+                            className="shrink-0 rounded-full border border-(--ui-stroke-secondary) bg-(--ui-bg-tertiary) px-1 py-0.5 text-[0.55rem] leading-none text-(--ui-text-secondary)"
+                            key={name}
+                          >
+                            🏷 {name}
                           </span>
-                        )}
+                        ))}
                       </span>
-                    ))}
+                    )}
+                  </div>
                 </button>
               )
             })}

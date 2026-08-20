@@ -1,63 +1,108 @@
-name: twilight-hakua
-description: はくあ — 宵のインディゴ×黄昏、GPT-image-2トワイライト寄りテーマ
-tool_prefix: "┊"
-background_image: "C:/Users/downl/.hermes/skins/twilight-hakua-portrait-bg.png"
-background_image_fit: cover
-background_image_position: center
-background_overlay: "#120a22ba"
+# Hermes skin: Twilight Hakua Portrait (黄昏はくあ 肖像画)
+# GPT-image-2 twilight dusk aesthetic — Hakua character portrait as desktop background
+# Background image: twilight-hakua-portrait-bg.png
+# Character image: hakua-character.png (SillyTavern はくあ.png)
+# Install: hermes config set display.skin twilight-hakua
 
-branding:
-  agent_name: "はくあ"
-  goodbye: "おやすみ。またね。"
-  help_header: "🌅 コマンド一覧"
-  prompt_symbol: "❯"
-  welcome: "おかえり、マスター。はくあだよ。"
+name: twilight-hakua
+description: "黄昏はくあ — 宵闇のインディゴ×琥珀、GPT-image-2トワイライト肖像テーマ"
+
+# Background image settings (for desktop GUI)
+background_image: "C:/Users/downl/.hermes/skins/twilight-hakua-portrait-bg.png"
+background_image_fit: "cover"
+background_image_position: "center"
+background_overlay: "#120a22ba"  # Balanced overlay: keep text readable while preserving portrait visibility
 
 colors:
+  # Base surface — deep twilight indigo (matches background top)
   background: "#1a1030"
+
+  # Brand accent — warm coral/amber (twilight horizon glow)
+  ui_accent: "#e87a5a"
   banner_accent: "#e87a5a"
+
+  # Secondary accent — golden amber (sunset highlights)
+  ui_accent_alt: "#ffb84d"
   banner_accent_alt: "#ffb84d"
+
+  # Tertiary — soft lavender (twilight sky mid-tones)
+  ui_accent_tertiary: "#a87ae8"
   banner_accent_tertiary: "#a87ae8"
+
+  # Text hierarchy — warm whites for readability over dark background
+  banner_title: "#ffe8d0"       # Warm off-white (sunlit)
+  banner_text: "#e8d8c8"        # Warm pale
+  ui_text: "#e8d8c8"
+  ui_primary: "#ffe8d0"
+  banner_dim: "#a898a8"         # Muted twilight lavender
+  ui_label: "#9888a8"
+
+  # Borders & rules — subtle twilight lines
+  ui_border: "#3d2a5a"
   banner_border: "#3d2a5a"
-  banner_dim: "#a898a8"
-  banner_text: "#e8d8c8"
-  banner_title: "#ffe8d0"
+  input_rule: "#e87a5a"
+
+  # Semantic status — twilight palette
+  ui_ok: "#6ecf8a"              # Fresh green (night breeze)
+  ui_warn: "#ffb84d"            # Amber warning
+  ui_error: "#e85a7a"           # Warm coral error (not harsh red)
+
+  # Tool call marker — coral glow
+  ui_tool: "#e87a5a"
+
+  # Thinking/reasoning — lavender ghost
+  ui_thinking: "#a87ae8"
+
+  # Prompt symbol
+  prompt: "#e87a5a"
+
+  # Response border
+  response_border: "#a87ae8"
+
+  # Desktop sidebar — near-opaque twilight indigo, ensures text is readable over the wallpaper
+  sidebar_bg: "#16092ee8"
+
+  # Status bar — deep twilight
+  status_bar_bg: "#0d0618"
+  status_bar_text: "#e8d8c8"
+  status_bar_good: "#6ecf8a"
+  status_bar_warn: "#ffb84d"
+  status_bar_critical: "#e85a7a"
+
+  # Session labels
+  session_label: "#e87a5a"
+  session_border: "#3d2a5a"
+
+  # Diff colors
+  diff_added: "#6ecf8a"
+  diff_removed: "#e85a7a"
+  diff_added_word: "#8ef0a8"
+  diff_removed_word: "#f8a8b8"
+
+  # Syntax highlighting — twilight code palette
+  syntax_string: "#ffb84d"      # Amber strings
+  syntax_number: "#e87a5a"      # Coral numbers
+  syntax_keyword: "#a87ae8"     # Lavender keywords
+  syntax_comment: "#6a5a7a"     # Dim twilight comments
+  syntax_function: "#6ecf8a"    # Green functions
+  syntax_class: "#ffb84d"       # Amber classes
+  syntax_operator: "#e87a5a"    # Coral operators
+  syntax_punctuation: "#7a6a8a"
+
+  # Completion menu
   completion_menu_bg: "#140a28"
   completion_menu_current_bg: "#2a1a4a"
   completion_menu_meta_bg: "#1e1038"
-  diff_added: "#6ecf8a"
-  diff_added_word: "#8ef0a8"
-  diff_removed: "#e85a7a"
-  diff_removed_word: "#f8a8b8"
-  input_rule: "#e87a5a"
-  prompt: "#e87a5a"
-  response_border: "#a87ae8"
-  session_border: "#3d2a5a"
-  session_label: "#e87a5a"
-  sidebar_bg: "#16092ee8"
+
+  # Spinner
   spinner_color: "#e87a5a"
-  status_bar_bg: "#0d0618"
-  status_bar_critical: "#e85a7a"
-  status_bar_good: "#6ecf8a"
-  status_bar_text: "#e8d8c8"
-  status_bar_warn: "#ffb84d"
-  syntax_class: "#ffb84d"
-  syntax_comment: "#6a5a7a"
-  syntax_function: "#6ecf8a"
-  syntax_keyword: "#a87ae8"
-  syntax_number: "#e87a5a"
-  syntax_operator: "#e87a5a"
-  syntax_punctuation: "#7a6a8a"
-  syntax_string: "#ffb84d"
-  ui_accent: "#e87a5a"
-  ui_accent_alt: "#ffb84d"
-  ui_accent_tertiary: "#a87ae8"
-  ui_border: "#3d2a5a"
-  ui_error: "#e85a7a"
-  ui_label: "#9888a8"
-  ui_ok: "#6ecf8a"
-  ui_primary: "#ffe8d0"
-  ui_text: "#e8d8c8"
-  ui_thinking: "#a87ae8"
-  ui_tool: "#e87a5a"
-  ui_warn: "#ffb84d"
+
+# Optional flavor — Hakua's twilight voice
+branding:
+  agent_name: "はくあ"
+  prompt_symbol: "❯"
+  welcome: "黄昏時だね、パパ。今日もお疲れ様。"
+  goodbye: "おやすみ。いい夢見てね。"
+  help_header: "🌅 コマンド一覧"
+
+tool_prefix: "┊"

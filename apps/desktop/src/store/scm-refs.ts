@@ -28,7 +28,7 @@ export const $scmStashesLoading = atom(false)
 
 // Which mutation is in flight; the SCM panels disable their action buttons
 // while non-null so the git ops can't double-fire.
-export type ScmBusyKind = 'branch' | 'fetch' | 'pull' | 'stash' | 'tag'
+export type ScmBusyKind = 'branch' | 'fetch' | 'pull' | 'push' | 'stash' | 'tag'
 
 export const $scmBusy = atom<null | ScmBusyKind>(null)
 
@@ -263,6 +263,32 @@ export async function scmPull(rebase = false): Promise<void> {
 
   await runScm('pull', async () => {
     await ctx.git.pull?.(ctx.cwd, rebase)
+    await afterMutation()
+  })
+}
+
+export async function scmBranchSwitch(name: string): Promise<void> {
+  const ctx = scmCtx()
+
+  if (!ctx?.git.branchSwitch) {
+    return
+  }
+
+  await runScm('branch', async () => {
+    await ctx.git.branchSwitch?.(ctx.cwd, name)
+    await afterMutation()
+  })
+}
+
+export async function scmPush(): Promise<void> {
+  const ctx = scmCtx()
+
+  if (!ctx?.git.review.push) {
+    return
+  }
+
+  await runScm('push', async () => {
+    await ctx.git.review.push?.(ctx.cwd)
     await afterMutation()
   })
 }
