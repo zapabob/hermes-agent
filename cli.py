@@ -1414,9 +1414,74 @@ def _notify_single_query_session_finalize(cli, *, reason: str = "shutdown") -> N
         _single_query_finalize_attempted_session_ids.add(session_id)
 
 
+def _flush_one_shot_session_store(cli) -> None:
+    """Durably flush + finalize the one-shot session row before process exit.
+
+    The quiet/one-shot ``-q`` / ``-Q`` paths (including resume-or-create of a
+    titled session via ``-c <name> --create-if-missing``, the Bot Mode
+    bot-to-bot send) get exactly ONE turn and then exit. The interactive CLI
+    finalizes its session row on quit (``end_session(..., "cli_close")``) and
+    every later turn retries a transiently-failed transcript flush; the
+    one-shot path had neither, so:
+
+    - a turn whose in-loop ``_flush_messages_to_session_db`` failed under
+      write-lock contention (e.g. a busy multiplex gateway sharing state.db)
+      was silently lost — the reply reached stdout and agent.log but the
+      resumed session's stored history never changed (#88583);
+    - the resumed/created titled session row was left dangling open
+      (``ended_at``/``end_reason`` NULL) on every one-shot exit;
+    - queued async token-accounting deltas relied on interpreter-exit hooks,
+      which the kanban SIGTERM path's ``os._exit(0)`` skips entirely.
+
+    Idempotent and best-effort: ``_persist_session`` dedupes via the
+    per-message ``_DB_PERSISTED_MARKER`` stamps (already-written turns are
+    not re-written) and ``end_session`` no-ops on an already-ended row.
+    Sessions handed off to the gateway are owned by the gateway process and
+    are left strictly alone (#88234).
+    """
+    agent = getattr(cli, "agent", None)
+    if agent is None:
+        return
+    session_id = getattr(agent, "session_id", None) or getattr(cli, "session_id", None)
+    if not session_id or session_id in _handed_off_session_ids:
+        return
+    if getattr(agent, "_persist_disabled", False):
+        return
+    # Retry persistence for any rows the in-turn flush failed to write.
+    # ``cli.conversation_history`` holds the resumed history's live dicts, so
+    # passing it keeps restored messages identity-skipped even when the failed
+    # first flush never got to stamp them.
+    try:
+        msgs = getattr(agent, "_session_messages", None)
+        if isinstance(msgs, list) and msgs and hasattr(agent, "_persist_session"):
+            agent._persist_session(
+                msgs, getattr(cli, "conversation_history", None)
+            )
+    except Exception:
+        logger.debug("one-shot final session persist retry failed", exc_info=True)
+    db = getattr(agent, "_session_db", None) or getattr(cli, "_session_db", None)
+    if db is None:
+        return
+    try:
+        db.flush_token_counts()
+    except Exception:
+        logger.debug("one-shot token-count drain failed", exc_info=True)
+    try:
+        db.end_session(session_id, "cli_close")
+    except Exception:
+        logger.debug("one-shot end_session failed", exc_info=True)
+
+
 def _finalize_single_query(cli) -> None:
     """Close one-shot CLI resources before releasing the active session lease."""
     try:
+        # Durable flush FIRST: memory-provider shutdown inside _run_cleanup
+        # can issue aux-LLM calls, and nothing after it may fail in a way
+        # that loses the turn (#88583).
+        try:
+            _flush_one_shot_session_store(cli)
+        except Exception:
+            logger.debug("one-shot session store flush failed", exc_info=True)
         _notify_single_query_session_finalize(cli)
         _run_cleanup(notify_session_finalize=False)
     finally:
@@ -1839,9 +1904,14 @@ def _setup_worktree(repo_root: str = None, sync_base: bool = True,
         "-c", "checkout.thresholdForParallelism=100",
     ]
     try:
+        # 120s, not 30: on a multi-agent box the ~10k-file materialization
+        # contends with sibling sessions' checkouts/fetches/Electron dev
+        # builds for the same disk — measured 113s wall at near-zero CPU
+        # under load vs 1.2s idle (Aug 2026). A too-tight timeout kills a
+        # legitimately slow create and wastes the work already done.
         result = subprocess.run(
             ["git", *_wt_add_cfg, "worktree", "add", str(wt_path), "-b", branch_name, base_ref],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, cwd=repo_root,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, cwd=repo_root,
         )
         if result.returncode != 0:
             # If branching from the resolved remote ref failed for any reason
@@ -1856,7 +1926,7 @@ def _setup_worktree(repo_root: str = None, sync_base: bool = True,
                 base_ref, base_label = "HEAD", "HEAD (fallback — remote base failed)"
                 result = subprocess.run(
                     ["git", "worktree", "add", str(wt_path), "-b", branch_name, base_ref],
-                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, cwd=repo_root,
+                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, cwd=repo_root,
                 )
             if result.returncode != 0:
                 _cleanup_failed_worktree_add(repo_root, wt_path, branch_name)
@@ -2272,6 +2342,141 @@ def _worktree_commits_all_merged_upstream(
         return False
 
 
+def _worktree_branch_pr_merged(
+    worktree_path: str,
+    timeout: int = 15,
+    cache: Optional[Dict[str, bool]] = None,
+) -> bool:
+    """Return whether the worktree branch's PR is MERGED on GitHub.
+
+    Escape hatch for the case ``git cherry`` cannot catch: a rebase-merge that
+    altered the diff (conflict resolution against a moved base, follow-up
+    commits added during salvage/CI-fix) changes the patch-id, so the local
+    commits are no longer patch-equivalent to anything upstream even though
+    the PR merged. Those trees survive the cherry check forever (Aug 2026:
+    12 of 22 "unpushed" trees on a loaded box had MERGED PRs).
+
+    GitHub's PR state is the authoritative merge signal, so a clean tree
+    whose remote-known branch has a MERGED PR *at the worktree's exact HEAD
+    SHA* is reaped. Local-only branch names are never sent to GitHub by the
+    automatic startup pass: the branch must already have a configured remote
+    upstream or a local remote-tracking ref.
+    The SHA check is essential because branch names can be deleted and reused;
+    an older merged PR for the same name must not make new work disposable.
+    Verdicts are memoized keyed on ``(branch, head_sha)`` — MERGED is
+    monotonic, so a True verdict is cached permanently; False is never cached
+    (the PR may merge later without new local commits, which would leave the
+    key unchanged).
+
+    Fails SAFE toward False (preserve): no gh binary, offline, rate-limited,
+    detached HEAD, or any parse failure keeps the tree.
+    """
+    import subprocess
+
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, cwd=worktree_path,
+        )
+        if head.returncode != 0:
+            return False
+        branch = head.stdout.strip()
+        if not branch or branch == "HEAD":  # detached — no PR to look up
+            return False
+
+        # Privacy boundary: `gh pr list --head <branch>` discloses the local
+        # branch name to GitHub. Automatic startup maintenance must not do
+        # that for unpublished scratch work. Only consult GitHub when local
+        # Git metadata already proves the branch is remote-known. Both probes
+        # are local-only and therefore safe on the startup path.
+        upstream_remote = subprocess.run(
+            [
+                "git", "for-each-ref", "--count=1",
+                "--format=%(upstream:remotename)", f"refs/heads/{branch}",
+            ],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=timeout, cwd=worktree_path,
+        )
+        remote_known = (
+            upstream_remote.returncode == 0
+            and upstream_remote.stdout.strip() not in ("", ".")
+        )
+        if not remote_known:
+            remote_refs = subprocess.run(
+                ["git", "for-each-ref", "--format=%(refname)", "refs/remotes"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=timeout, cwd=worktree_path,
+            )
+            remote_known = remote_refs.returncode == 0 and any(
+                len(parts := ref.split("/", 3)) == 4 and parts[3] == branch
+                for ref in remote_refs.stdout.splitlines()
+            )
+        if not remote_known:
+            return False
+
+        sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, cwd=worktree_path,
+        )
+        if sha.returncode != 0 or not sha.stdout.strip():
+            return False
+        head_sha = sha.stdout.strip()
+
+        cache_key = f"pr-merged:{branch}:{head_sha}"
+        if cache is not None and cache.get(cache_key) is True:
+            return True
+
+        result = subprocess.run(
+            ["gh", "pr", "list", "--head", branch, "--state", "merged",
+             "--json", "number,headRefOid", "--limit", "100"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, cwd=worktree_path,
+        )
+        if result.returncode != 0:
+            return False
+        prs = json.loads(result.stdout or "[]")
+        merged = isinstance(prs, list) and any(
+            isinstance(pr, dict) and pr.get("headRefOid") == head_sha
+            for pr in prs
+        )
+        if merged and cache is not None:
+            cache[cache_key] = True
+        return merged
+    except Exception:
+        return False
+
+
+def _worktree_branch_head(
+    worktree_path: str,
+    timeout: int = 5,
+) -> Optional[tuple[str, str]]:
+    """Return the attached branch and exact HEAD, or ``None`` fail-safe."""
+    import subprocess
+
+    try:
+        branch_result = subprocess.run(
+            ["git", "branch", "--show-current"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=timeout, cwd=worktree_path,
+        )
+        head_result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=timeout, cwd=worktree_path,
+        )
+        branch = branch_result.stdout.strip()
+        head_sha = head_result.stdout.strip()
+        if (
+            branch_result.returncode != 0
+            or head_result.returncode != 0
+            or not branch
+            or not head_sha
+        ):
+            return None
+        return branch, head_sha
+    except Exception:
+        return None
+
+
 def _worktree_lock_is_live(repo_root: str, worktree_path: str, timeout: int = 10):
     """Classify a worktree's git lock as live, dead, or absent.
 
@@ -2403,7 +2608,13 @@ def _cleanup_worktree(info: Dict[str, str] = None) -> None:
         logger.debug("Failed to delete branch %s: %s", branch, e)
 
     _active_worktree = None
-    print(f"\033[32m✓ Worktree cleaned up: {wt_path}\033[0m")
+    # Windows legacy consoles (notably cp932) cannot encode the success
+    # glyph. Preserve the pretty output where supported, but never let an
+    # exit-time status message raise after cleanup has already succeeded.
+    try:
+        print(f"\033[32m✓ Worktree cleaned up: {wt_path}\033[0m")
+    except UnicodeEncodeError:
+        print(f"\033[32mWorktree cleaned up: {wt_path}\033[0m")
 
 
 def _run_state_db_auto_maintenance(session_db) -> None:
@@ -2617,12 +2828,15 @@ def _prune_stale_worktrees(repo_root: str, max_age_hours: int = 24) -> None:
 
     def _classify(item):
         entry, mtime, force = item
+        identity = _worktree_branch_head(str(entry), timeout=5)
+        if identity is None:
+            return (entry, mtime, force, "changed", None, None, None)
         # Never delete real work, regardless of age or tier. Uncommitted
         # changes and unpushed commits may be a crashed session's in-flight
         # work; only clean, fully-merged/pushed trees (the scratch trees that
         # actually cause .worktrees/ bloat) are ever reaped.
         if _worktree_is_dirty(str(entry), timeout=5):
-            return (entry, mtime, force, "dirty", None)
+            return (entry, mtime, force, "dirty", None, None, None)
         if _worktree_has_unpushed_commits(str(entry), timeout=5):
             # Squash-merge escape hatch: commits unreachable from any remote
             # ref but patch-equivalent to upstream commits are merged work,
@@ -2632,20 +2846,28 @@ def _prune_stale_worktrees(repo_root: str, max_age_hours: int = 24) -> None:
             merged = _worktree_commits_all_merged_upstream(
                 str(entry), timeout=30, cache=snapshot
             )
+            if not merged:
+                # Rebase-merge escape hatch: conflict resolution or follow-up
+                # commits change the patch-id, so cherry misses them — but
+                # GitHub knows the PR merged. Authoritative and cheap (~0.3s,
+                # memoized on (branch, head_sha) so it's paid once per tree).
+                merged = _worktree_branch_pr_merged(
+                    str(entry), timeout=15, cache=snapshot
+                )
             with cache_lock:
                 merge_cache.update(snapshot)
             if not merged:
-                return (entry, mtime, force, "unpushed", None)
+                return (entry, mtime, force, "unpushed", None, None, None)
 
         # Respect git-native session locks. A lock owned by a still-running
         # hermes process means the worktree is actively in use — never touch
         # it. A lock whose owning pid is gone is a crashed session's leftover:
-        # unlock it so `git worktree remove --force` (single -f) can reap it,
+        # unlock it so non-force `git worktree remove` can reap it,
         # otherwise dead-locked worktrees pile up indefinitely.
         lock_state = _worktree_lock_is_live(repo_root, str(entry), timeout=5)
         if lock_state == "live":
-            return (entry, mtime, force, "locked-live", None)
-        return (entry, mtime, force, "reap", lock_state)
+            return (entry, mtime, force, "locked-live", None, None, None)
+        return (entry, mtime, force, "reap", lock_state, *identity)
 
     # Bounded pool: enough to hide git's per-process startup latency without
     # spawning dozens of concurrent git processes on a small machine.
@@ -2667,7 +2889,46 @@ def _prune_stale_worktrees(repo_root: str, max_age_hours: int = 24) -> None:
         _save_worktree_merge_cache(merge_cache)
 
     # ── Phase 3: mutate serially (unlock / remove / branch -D) ──────────────
-    for entry, mtime, force, verdict, lock_state in verdicts:
+    def _revalidate_reapable(entry, expected_branch, expected_head):
+        """Re-run every destructive precondition after parallel classify."""
+        identity = _worktree_branch_head(str(entry), timeout=5)
+        if identity != (expected_branch, expected_head):
+            logger.debug("Worktree identity changed before prune: %s", entry)
+            return None
+        if _worktree_is_dirty(str(entry), timeout=5):
+            logger.debug("Worktree became dirty before prune: %s", entry)
+            return None
+        if _worktree_has_unpushed_commits(str(entry), timeout=5):
+            with cache_lock:
+                snapshot = dict(merge_cache)
+            merged = _worktree_commits_all_merged_upstream(
+                str(entry), timeout=30, cache=snapshot
+            )
+            if not merged:
+                merged = _worktree_branch_pr_merged(
+                    str(entry), timeout=15, cache=snapshot
+                )
+            with cache_lock:
+                merge_cache.update(snapshot)
+            if not merged:
+                logger.debug("Worktree gained unmerged commits before prune: %s", entry)
+                return None
+        current_lock = _worktree_lock_is_live(
+            repo_root, str(entry), timeout=5
+        )
+        if current_lock == "live":
+            logger.debug("Worktree gained a live lock before prune: %s", entry)
+            return None
+        # Close the windows opened by the more expensive merge/lock probes.
+        if _worktree_branch_head(str(entry), timeout=5) != identity:
+            logger.debug("Worktree identity changed during prune checks: %s", entry)
+            return None
+        if _worktree_is_dirty(str(entry), timeout=5):
+            logger.debug("Worktree became dirty during prune checks: %s", entry)
+            return None
+        return current_lock or "absent"
+
+    for entry, mtime, force, verdict, lock_state, branch, head_sha in verdicts:
         if verdict == "dirty":
             if mtime <= stale_work_cutoff:
                 preserved_stale.append(f"{entry.name} (uncommitted changes)")
@@ -2679,26 +2940,36 @@ def _prune_stale_worktrees(repo_root: str, max_age_hours: int = 24) -> None:
         if verdict == "locked-live":
             logger.debug("Skipping live-locked worktree: %s", entry.name)
             continue
+        if verdict != "reap":
+            continue
+
+        lock_state = _revalidate_reapable(entry, branch, head_sha)
+        if lock_state is None:
+            logger.debug(
+                "Skipping worktree changed after classification: %s", entry.name
+            )
+            continue
 
         if lock_state == "dead":
             try:
-                subprocess.run(
+                unlock_result = subprocess.run(
                     ["git", "worktree", "unlock", str(entry)],
                     capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10, cwd=repo_root,
                 )
+                if unlock_result.returncode != 0:
+                    logger.debug(
+                        "Failed to unlock dead worktree %s: %s",
+                        entry.name, unlock_result.stderr.strip(),
+                    )
+                    continue
             except Exception as e:
                 logger.debug("Failed to unlock dead worktree %s: %s", entry.name, e)
+                continue
 
         # Safe to remove
         try:
-            branch_result = subprocess.run(
-                ["git", "branch", "--show-current"],
-                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5, cwd=str(entry),
-            )
-            branch = branch_result.stdout.strip()
-
             remove_result = subprocess.run(
-                ["git", "worktree", "remove", str(entry), "--force"],
+                ["git", "worktree", "remove", str(entry)],
                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15, cwd=repo_root,
             )
             if remove_result.returncode != 0:
@@ -2710,22 +2981,58 @@ def _prune_stale_worktrees(repo_root: str, max_age_hours: int = 24) -> None:
                 )
                 continue
             if branch:
-                subprocess.run(
-                    ["git", "branch", "-D", branch],
-                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10, cwd=repo_root,
+                # Compare-and-delete the ref in one Git transaction. A
+                # separate rev-parse followed by `git branch -D` has a TOCTOU
+                # window where another process can advance the branch between
+                # the check and deletion. update-ref rejects the delete unless
+                # the ref still has the exact worktree HEAD we classified.
+                delete_result = subprocess.run(
+                    [
+                        "git", "update-ref", "-d",
+                        f"refs/heads/{branch}", head_sha,
+                    ],
+                    capture_output=True, text=True, encoding="utf-8",
+                    errors="replace", timeout=10, cwd=repo_root,
                 )
+                if delete_result.returncode != 0:
+                    logger.debug(
+                        "Preserved branch changed during worktree prune %s: %s",
+                        branch, delete_result.stderr.strip(),
+                    )
             logger.debug("Pruned stale worktree: %s (force=%s)", entry.name, force)
         except Exception as e:
             logger.debug("Failed to prune worktree %s: %s", entry.name, e)
 
+    if len(merge_cache) != cache_size_before:
+        _save_worktree_merge_cache(merge_cache)
+
     if preserved_stale:
         logger.warning(
             "Preserving %d worktree(s) older than 7 days with unmerged work "
-            "(push or remove them to reclaim disk): %s",
+            "(run `hermes worktree prune` to review and reclaim): %s",
             len(preserved_stale), ", ".join(sorted(preserved_stale)),
         )
 
     _prune_orphaned_branches(repo_root)
+
+    # Escalation notice: the startup pass is deliberately conservative, so
+    # installs accumulate preserved trees it can never reclaim. Once the
+    # footprint is clearly a problem (many trees or multi-GB), say so once
+    # per launch and name the attended reclaim command — silence here is how
+    # boxes reach 15GB+ of .worktrees/ without anyone noticing.
+    try:
+        from hermes_cli.worktree_gc import worktrees_summary
+
+        count, size_mb = worktrees_summary(repo_root)
+        if count >= 10 or (size_mb or 0) >= 5120:
+            size_txt = f"{size_mb / 1024:.1f}GB" if size_mb else "unknown size"
+            logger.warning(
+                ".worktrees/ holds %d tree(s) (%s) — run `hermes worktree list` "
+                "to audit and `hermes worktree prune` to reclaim safely.",
+                count, size_txt,
+            )
+    except Exception:
+        pass
 
 
 def _prune_orphaned_branches(repo_root: str) -> None:
@@ -4151,10 +4458,34 @@ _TERMINAL_INPUT_MODE_RESET_SEQ = (
     "\x1b[0m"  # reset text attributes
     "\x1b[?25h"  # ensure cursor visible
 )
-_EXTENDED_ENTER_KEYS_SEQ = "\x1b[>1u\x1b[>4;2m"
+_KITTY_KEYBOARD_PUSH_SEQ = "\x1b[>1u"
+_MODIFY_OTHER_KEYS_SEQ = "\x1b[>4;2m"
+_EXTENDED_ENTER_KEYS_SEQ = _KITTY_KEYBOARD_PUSH_SEQ + _MODIFY_OTHER_KEYS_SEQ
 
 
 _BACKSLASH_LINE_CONTINUATION_RE = re.compile(r"\\[ \t]*$")
+
+
+def _is_ghostty_terminal(env: Optional[Mapping[str, str]] = None) -> bool:
+    """Whether the terminal is Ghostty (either detection path).
+
+    Ghostty must be pushed ONLY modifyOtherKeys, not the Kitty keyboard
+    protocol: its Kitty disambiguate-mode implementation strips the Alt
+    modifier from the Backspace key, so Option+Backspace arrives as bare
+    \\x7f instead of the CSI-u form ``\\x1b[127;3u`` the protocol calls for
+    (upstream Ghostty bug), breaking backward-kill-word (#87630
+    regression).  Ghostty implements modifyOtherKeys correctly (it then
+    emits ``\\x1b[27;3;127~``, which the alias table also maps).
+
+    Matches exactly the two conditions that admit Ghostty through
+    ``_terminal_supports_extended_enter_keys``.
+    """
+    if env is None:
+        env = os.environ
+    return (
+        (env.get("TERM_PROGRAM") or "").strip() == "ghostty"
+        or (env.get("TERM") or "").strip().lower() == "xterm-ghostty"
+    )
 
 
 def _terminal_supports_extended_enter_keys(env: Optional[Mapping[str, str]] = None) -> bool:
@@ -4188,7 +4519,9 @@ def _enable_extended_enter_keys(output=None, env: Optional[Mapping[str, str]] = 
 
     Writes the Kitty keyboard protocol push (CSI >1u, disambiguate mode) AND
     xterm modifyOtherKeys level 2 (CSI >4;2m), mirroring the Ink TUI —
-    terminals honor whichever protocol they implement.  Both are needed:
+    terminals honor whichever protocol they implement (except Ghostty, which
+    gets only modifyOtherKeys; see the Ghostty exception below).  Both are
+    needed:
     kitty-the-terminal removed modifyOtherKeys support entirely (it only
     speaks its own protocol), while tmux/VS Code only accept modifyOtherKeys.
 
@@ -4205,20 +4538,25 @@ def _enable_extended_enter_keys(output=None, env: Optional[Mapping[str, str]] = 
     Ctrl+C, which is handled by prompt_toolkit's ``c-c`` binding (raw mode
     clears ISIG, so the kernel INTR path was never in play for the CLI).
 
+    Ghostty exception: pushes only modifyOtherKeys — see
+    ``_is_ghostty_terminal`` for the full rationale (#87630).
+
     The exit reset sequence pops/resets both modes, so this is safe across
     normal exits, Ctrl+C, and SIGTERM cleanup.
     """
     if not _terminal_supports_extended_enter_keys(env):
         return False
+    # Ghostty exception: only modifyOtherKeys — see _is_ghostty_terminal.
+    seq = _MODIFY_OTHER_KEYS_SEQ if _is_ghostty_terminal(env) else _EXTENDED_ENTER_KEYS_SEQ
     try:
         target = output
         if target is not None and hasattr(target, "write_raw"):
-            target.write_raw(_EXTENDED_ENTER_KEYS_SEQ)
+            target.write_raw(seq)
             target.flush()
             return True
         stream = sys.stdout
         if stream is not None and stream.isatty():
-            stream.write(_EXTENDED_ENTER_KEYS_SEQ)
+            stream.write(seq)
             stream.flush()
             return True
     except Exception:
@@ -4959,6 +5297,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         api_key: str = None,
         base_url: str = None,
         max_turns: int = None,
+        run_budget: float = None,
         verbose: Optional[bool] = None,
         compact: bool = False,
         resume: str = None,
@@ -5245,6 +5584,13 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 self.max_turns = 500
         else:
             self.max_turns = 500
+
+        # Wall-clock run budget: CLI flag wins over config; both optional.
+        # None keeps the feature fully off (AIAgent stays dormant).
+        if run_budget is not None:
+            self.run_budget_seconds = run_budget
+        else:
+            self.run_budget_seconds = CLI_CONFIG["agent"].get("run_budget_seconds")
         
         # Parse and validate toolsets
         self.enabled_toolsets = toolsets
@@ -5441,6 +5787,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         self._clarify_freetext = False
         self._clarify_deadline = 0
         self._clarify_multi_base = None
+        self._clarify_prefill = ""
         self._sudo_state = None
         self._sudo_deadline = 0
         self._modal_input_snapshot = None
@@ -9492,6 +9839,22 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         print()
 
 
+    def _handle_whoami_command(self):
+        """Display slash-command access for the local CLI surface."""
+        import getpass
+
+        try:
+            user_name = getpass.getuser() or "?"
+        except Exception:
+            user_name = "?"
+
+        print()
+        print("  You:            cli (local terminal)")
+        print(f"  User:           {user_name}")
+        print("  Tier:           unrestricted")
+        print("  Slash commands: all available")
+        print()
+
     def show_config(self):
         """Display current configuration with kawaii ASCII art."""
         # Get terminal config from environment (which was set from cli-config.yaml)
@@ -9511,10 +9874,21 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # provider). Never invoke it; just identify the auth surface.
         from agent.azure_identity_adapter import is_token_provider
 
-        if is_token_provider(self.api_key):
+        # Prefer the LIVE agent's credential when one exists: HermesCLI's
+        # constructor seeds self.api_key from OPENAI/OPENROUTER env vars
+        # before provider resolution runs, so on non-OpenAI providers (Nous,
+        # Anthropic, ...) the constructor value is a different vendor's key
+        # than the one actually authenticating requests. /config displaying
+        # an sk-proj-... OpenAI key next to a Nous base URL was the visible
+        # symptom (full-surface CLI QA sweep, Aug 2026).
+        display_key = self.api_key
+        agent = getattr(self, "agent", None)
+        if agent is not None and getattr(agent, "api_key", None):
+            display_key = agent.api_key
+        if is_token_provider(display_key):
             api_key_display = "Microsoft Entra ID"
-        elif isinstance(self.api_key, str) and len(self.api_key) > 12:
-            api_key_display = f"{self.api_key[:8]}...{self.api_key[-4:]}"
+        elif isinstance(display_key, str) and len(display_key) > 12:
+            api_key_display = f"{display_key[:8]}...{display_key[-4:]}"
         else:
             api_key_display = "Not set!"
 
@@ -11759,6 +12133,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             return False
         elif canonical == "help":
             self.show_help()
+        elif canonical == "whoami":
+            self._handle_whoami_command()
         elif canonical == "profile":
             self._handle_profile_command()
         elif canonical == "tools":
@@ -13069,10 +13445,27 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         """
         from hermes_cli.colors import Colors as _Colors
         from tools.approval import (
+            _YOLO_MODE_FROZEN,
             disable_session_yolo,
             enable_session_yolo,
             is_session_yolo_enabled,
         )
+
+        # Process-level YOLO (--yolo flag / HERMES_YOLO_MODE at startup) is
+        # frozen into tools.approval at import time and cannot be disabled by
+        # the session toggle. Before this guard, /yolo printed "YOLO mode OFF —
+        # dangerous commands will require approval" while every command kept
+        # auto-approving (the frozen flag short-circuits the approval gate
+        # ahead of the session check) — a false safety claim. Say the truth
+        # instead of toggling a bypass that has no effect.
+        if _YOLO_MODE_FROZEN:
+            _cprint(
+                f"  ⚡ YOLO is {_Colors.BOLD}{_Colors.RED}locked ON{_Colors.RESET}"
+                " for this process (started with --yolo / HERMES_YOLO_MODE)."
+                " /yolo cannot disable it — restart without the flag to"
+                " re-enable approvals."
+            )
+            return
 
         session_key = self.session_id or "default"
         # ``getattr`` guard: tests exercise this method unbound against a
@@ -13351,7 +13744,11 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                         self.agent, "context_compressor", None
                     ),
                 )
-                if summary.get("aborted") or summary.get("fallback_used"):
+                if (
+                    summary.get("aborted")
+                    or summary.get("fallback_used")
+                    or summary.get("refused_would_grow")
+                ):
                     icon = "⚠️"
                 else:
                     icon = "🗜️" if summary["noop"] else "✅"
@@ -15390,7 +15787,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             outcome = outcome[:119] + "…"
         _cprint(f"\n{_DIM}{icon} {label}: {detail} → {outcome}{_RST}")
 
-    def _clarify_callback(self, question, choices, multi_select=False):
+    def _clarify_callback(self, question, choices, multi_select=False, questions=None):
         """
         Platform callback for the clarify tool. Called from the agent thread.
 
@@ -15401,10 +15798,19 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
         When ``multi_select`` is True, shows checkboxes and the user can
         select multiple options with Space, confirming with Enter.
+
+        When ``questions`` is a non-empty list (batch clarify, issue #18450),
+        the panel switches to the A-compact multi-question layout and the
+        return value is a dict ``{"answers": {qid: raw_answer}}`` (plus
+        ``"timed_out": True`` when the deadline expired with only partial
+        answers). The single-question path below is unchanged.
         """
         import time as _time
 
         from tools.clarify_gateway import resolve_clarify_timeout
+
+        if questions:
+            return self._clarify_callback_batch(questions)
 
         # Canonical clarify timeout, shared with the gateway/TUI path. `<= 0`
         # means unlimited (never auto-skip mid-think) → a null deadline.
@@ -15466,6 +15872,190 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             "The user did not provide a response within the time limit. "
             "Use your best judgement to make the choice and proceed."
         )
+
+    # --- Batch clarify (multi-question, issue #18450) -----------------------
+
+    def _clarify_batch_set_active(self, state, index) -> None:
+        """Point the batch clarify panel at question ``index``.
+
+        Mirrors the active question's data into the flat keys the existing
+        single-question keybindings and renderer read (``question``,
+        ``choices``, ``selected``, ``multi_select``, ``selected_indices``),
+        so ↑/↓/Space/number keys operate on the active question unchanged.
+        Open-ended questions drop straight into freetext, matching the
+        single-question path. Re-visiting an answered question restores the
+        cursor to the earlier selection (choice answers highlight their row,
+        an "Other" answer highlights the Other row) so the user can see and
+        edit what they picked.
+        """
+        questions_list = state["questions"]
+        index = max(0, min(index, len(questions_list) - 1))
+        entry = questions_list[index]
+        state["active"] = index
+        state["question"] = entry["question"]
+        state["choices"] = entry["choices"] or []
+        state["selected"] = 0
+        state["multi_select"] = bool(entry["multi_select"])
+        state["selected_indices"] = set() if entry["multi_select"] else None
+        self._clarify_freetext = not entry["choices"]
+        self._clarify_multi_base = None
+        # Restore the earlier answer's cursor/checkbox position on re-visit.
+        meta = (state.get("answer_meta") or {}).get(entry["qid"])
+        choices = entry["choices"] or []
+        if meta is None:
+            return
+        if meta.get("kind") == "choice":
+            answer = state["answers"].get(entry["qid"])
+            if answer in choices:
+                state["selected"] = choices.index(answer)
+        elif meta.get("kind") == "other":
+            state["selected"] = len(choices)
+        elif meta.get("kind") == "multi":
+            checked = set()
+            for label in meta.get("choices") or []:
+                if label in choices:
+                    checked.add(choices.index(label))
+            if meta.get("other_text"):
+                checked.add(len(choices))
+            state["selected_indices"] = checked
+
+    def _clarify_batch_lock(self, state, answer, meta=None) -> None:
+        """Lock ``answer`` for the active batch question and advance.
+
+        Overwrites any earlier answer for the same question (locked answers
+        stay editable until the batch completes). ``meta`` records how the
+        answer was produced ({"kind": "choice"|"other"|"multi", ...}) so a
+        re-visit can restore the cursor and prefill an "Other" edit. Advances
+        ``active`` to the next unanswered question; when every question has
+        an answer, puts the answers dict on the response queue and tears down
+        the panel.
+        """
+        entry = state["questions"][state["active"]]
+        state["answers"][entry["qid"]] = answer
+        state.setdefault("answer_meta", {})[entry["qid"]] = meta or {"kind": "choice"}
+        self._persist_prompt_summary("?", "Clarify", entry["question"], str(answer))
+        total = len(state["questions"])
+        for offset in range(1, total + 1):
+            candidate = (state["active"] + offset) % total
+            if state["questions"][candidate]["qid"] not in state["answers"]:
+                self._clarify_batch_set_active(state, candidate)
+                return
+        # Every question answered — resolve the batch.
+        try:
+            state["response_queue"].put(dict(state["answers"]))
+        except Exception:
+            pass
+        self._clarify_state = None
+        self._clarify_freetext = False
+        self._clarify_multi_base = None
+
+    def _clarify_batch_enter(self, state) -> None:
+        """Enter in batch choice mode: lock the active question's selection.
+
+        Multi-select questions lock a JSON array string of the checked
+        labels (the tool core parses it via ``_parse_multi_select_response``).
+        Selecting "Other" switches to freetext; the freetext submit path
+        locks the typed answer. Entering "Other" on a question whose earlier
+        answer was typed prefills the composer with that text for editing.
+        """
+        choices = state.get("choices") or []
+        selected = state.get("selected", 0)
+        entry = state["questions"][state["active"]]
+        meta = (state.get("answer_meta") or {}).get(entry["qid"]) or {}
+        if state.get("multi_select"):
+            indices = state.get("selected_indices") or set()
+            sorted_idx = sorted(indices)
+            selected_choices = [choices[i] for i in sorted_idx if i < len(choices)]
+            other_checked = len(choices) in sorted_idx
+            if other_checked:
+                # Stash the checked real choices (possibly none) so the
+                # freetext submit appends the typed answer to the array.
+                self._clarify_multi_base = selected_choices
+                self._clarify_freetext = True
+                self._clarify_prefill = meta.get("other_text") or ""
+                return
+            self._clarify_batch_lock(
+                state,
+                json.dumps(selected_choices, ensure_ascii=False),
+                meta={"kind": "multi", "choices": selected_choices, "other_text": ""},
+            )
+            return
+        if selected < len(choices):
+            self._clarify_batch_lock(
+                state, choices[selected], meta={"kind": "choice"}
+            )
+            return
+        # "Other" highlighted → switch to freetext; prefill an earlier typed
+        # answer so Enter on an answered Other edits instead of retyping.
+        self._clarify_freetext = True
+        self._clarify_prefill = (
+            meta.get("other_text") or "" if meta.get("kind") == "other" else ""
+        )
+
+    def _clarify_callback_batch(self, questions):
+        """Batch clarify panel (A-compact): all questions, one active.
+
+        Blocks on the response queue like the single-question path. Returns
+        ``{"answers": {qid: raw_answer}}`` when every question is locked, the
+        same dict plus ``"timed_out": True`` when the deadline expires with
+        partial (or zero) answers, and passes a cancel string through
+        unchanged so the tool core resolves the batch empty.
+        """
+        import time as _time
+
+        from tools.clarify_gateway import resolve_clarify_timeout
+
+        timeout = resolve_clarify_timeout(CLI_CONFIG)
+        response_queue = queue.Queue()
+
+        state = {
+            "questions": list(questions),
+            "answers": {},
+            "answer_meta": {},
+            "active": 0,
+            "response_queue": response_queue,
+            # Flat keys mirroring the active question — filled by
+            # _clarify_batch_set_active below.
+            "question": "",
+            "choices": [],
+            "selected": 0,
+            "multi_select": False,
+            "selected_indices": None,
+        }
+        self._clarify_state = state
+        self._clarify_batch_set_active(state, 0)
+        self._clarify_deadline = None if timeout <= 0 else _time.monotonic() + timeout
+        self._paint_now()
+
+        _last_countdown_refresh = _time.monotonic()
+        while True:
+            try:
+                result = response_queue.get(timeout=1)
+                self._clarify_deadline = None
+                if isinstance(result, dict):
+                    return {"answers": result}
+                # Cancel path (Ctrl+C teardown) posts a plain string — pass
+                # it through so the tool core resolves the batch empty.
+                return result
+            except queue.Empty:
+                if self._clarify_deadline is not None:
+                    remaining = self._clarify_deadline - _time.monotonic()
+                    if remaining <= 0:
+                        break
+                now = _time.monotonic()
+                if now - _last_countdown_refresh >= 1.0:
+                    _last_countdown_refresh = now
+                    self._paint_now()
+
+        # Timed out — keep the answers locked so far and flag the timeout.
+        partial = dict(state["answers"])
+        self._clarify_state = None
+        self._clarify_freetext = False
+        self._clarify_deadline = None
+        self._clarify_multi_base = None
+        self._paint_now()
+        _cprint(f"\n{_DIM}(clarify timed out after {timeout}s — locked answers returned){_RST}")
+        return {"answers": partial, "timed_out": True}
 
     def _sudo_password_callback(self) -> str:
         """
@@ -17718,6 +18308,25 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             if self._clarify_freetext and self._clarify_state:
                 text = event.app.current_buffer.text.strip()
                 if text:
+                    state = self._clarify_state
+                    # Batch mode: lock the typed answer for the active question
+                    if state.get("questions"):
+                        base = getattr(self, '_clarify_multi_base', None)
+                        if base is not None:
+                            # Multi-select "Other": append the typed answer to
+                            # the checked labels as a JSON array string.
+                            answer = json.dumps(base + [text], ensure_ascii=False)
+                            meta = {"kind": "multi", "choices": list(base), "other_text": text}
+                            self._clarify_multi_base = None
+                        else:
+                            answer = text
+                            meta = {"kind": "other", "other_text": text}
+                        self._clarify_freetext = False
+                        self._clarify_prefill = ""
+                        self._clarify_batch_lock(state, answer, meta=meta)
+                        event.app.current_buffer.reset()
+                        event.app.invalidate()
+                        return
                     # multi-select: prepend previously checked real choices
                     base = getattr(self, '_clarify_multi_base', None)
                     if base:
@@ -17733,6 +18342,18 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             # --- Clarify choice mode: confirm the highlighted selection ---
             if self._clarify_state and not self._clarify_freetext:
                 state = self._clarify_state
+                # Batch mode: Enter locks the active question's answer and
+                # advances to the next unanswered question.
+                if state.get("questions"):
+                    self._clarify_batch_enter(state)
+                    # Editing an earlier "Other" answer: prefill the composer
+                    # with the previously typed text.
+                    if self._clarify_freetext and self._clarify_prefill:
+                        event.app.current_buffer.text = self._clarify_prefill
+                        event.app.current_buffer.cursor_position = len(self._clarify_prefill)
+                        self._clarify_prefill = ""
+                    event.app.invalidate()
+                    return
                 selected = state["selected"]
                 choices = state.get("choices") or []
                 # multi-select support: submit comma-joined list of checked choices
@@ -18185,6 +18806,29 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     indices.add(selected)
                 event.app.invalidate()
 
+        # Batch clarify: Tab cycles the active question (any-order answering;
+        # moving onto an answered question lets the user re-answer it before
+        # the batch completes). Registered after the generic tab handler so
+        # this filtered binding wins while the batch panel is open.
+        @kb.add('tab', filter=Condition(lambda: bool(self._clarify_state) and bool(self._clarify_state.get("questions")) and not self._clarify_freetext), eager=True)
+        def clarify_batch_tab(event):
+            state = self._clarify_state
+            if state and state.get("questions"):
+                self._clarify_batch_set_active(
+                    state, (state["active"] + 1) % len(state["questions"])
+                )
+                event.app.invalidate()
+
+        # Shift-Tab walks backwards through the questions.
+        @kb.add('s-tab', filter=Condition(lambda: bool(self._clarify_state) and bool(self._clarify_state.get("questions")) and not self._clarify_freetext), eager=True)
+        def clarify_batch_backtab(event):
+            state = self._clarify_state
+            if state and state.get("questions"):
+                self._clarify_batch_set_active(
+                    state, (state["active"] - 1) % len(state["questions"])
+                )
+                event.app.invalidate()
+
         # Number keys for quick clarify selection (1-9, 0 for 10th item)
         def _make_clarify_number_handler(idx):
             def handler(event):
@@ -18211,6 +18855,12 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     # Original single-select: number keys submit directly
                     # Map index to choice (treating "Other" as the last option)
                     if idx < len(choices):
+                        # Batch mode: lock the numbered choice for the active
+                        # question instead of resolving the whole prompt.
+                        if self._clarify_state.get("questions"):
+                            self._clarify_batch_lock(self._clarify_state, choices[idx])
+                            event.app.invalidate()
+                            return
                         # Select a numbered choice
                         self._clarify_state["response_queue"].put(choices[idx])
                         self._clarify_state = None
@@ -19127,6 +19777,11 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                         ("class:hint", "  type your answer and press Enter"),
                         ("class:clarify-countdown", countdown),
                     ]
+                if cli_ref._clarify_state.get("questions"):
+                    return [
+                        ('class:hint', '  ↑/↓ to select, Enter to lock, Tab next question'),
+                        ('class:clarify-countdown', countdown),
+                    ]
                 return [
                     ("class:hint", "  ↑/↓ to select, Enter to confirm"),
                     ("class:clarify-countdown", countdown),
@@ -19228,6 +19883,111 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         def _append_blank_panel_line(lines, border_style: str, box_width: int) -> None:
             lines.append((border_style, "│" + (" " * box_width) + "│\n"))
 
+        def _get_clarify_batch_display(state):
+            """Build styled text for the batch (multi-question) clarify panel.
+
+            A-compact layout mirroring the TUI: a "N questions" header, one
+            status line per question (✓ answered → answer / ▸ active /
+            · pending), and the active question's numbered choices (+ Other)
+            expanded directly beneath its status line.
+            """
+            questions_list = state.get("questions") or []
+            answers = state.get("answers") or {}
+            active = state.get("active", 0)
+            choices = state.get("choices") or []
+            selected = state.get("selected", 0)
+            multi_select = state.get("multi_select", False)
+            selected_indices = state.get("selected_indices", set()) if multi_select else set()
+
+            title = "Hermes needs your input"
+            header = f"{len(questions_list)} questions"
+
+            def _status_rows(width):
+                """(style, text) rows for the status list + expanded active question."""
+                rows = []
+                answer_meta = state.get("answer_meta") or {}
+                for idx, entry in enumerate(questions_list):
+                    answered = entry["qid"] in answers
+                    if answered:
+                        marker = "✓"
+                    elif idx == active:
+                        marker = "▸"
+                    else:
+                        marker = "·"
+                    label = f"{marker} {entry['question']}"
+                    row_style = 'class:clarify-selected' if idx == active else 'class:clarify-choice'
+                    for wrapped in _wrap_panel_text(label, width, subsequent_indent="  "):
+                        rows.append((row_style, wrapped))
+                    if answered:
+                        # The locked answer on its own line, in its own color,
+                        # so the current answer stays readable while walking
+                        # the list with Tab/Shift-Tab.
+                        for wrapped in _wrap_panel_text(
+                            f"    {answers[entry['qid']]}", width, subsequent_indent="    "
+                        ):
+                            rows.append(('class:clarify-answer', wrapped))
+                    if idx != active:
+                        continue
+                    # Expanded active question: numbered choices + Other.
+                    for i, choice in enumerate(choices):
+                        num_prefix = str(i + 1) if i < 9 else ('0' if i == 9 else ' ')
+                        if multi_select:
+                            cb = "[x]" if i in selected_indices else "[ ]"
+                            cursor = "❯" if i == selected and not cli_ref._clarify_freetext else " "
+                            prefix = f"  {cursor} {cb} {num_prefix}. "
+                        else:
+                            cursor = "❯" if i == selected and not cli_ref._clarify_freetext else " "
+                            prefix = f"  {cursor} {num_prefix}. "
+                        style = 'class:clarify-selected' if i == selected and not cli_ref._clarify_freetext else 'class:clarify-choice'
+                        for wrapped in _wrap_panel_text(f"{prefix}{choice}", width, subsequent_indent="      "):
+                            rows.append((style, wrapped))
+                    if choices:
+                        other_idx = len(choices)
+                        other_num = other_idx + 1
+                        other_num_prefix = str(other_num) if other_num < 10 else ('0' if other_num == 10 else ' ')
+                        if multi_select:
+                            cb = "[x]" if other_idx in selected_indices else "[ ]"
+                            mid = f"{cb} {other_num_prefix}"
+                        else:
+                            mid = other_num_prefix
+                        # An earlier typed answer stays visible next to Other;
+                        # Enter on it edits (the composer is prefilled).
+                        meta = answer_meta.get(entry["qid"]) or {}
+                        other_text = meta.get("other_text") or ""
+                        other_suffix = f"Other: {other_text}" if other_text else None
+                        if cli_ref._clarify_freetext:
+                            other_label = f"  ❯ {mid}. " + (other_suffix or "Other (type below)")
+                            other_style = 'class:clarify-active-other'
+                        elif selected == other_idx:
+                            other_label = f"  ❯ {mid}. " + (other_suffix or "Other (type your answer)")
+                            other_style = 'class:clarify-selected'
+                        else:
+                            other_label = f"    {mid}. " + (other_suffix or "Other (type your answer)")
+                            other_style = 'class:clarify-choice'
+                        for wrapped in _wrap_panel_text(other_label, width, subsequent_indent="      "):
+                            rows.append((other_style, wrapped))
+                    elif cli_ref._clarify_freetext:
+                        for wrapped in _wrap_panel_text(
+                            "  Type your answer in the prompt below, then press Enter.", width
+                        ):
+                            rows.append(('class:clarify-active-other', wrapped))
+                return rows
+
+            preview_rows = _status_rows(60)
+            box_width = _panel_box_width(title, [header] + [text for _, text in preview_rows])
+            inner_text_width = max(8, box_width - 2)
+            rows = _status_rows(inner_text_width)
+
+            lines = []
+            lines.append(('class:clarify-border', '╭─ '))
+            lines.append(('class:clarify-title', title))
+            lines.append(('class:clarify-border', ' ' + ('─' * max(0, box_width - len(title) - 3)) + '╮\n'))
+            _append_panel_line(lines, 'class:clarify-border', 'class:clarify-question', header, box_width)
+            for style, text in rows:
+                _append_panel_line(lines, 'class:clarify-border', style, text, box_width)
+            lines.append(('class:clarify-border', '╰' + ('─' * box_width) + '╯\n'))
+            return lines
+
         def _get_clarify_display():
             """Build styled text for the clarify question/choices panel.
 
@@ -19239,6 +19999,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             state = cli_ref._clarify_state
             if not state:
                 return []
+            if state.get("questions"):
+                return _get_clarify_batch_display(state)
 
             question = state["question"]
             choices = state.get("choices") or []
@@ -19842,13 +20604,14 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             "completion-menu.meta.completion": "bg:#1a1a2e #888888",
             "completion-menu.meta.completion.current": "bg:#333355 #FFBF00",
             # Clarify question panel
-            "clarify-border": "#CD7F32",
-            "clarify-title": "#FFD700 bold",
-            "clarify-question": "#FFF8DC bold",
-            "clarify-choice": "#AAAAAA",
-            "clarify-selected": "#FFD700 bold",
-            "clarify-active-other": "#FFD700 italic",
-            "clarify-countdown": "#CD7F32",
+            'clarify-border': '#CD7F32',
+            'clarify-title': '#FFD700 bold',
+            'clarify-question': '#FFF8DC bold',
+            'clarify-choice': '#AAAAAA',
+            'clarify-selected': '#FFD700 bold',
+            'clarify-active-other': '#FFD700 italic',
+            'clarify-answer': '#98FB98',
+            'clarify-countdown': '#CD7F32',
             # Sudo password panel
             "sudo-prompt": "#FF6B6B bold",
             "sudo-border": "#CD7F32",
@@ -20778,6 +21541,7 @@ def main(
     api_key: str = None,
     base_url: str = None,
     max_turns: int = None,
+    run_budget: float = None,
     verbose: Optional[bool] = None,
     quiet: bool = False,
     compact: bool = False,
@@ -20965,6 +21729,7 @@ def main(
         api_key=api_key,
         base_url=base_url,
         max_turns=max_turns,
+        run_budget=run_budget,
         verbose=verbose,
         compact=compact,
         resume=resume,
@@ -21084,7 +21849,15 @@ def main(
                     # Cancel any pre-existing alarm to avoid colliding with
                     # caller-installed timers.
                     _sig_mod.signal(_sig_mod.SIGALRM, lambda *_: os._exit(0))
-                    _sig_mod.alarm(2)
+                    _sig_mod.alarm(5)
+            except Exception:
+                pass
+            # os._exit(0) skips atexit AND SessionDB's token-drain hook, so
+            # flush + finalize the session store here or the worker's turn
+            # (and its usage deltas) never become durable (#88583 / #50881
+            # class). Best-effort under the SIGALRM deadman above.
+            try:
+                _flush_one_shot_session_store(cli)
             except Exception:
                 pass
             try:

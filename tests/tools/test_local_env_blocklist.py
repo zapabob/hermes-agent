@@ -1458,7 +1458,7 @@ class TestHermesBinDirOnPath:
             clear=True,
         ):
             result = _make_run_env({})
-        entries = result["PATH"].split(path_sep)
+        entries = result["PATH"].split(os.pathsep)
         assert entries[0] == "/opt/hermes/bin"
         assert "/usr/bin" in entries
 

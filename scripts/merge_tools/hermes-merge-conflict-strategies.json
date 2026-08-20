@@ -19,6 +19,11 @@
     }
   },
   "blocker_actions": ["official_with_overlay", "manual_api_followup"],
+  "post_merge_invariants": {
+    "hermes_cli/commands.py": "command_registry",
+    "hermes_cli/cli_command_names.py": "canonical_cli_names"
+  },
+  "post_merge_auto_overlay_paths": ["hermes_cli/commands.py"],
   "dirty_tree_ignore": [
     ".cursor/hooks/state/*",
     ".specstory/**",
@@ -49,6 +54,16 @@
       "pattern": "apps/desktop/src/app/session/hooks/use-prompt-actions.ts",
       "action": "upstream",
       "note": "Official desktop split moved this hook into use-prompt-actions/; drop the deleted legacy file during sync."
+    },
+    {
+      "pattern": "apps/desktop/src/app/session/hooks/use-message-stream/gateway-event.ts",
+      "action": "upstream",
+      "note": "Official desktop split moved the legacy gateway event hook into gateway-event/ modules. Take the deletion, then reapply the fork source-scoped privileged-reply hardening to the new module boundary."
+    },
+    {
+      "pattern": "contributors/emails/agent@agents-Mac-mini.local",
+      "action": "upstream",
+      "note": "Both histories converge on the lowercase contributor identity; take upstream to avoid a Windows case-collision."
     },
     {
       "pattern": "apps/desktop/src/app/chat/composer/status-stack/surface-var-lifecycle.test.tsx",
@@ -387,6 +402,78 @@
       "pattern": "hermes_cli/config.py",
       "action": "official_with_overlay",
       "note": "Merge official configuration loaders and migrations with fork environment migration metadata.",
+      "context": "overlap_only"
+    },
+    {
+      "pattern": "hermes_cli/commands.py",
+      "action": "manual_api_followup",
+      "note": "Compose official attended worktree prune with fork suggestions/suggest, blueprint/bp, and auth registrations; semantic invariant is mandatory after overlay.",
+      "context": "overlap_only"
+    },
+    {
+      "pattern": "hermes_cli/main.py",
+      "action": "official_with_overlay",
+      "note": "Take the official worktree CLI parser and built-in fast-path while retaining fork harness and extension subcommands.",
+      "context": "overlap_only"
+    },
+    {
+      "pattern": "agent/conversation_loop.py",
+      "action": "official_with_overlay",
+      "note": "Take official output-cap and relay recovery fixes, then retain fork conversation-loop extensions at their non-overlapping seams.",
+      "context": "overlap_only"
+    },
+    {
+      "pattern": "agent/system_prompt.py",
+      "action": "official_with_overlay",
+      "note": "Take official memory-surface guidance while retaining fork prompt sections through the current prompt API.",
+      "context": "overlap_only"
+    },
+    {
+      "pattern": "cli.py",
+      "action": "official_with_overlay",
+      "note": "Take official terminal-key handling fixes while retaining fork CLI integrations at separate key-map seams.",
+      "context": "overlap_only"
+    },
+    {
+      "pattern": "gateway/platforms/api_server.py",
+      "action": "official_with_overlay",
+      "note": "Take official reasoning-ladder API support while preserving fork API-server routes at non-overlapping seams.",
+      "context": "overlap_only"
+    },
+    {
+      "pattern": "tests/run_agent/test_in_place_compaction.py",
+      "action": "official_with_overlay",
+      "note": "Retain fork durable in-place compaction coverage and add official salvage and anti-thrash cases.",
+      "context": "overlap_only"
+    },
+    {
+      "pattern": "tools/memory_tool.py",
+      "action": "official_with_overlay",
+      "note": "Take official memory availability gating while retaining fork memory-provider integrations through the registry API.",
+      "context": "overlap_only"
+    },
+    {
+      "pattern": "tui_gateway/server.py",
+      "action": "official_with_overlay",
+      "note": "Take official profile-scoped Projects RPC changes while preserving fork gateway methods at non-overlapping registration seams.",
+      "context": "overlap_only"
+    },
+    {
+      "pattern": "apps/desktop/electron/session-windows.ts",
+      "action": "manual_api_followup",
+      "note": "Manually compose official peer-window URL routing with fork isAllowedChatNavigation hardening; both exports are required.",
+      "context": "overlap_only"
+    },
+    {
+      "pattern": "apps/desktop/electron/session-windows.test.ts",
+      "action": "manual_api_followup",
+      "note": "Retain navigation-origin hardening tests and add official peer-window URL tests in one suite.",
+      "context": "overlap_only"
+    },
+    {
+      "pattern": "cli-config.yaml.example",
+      "action": "manual_api_followup",
+      "note": "Remove the obsolete flush_min_turns example while retaining fork Ebbinghaus provider documentation.",
       "context": "overlap_only"
     },
     {

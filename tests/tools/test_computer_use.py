@@ -6,6 +6,7 @@ import base64
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Any, Dict, List, cast
 from unittest.mock import MagicMock, patch
 
@@ -75,11 +76,15 @@ class TestRegistration:
         assert entry.schema["name"] == "computer_use"
 
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="extensionless POSIX shell scripts are not executable on Windows",
+    )
     def test_cua_driver_cmd_env_override_is_resolved_dynamically(self, tmp_path, monkeypatch):
         from tools.computer_use import cua_backend
 
         driver = tmp_path / "custom-cua-driver"
-        driver.write_text("#!/bin/sh\nexit 0\n")
+        driver.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         driver.chmod(0o755)
 
         monkeypatch.setenv("HERMES_CUA_DRIVER_CMD", str(driver))
@@ -1328,8 +1333,11 @@ class TestCuaDriverSessionReconnect:
             returncode = 0
             stderr = ""
             # Daemon returns a path, not inline base64.
-            stdout = ('{"element_count": 7, "tree_markdown": "- [0] AXButton",'
-                      ' "screenshot_file_path": "%s"}' % str(shot))
+            stdout = json.dumps({
+                "element_count": 7,
+                "tree_markdown": "- [0] AXButton",
+                "screenshot_file_path": str(shot),
+            })
 
         import subprocess as _sp
         orig_run = _sp.run
@@ -1435,6 +1443,7 @@ class TestCaptureAppFilterNoMatch:
         assert backend._active_pid is None
         assert backend._active_window_id is None
 
+    @pytest.mark.skipif(sys.platform != "linux", reason="GNOME helper behavior is Linux-specific")
     def test_linux_default_capture_skips_gnome_shell_helper(self):
         windows = [
             {"app_name": "", "pid": 100, "window_id": 1,
@@ -2551,6 +2560,55 @@ class TestElementSpillFile:
         # Capture still succeeds and stays budget-capped without the file.
         assert out["truncated_elements"] == 20
         assert "elements_file" not in out
+
+
+class TestCaptureScreenshotPersistence:
+    """Image captures expose a bounded file for explicit user delivery."""
+
+    _PNG_B64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76L"
+        "AAAADUlEQVR4nGNgGAUgAAABCAABgukLHQAAAABJRU5ErkJggg=="
+    )
+
+    def _capture(self):
+        from tools.computer_use.backend import CaptureResult
+
+        return CaptureResult(
+            mode="vision",
+            width=8,
+            height=8,
+            png_b64=self._PNG_B64,
+            image_mime_type="image/png",
+            png_bytes_len=len(base64.b64decode(self._PNG_B64)),
+        )
+
+    def test_multimodal_capture_exposes_shareable_screenshot(
+        self, tmp_path, monkeypatch,
+    ):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        from tools.computer_use import tool as cu_tool
+
+        monkeypatch.setattr(
+            cu_tool, "_should_route_through_aux_vision", lambda: False,
+        )
+        out = cu_tool._capture_response(self._capture())
+
+        screenshot_path = out["meta"]["screenshot_path"]
+        assert screenshot_path in out["text_summary"]
+        assert "MEDIA:" not in out["text_summary"]
+        assert screenshot_path.startswith(str(tmp_path / "cache" / "images"))
+        assert Path(screenshot_path).read_bytes() == base64.b64decode(self._PNG_B64)
+
+    def test_capture_cache_is_bounded(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        from tools.computer_use import tool as cu_tool
+
+        monkeypatch.setattr(cu_tool, "_MAX_CAPTURE_FILES", 2)
+        for _ in range(3):
+            assert cu_tool._persist_capture_image(self._capture()) is not None
+
+        captures = list((tmp_path / "cache" / "images").glob("computer_use_*.*"))
+        assert len(captures) == 2
 
 
 class TestBoundsScaleField:

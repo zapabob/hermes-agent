@@ -167,9 +167,9 @@ COMMAND_REGISTRY: list[CommandDef] = [
                args_hint="<platform>", cli_only=True),
     CommandDef("branch", "Branch the current session (explore a different path)", "Session",
                aliases=("fork",), args_hint="[name]"),
-    CommandDef("worktree", "Show, list, or create isolated git worktrees for this session", "Session",
-               cli_only=True, args_hint="[new [name]|list]",
-               subcommands=("new", "list")),
+    CommandDef("worktree", "Show, list, create, or prune isolated git worktrees", "Session",
+               cli_only=True, args_hint="[new [name]|list|prune [--dry-run|--yes]]",
+               subcommands=("new", "list", "prune")),
     CommandDef("compress", "Compress conversation context (add 'here [N]' to keep recent N turns; --preview shows what would happen)", "Session",
                aliases=("compact",), args_hint="[here [N] | focus topic | --preview|--dry-run]"),
     CommandDef("rollback", "List or restore filesystem checkpoints (restores keep your hand-edits; --all overrides)", "Session",
@@ -325,6 +325,11 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("cron", "Manage scheduled tasks", "Tools & Skills",
                cli_only=True, args_hint="[subcommand]",
                subcommands=("list", "add", "create", "edit", "pause", "resume", "run", "remove")),
+    CommandDef("suggestions", "Review suggested automations (accept/dismiss)",
+               "Tools & Skills", aliases=("suggest",), args_hint="[accept|dismiss N | catalog]",
+               subcommands=("accept", "dismiss", "catalog", "clear")),
+    CommandDef("blueprint", "Set up an automation from a blueprint template",
+               "Tools & Skills", aliases=("bp",), args_hint="[name] [slot=value ...]"),
     CommandDef("auth", "Manage authentication / OAuth for providers (codex, xai-oauth, etc.)", "Configuration",
                args_hint="[add|list|status|logout] [provider]",
                subcommands=("add", "list", "status", "logout", "reset")),
@@ -1344,7 +1349,10 @@ _SLACK_PRIORITY_ALIASES = ("btw", "bg")
 #     (session export is an interactive surface; platform is a rare
 #     informational lookup) — without this entry /save tips the registry
 #     past the 50-cap and silently clamps /platform, breaking parity.
-_SLACK_VIA_HERMES_ONLY = frozenset({"topup", "moa", "debug", "egress", "init", "version", "diff", "update", "heartbeat", "refine", "pause", "whoami", "platform"})
+_SLACK_VIA_HERMES_ONLY = frozenset({
+    "topup", "moa", "debug", "egress", "init", "version", "diff", "update",
+    "heartbeat", "refine", "pause", "whoami", "platform", "blueprint",
+})
 
 
 def _sanitize_slack_name(raw: str) -> str:

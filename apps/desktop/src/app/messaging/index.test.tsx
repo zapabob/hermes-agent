@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { MessagingPlatformInfo } from '@/types/hermes'
 
+import { MessagingView } from './index'
+
 const getMessagingPlatforms = vi.fn()
 const updateMessagingPlatform = vi.fn()
 const getPairing = vi.fn()
@@ -16,9 +18,22 @@ vi.mock('@/hermes', () => ({
   approvePairing: (platformId: string, requestId: string) => approvePairing(platformId, requestId),
   getMessagingPlatforms: () => getMessagingPlatforms(),
   getPairing: () => getPairing(),
+  getProfiles: vi.fn(async () => ({ profiles: [] })),
   revokePairing: (platformId: string, userId: string) => revokePairing(platformId, userId),
+  setApiRequestProfile: vi.fn(),
   updateMessagingPlatform: (id: string, body: unknown) => updateMessagingPlatform(id, body)
 }))
+
+// Keep store/profile's side-effecting imports inert (pulled in via the shared
+// settings scope store) — same seam as store/profile.test.ts.
+vi.mock('@/store/gateway', () => ({
+  $gateway: { get: () => null, subscribe: () => () => {} },
+  ensureGatewayForAgent: vi.fn(async () => undefined),
+  ensureGatewayForProfile: vi.fn(async () => undefined),
+  openGatewayForProfile: vi.fn(async () => undefined)
+}))
+vi.mock('@/lib/query-client', () => ({ invalidateProfileScopedQueries: vi.fn() }))
+vi.mock('@/store/starmap', () => ({ resetStarmapGraph: vi.fn() }))
 
 vi.mock('@/lib/external-link', () => ({
   openExternalLink: (href: string) => openExternalLink(href)
@@ -58,18 +73,12 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-async function renderMessaging() {
-  const { MessagingView } = await import('./index')
-  let result: ReturnType<typeof render>
-  await act(async () => {
-    result = render(
-      <MemoryRouter useTransitions={false}>
-        <MessagingView />
-      </MemoryRouter>
-    )
-  })
-
-  return result!
+function renderMessaging() {
+  return render(
+    <MemoryRouter useTransitions={false}>
+      <MessagingView />
+    </MemoryRouter>
+  )
 }
 
 describe('MessagingView setup-guide link', () => {
@@ -137,8 +146,9 @@ describe('MessagingView pairing', () => {
 
     await renderMessaging()
 
+    const approve = await screen.findByRole('button', { name: 'Approve' })
     await act(async () => {
-      fireEvent.click(await screen.findByRole('button', { name: 'Approve' }))
+      fireEvent.click(approve)
     })
 
     expect(await screen.findByRole('button', { name: 'Approve' })).toBeTruthy()

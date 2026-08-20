@@ -273,8 +273,6 @@ def clean_error(tool_name: str, exc: Exception) -> RuntimeError:
     return RuntimeError(f"{tool_name} failed: {exc}")
 
 
-from mcp.server.fastmcp import FastMCP
-
 import_hermes()
 
 
@@ -439,16 +437,12 @@ def build_server(
     http: bool = False,
     include_local_settings: bool = False,
 ) -> FastMCP:
-    server = FastMCP(
-        "hermes-gpt",
-        host=host,
-        port=port,
-        streamable_http_path="/mcp",
-        sse_path="/sse",
-        message_path="/messages/",
-        stateless_http=http,
-        json_response=http,
-    )
+    # mcp 2.0 replaced the old FastMCP module with the public MCPServer
+    # facade.  Keep the import at the serving boundary because mcp is an
+    # optional Hermes extra, while using the 2.0 server API when serving.
+    from mcp.server import MCPServer
+
+    server = MCPServer("hermes-gpt")
     register_tools(server)
     return server
 
@@ -467,9 +461,6 @@ def register_tools(server: FastMCP) -> None:
         server.add_tool(hermes_run_command, meta=tool_meta())
     if env_enabled(ENABLE_SESSION_SEARCH_ENV):
         server.add_tool(hermes_session_search, meta=tool_meta())
-
-
-mcp = build_server()
 
 
 def status() -> dict[str, Any]:
@@ -548,7 +539,19 @@ def main(argv: list[str] | None = None) -> int:
         # Run with uvicorn instead of FastMCP.run() so TLS can be enabled for
         # local-only testing when cert/key are provided.
         import uvicorn
-        app = server.streamable_http_app() if args.http else server.sse_app()
+        if args.http:
+            app = server.streamable_http_app(
+                host=args.host,
+                streamable_http_path="/mcp",
+                stateless_http=True,
+                json_response=True,
+            )
+        else:
+            app = server.sse_app(
+                host=args.host,
+                sse_path="/sse",
+                message_path="/messages/",
+            )
 
         uvicorn.run(
             app,

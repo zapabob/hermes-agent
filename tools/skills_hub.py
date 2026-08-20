@@ -297,19 +297,57 @@ def _resolve_lock_install_path(install_path: str, skill_name: str) -> Path:
     return target
 
 
-def _ssrf_safe_http_get(url: str, *, timeout: int = 20) -> httpx.Response:
+def _ssrf_safe_http_get(
+    url: str,
+    *,
+    timeout: int = 20,
+    headers: Optional[Dict[str, str]] = None,
+    params: Optional[Dict[str, Any]] = None,
+) -> httpx.Response:
     """Fetch one URL with connect-time SSRF validation and no automatic redirects."""
     from tools.url_safety import create_ssrf_safe_client
 
     with create_ssrf_safe_client(timeout=timeout, follow_redirects=False) as client:
-        return client.get(url)
+        return client.get(url, headers=headers, params=params)
 
 
-def _guarded_http_get(url: str, *, timeout: int = 20) -> Optional[httpx.Response]:
-    """Fetch a URL with SSRF and redirect-target validation."""
+def _normalized_origin(url: str) -> Optional[Tuple[str, str, int]]:
+    """Return scheme, normalized hostname, and effective port for a URL."""
+    try:
+        parsed = urlsplit(url)
+        scheme = parsed.scheme.lower()
+        hostname = parsed.hostname
+        if scheme not in {"http", "https"} or not hostname:
+            return None
+        port = parsed.port
+    except ValueError:
+        return None
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    return scheme, hostname.rstrip(".").lower(), port
+
+
+def _guarded_http_get(
+    url: str,
+    *,
+    timeout: int = 20,
+    headers: Optional[Dict[str, str]] = None,
+    params: Optional[Dict[str, Any]] = None,
+) -> Optional[httpx.Response]:
+    """Fetch a URL with per-hop SSRF checks and credential-safe redirects.
+
+    ``headers`` and ``params`` support authenticated GitHub API calls. Query
+    parameters apply only to the first request. Once a redirect leaves the
+    initial origin, Authorization is removed permanently, including HTTPS to
+    HTTP changes on the same host, so credentials cannot ride a CDN or downgrade
+    redirect and cannot reappear on a later hop.
+    """
     from tools.url_safety import SSRFConnectionBlocked
 
     current_url = url
+    current_headers = dict(headers) if headers else None
+    current_params = params
+    initial_origin = _normalized_origin(url)
 
     for _ in range(_MAX_SKILL_FETCH_REDIRECTS + 1):
         if not is_safe_url(current_url):
@@ -326,7 +364,12 @@ def _guarded_http_get(url: str, *, timeout: int = 20) -> Optional[httpx.Response
             return None
 
         try:
-            resp = _ssrf_safe_http_get(current_url, timeout=timeout)
+            resp = _ssrf_safe_http_get(
+                current_url,
+                timeout=timeout,
+                headers=current_headers,
+                params=current_params,
+            )
         except (SSRFConnectionBlocked, httpx.HTTPError) as exc:
             logger.debug("Skills Hub fetch failed for %s: %s", current_url, exc)
             return None
@@ -335,7 +378,15 @@ def _guarded_http_get(url: str, *, timeout: int = 20) -> Optional[httpx.Response
             location = getattr(resp, "headers", {}).get("location")
             if not location:
                 return None
-            current_url = urljoin(current_url, location)
+            next_url = urljoin(current_url, location)
+            if current_headers and _normalized_origin(next_url) != initial_origin:
+                current_headers = {
+                    key: value
+                    for key, value in current_headers.items()
+                    if key.lower() != "authorization"
+                }
+            current_url = next_url
+            current_params = None
             continue
 
         return resp
@@ -818,14 +869,17 @@ class GitHubSource(SkillSource):
 
         headers = self.auth.get_headers()
 
-        # Resolve default branch
+        # Resolve default branch through the per-hop SSRF guard. The token may
+        # be sent to GitHub but never follows a cross-origin redirect.
         try:
-            resp = httpx.get(
+            resp = _guarded_http_get(
                 f"https://api.github.com/repos/{repo}",
-                headers=headers, timeout=15, follow_redirects=True,
+                headers=headers,
+                timeout=15,
             )
-            if resp.status_code != 200:
-                self._check_rate_limit_response(resp)
+            if resp is None or resp.status_code != 200:
+                if resp is not None:
+                    self._check_rate_limit_response(resp)
                 return None
             default_branch = resp.json().get("default_branch", "main")
         except (httpx.HTTPError, ValueError):
@@ -833,13 +887,15 @@ class GitHubSource(SkillSource):
 
         # Fetch recursive tree
         try:
-            resp = httpx.get(
+            resp = _guarded_http_get(
                 f"https://api.github.com/repos/{repo}/git/trees/{default_branch}",
                 params={"recursive": "1"},
-                headers=headers, timeout=30, follow_redirects=True,
+                headers=headers,
+                timeout=30,
             )
-            if resp.status_code != 200:
-                self._check_rate_limit_response(resp)
+            if resp is None or resp.status_code != 200:
+                if resp is not None:
+                    self._check_rate_limit_response(resp)
                 return None
             tree_data = resp.json()
             if tree_data.get("truncated"):
@@ -897,13 +953,22 @@ class GitHubSource(SkillSource):
         last_resp: Optional["httpx.Response"] = None
         for attempt in range(max_retries):
             try:
-                resp = httpx.get(
-                    url, params=params, headers=hdrs,
-                    timeout=timeout, follow_redirects=True,
+                resp = _guarded_http_get(
+                    url,
+                    params=params,
+                    headers=hdrs,
+                    timeout=timeout,
                 )
             except httpx.HTTPError as e:
                 logger.debug("GitHub GET %s failed (attempt %d/%d): %s",
                              url, attempt + 1, max_retries, e)
+                if attempt < max_retries - 1:
+                    time.sleep(backoff)
+                    backoff = min(backoff * 2, 30.0)
+                    continue
+                return None
+
+            if resp is None:
                 if attempt < max_retries - 1:
                     time.sleep(backoff)
                     backoff = min(backoff * 2, 30.0)
@@ -2302,12 +2367,15 @@ class ClawHubSource(SkillSource):
         return deduped
 
     def _exact_slug_meta(self, query: str) -> Optional[SkillMeta]:
-        slug = query.strip().split("/")[-1]
+        query = query.strip()
+        parsed = self._parse_identifier(query)
         query_terms = self._query_terms(query)
         candidates: List[str] = []
 
-        if slug and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", slug):
-            candidates.append(slug)
+        if parsed:
+            candidates.append(parsed[0])
+        elif "/" not in query and self._SLUG_RE.fullmatch(query):
+            candidates.append(query)
 
         if query_terms:
             base_slug = "-".join(query_terms)
@@ -2443,11 +2511,73 @@ class ClawHubSource(SkillSource):
         _write_index_cache(cache_key, [_skill_meta_to_dict(s) for s in final_results])
         return final_results
 
-    def fetch(self, identifier: str) -> Optional[SkillBundle]:
-        slug = identifier.split("/")[-1]
+    _SLUG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*$")
 
-        skill_data = self._get_json(f"{self.BASE_URL}/skills/{slug}")
+    @classmethod
+    def _parse_identifier(cls, identifier: str) -> Optional[Tuple[str, Optional[str]]]:
+        """Return ``(slug, expected_owner)`` for a ClawHub identifier.
+
+        Accepts a bare slug, ``clawhub/<slug>``, ``@owner/slug``, and the
+        clawhub.ai URL path ``owner/skills/slug``. GitHub-style
+        ``owner/repo/skill`` and ``owner/repo/skills/skill`` identifiers
+        are not ClawHub's — claiming them by last path segment installs
+        a same-named skill from a different author.
+        """
+        raw = (identifier or "").strip()
+        if not raw:
+            return None
+        had_at = raw.startswith("@")
+        ident = raw[1:] if had_at else raw
+        if ident.startswith("clawhub/"):
+            ident = ident[len("clawhub/"):]
+        parts = [part for part in ident.split("/") if part]
+        if len(parts) == 1:
+            slug = parts[0]
+            return (slug, None) if cls._SLUG_RE.fullmatch(slug) else None
+        if len(parts) == 2 and had_at:
+            owner, slug = parts
+            if cls._SLUG_RE.fullmatch(owner) and cls._SLUG_RE.fullmatch(slug):
+                return slug, owner
+            return None
+        if len(parts) == 3 and parts[1].lower() == "skills":
+            owner, _, slug = parts
+            if cls._SLUG_RE.fullmatch(owner) and cls._SLUG_RE.fullmatch(slug):
+                return slug, owner
+            return None
+        return None
+
+    @staticmethod
+    def _owner_from_payload(data: Optional[Dict[str, Any]]) -> Optional[str]:
+        if not isinstance(data, dict):
+            return None
+        owner = data.get("owner")
+        if isinstance(owner, dict):
+            handle = owner.get("handle")
+            if isinstance(handle, str) and handle.strip():
+                return handle.strip()
+        if isinstance(owner, str) and owner.strip():
+            return owner.strip()
+        return None
+
+    @classmethod
+    def _owner_matches(cls, expected_owner: Optional[str], data: Optional[Dict[str, Any]]) -> bool:
+        if not expected_owner:
+            return True
+        actual = cls._owner_from_payload(data)
+        if not actual:
+            return True
+        return actual.lower() == expected_owner.lower()
+
+    def fetch(self, identifier: str) -> Optional[SkillBundle]:
+        parsed = self._parse_identifier(identifier)
+        if parsed is None:
+            return None
+        slug, expected_owner = parsed
+
+        skill_data = self._coerce_skill_payload(self._get_json(f"{self.BASE_URL}/skills/{slug}"))
         if not isinstance(skill_data, dict):
+            return None
+        if not self._owner_matches(expected_owner, skill_data):
             return None
 
         latest_version = self._resolve_latest_version(slug, skill_data)
@@ -2486,21 +2616,22 @@ class ClawHubSource(SkillSource):
         )
 
     def inspect(self, identifier: str) -> Optional[SkillMeta]:
-        slug = identifier.split("/")[-1]
+        parsed = self._parse_identifier(identifier)
+        if parsed is None:
+            return None
+        slug, expected_owner = parsed
         data = self._coerce_skill_payload(self._get_json(f"{self.BASE_URL}/skills/{slug}"))
         if not isinstance(data, dict):
+            return None
+        if not self._owner_matches(expected_owner, data):
             return None
 
         tags = self._normalize_tags(data.get("tags", []))
         extra: Dict[str, Any] = {}
         # The detail API returns owner info — capture it so callers can build
         # valid ClawHub URLs (https://clawhub.ai/{owner}/skills/{slug}).
-        owner = data.get("owner")
-        if isinstance(owner, dict):
-            handle = owner.get("handle")
-            if isinstance(handle, str) and handle:
-                extra["owner"] = handle
-        elif isinstance(owner, str) and owner:
+        owner = self._owner_from_payload(data)
+        if owner:
             extra["owner"] = owner
 
         return SkillMeta(
@@ -2597,14 +2728,8 @@ class ClawHubSource(SkillSource):
                 summary = item.get("summary") or item.get("description") or ""
                 tags = self._normalize_tags(item.get("tags", []))
                 extra: Dict[str, Any] = {}
-                # The listing API may include owner info (handle) in future;
-                # capture it if present so we can build valid detail URLs.
-                owner = item.get("owner")
-                if isinstance(owner, dict):
-                    handle = owner.get("handle")
-                    if isinstance(handle, str) and handle:
-                        extra["owner"] = handle
-                elif isinstance(owner, str) and owner:
+                owner = self._owner_from_payload(item)
+                if owner:
                     extra["owner"] = owner
                 results.append(SkillMeta(
                     name=display_name,
@@ -2708,14 +2833,7 @@ class ClawHubSource(SkillSource):
                 data = self._coerce_skill_payload(raw)
                 if not isinstance(data, dict):
                     return None
-                owner = data.get("owner")
-                if isinstance(owner, dict):
-                    handle = owner.get("handle")
-                    if isinstance(handle, str) and handle:
-                        return handle
-                if isinstance(owner, str) and owner:
-                    return owner
-                return None
+                return self._owner_from_payload(data)
 
             if resp.status_code == 429:
                 # Rate-limited — honour Retry-After if present, else backoff.
@@ -2868,14 +2986,17 @@ class ClawHubSource(SkillSource):
 
         files: Dict[str, str] = {}
         max_retries = 3
+        download_url = f"{self.BASE_URL}/download"
+        from urllib.parse import urlencode
+
+        download_url_with_qs = (
+            f"{download_url}?{urlencode({'slug': slug, 'version': version})}"
+        )
         for attempt in range(max_retries):
             try:
-                resp = httpx.get(
-                    f"{self.BASE_URL}/download",
-                    params={"slug": slug, "version": version},
-                    timeout=30,
-                    follow_redirects=True,
-                )
+                resp = _guarded_http_get(download_url_with_qs, timeout=30)
+                if resp is None:
+                    return files
                 if resp.status_code == 429:
                     try:
                         retry_after = int(resp.headers.get("retry-after", "5"))

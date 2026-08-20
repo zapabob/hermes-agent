@@ -216,6 +216,24 @@ class TestGatewayRuntimeStatus:
         assert platforms["telegram"] == {"state": "connected"}
         assert platforms["reviewer:slack"]["state"] == "connected"
 
+    def test_clear_profile_platforms_filters_supplied_mapping_atomically(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+        status.write_runtime_status(
+            platforms={
+                "telegram": {"state": "connected"},
+                "reviewer:discord": {"state": "fatal"},
+                "old:discord": {"state": "fatal"},
+            },
+            clear_profile_platforms=True,
+        )
+
+        assert status.read_runtime_status()["platforms"] == {
+            "telegram": {"state": "connected"}
+        }
+
     def test_platform_writes_are_stamped_with_writer_identity(
         self, tmp_path, monkeypatch
     ):

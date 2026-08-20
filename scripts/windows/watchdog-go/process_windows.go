@@ -519,7 +519,7 @@ func restartPackagedDesktop(cfg Config, logger *Logger, bm *BackendManager) bool
 			skipPID = managed.PID
 		}
 	}
-	// Desktop is gone — reap leftover ephemeral serves (managed :9118 is skipped).
+	// Desktop is gone — reap leftover ephemeral serves (managed :9119 is skipped).
 	stopOrphanDesktopBackends(logger, cfg, skipPID)
 	time.Sleep(1 * time.Second)
 	if bm != nil {

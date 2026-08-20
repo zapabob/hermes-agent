@@ -199,7 +199,7 @@ try {
     Register-HermesBootTask `
         -TaskName "HermesGoWatchdogBootAutoStart" `
         -Description "Boot auto-start Hermes Desktop/backend watchdog and configured local embedding server" `
-        -PowerShellCommand "$envPrefix& '$GoWatchdogScript' -HermesRoot '$RepoRoot' -HermesHome '$HermesHome' -ManagedBackendPort 9118" `
+        -PowerShellCommand "$envPrefix& '$GoWatchdogScript' -HermesRoot '$RepoRoot' -HermesHome '$HermesHome' -ManagedBackendPort 9119" `
         -WorkingDirectory $RepoRoot `
         -DelaySeconds 15
 

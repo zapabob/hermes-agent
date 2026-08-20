@@ -41,6 +41,7 @@ from agent.model_metadata import (
 )
 from agent.redact import redact_sensitive_text
 from agent.turn_context import drop_stale_api_content
+from agent.tool_guardrails import identical_result_reference_call_id
 from tools.todo_tool import TODO_INJECTION_HEADER
 
 logger = logging.getLogger(__name__)
@@ -349,6 +350,147 @@ _SUMMARY_END_MARKER = (
 # at the start of the message, so _is_context_summary_content must look past it.
 _MERGED_PRIOR_CONTEXT_HEADER = "[PRIOR CONTEXT — for reference only; not a new message]"
 _MERGED_SUMMARY_DELIMITER = "[END OF PRIOR CONTEXT — COMPACTION SUMMARY BELOW]"
+
+_SALVAGE_SUMMARY_MAX_CHARS = 8_000
+_SALVAGE_KEEP_RECENT_TOOLS = 2
+
+
+def _looks_like_compaction_summary(msg: Dict[str, Any], content: str) -> bool:
+    # Only cap a standalone handoff. Merged carriers preserve a real tail ask
+    # in the same content string; truncating those could delete live user text.
+    if not content.rstrip().endswith(_SUMMARY_END_MARKER):
+        return False
+    if content.startswith(_MERGED_PRIOR_CONTEXT_HEADER):
+        return False
+    # Content heuristics alone must never authorize mutating a live turn.
+    # Compressor-generated summaries carry this private marker; ordinary
+    # user input — and live assistant replies or kept tool bodies that
+    # merely quote a summary header/marker — do not. Tool messages are
+    # handled exclusively by the stub/keep-recent pass, never the cap.
+    if msg.get("role") == "tool":
+        return False
+    if (
+        msg.get("role") in ("user", "assistant")
+        and not msg.get(COMPRESSED_SUMMARY_METADATA_KEY)
+    ):
+        return False
+    head = content[:280]
+    return (
+        bool(msg.get(COMPRESSED_SUMMARY_METADATA_KEY))
+        or "CONTEXT COMPACTION" in head
+        or "[CONTEXT COMPACTION]" in head
+        or "Conversation Summary" in head
+    )
+
+
+def _salvage_reduce_todo_snapshot(out: List[Dict[str, Any]]) -> None:
+    """Last-resort shrink: reduce or drop the synthetic todo snapshot.
+
+    The snapshot is the only in-transcript todo re-injection at a compaction
+    boundary, and since 7a16840add the pruned-skill reload notice is coupled
+    into the same string — so it is only touched when the cheaper shrink ops
+    could not get under budget. When the snapshot carries a reload notice,
+    keep just the notice (the coupling must survive salvage); otherwise drop
+    the row entirely.
+    """
+    from agent.conversation_compression import _PRUNED_SKILL_RELOAD_NOTICE_HEADER
+
+    for i in range(len(out) - 1, -1, -1):
+        msg = out[i]
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("_todo_snapshot_synthetic") and msg.get("role") == "user":
+            content = msg.get("content")
+            notice_idx = (
+                content.find(_PRUNED_SKILL_RELOAD_NOTICE_HEADER)
+                if isinstance(content, str)
+                else -1
+            )
+            if isinstance(content, str) and notice_idx >= 0:
+                msg["content"] = content[notice_idx:]
+            else:
+                del out[i]
+            return
+
+
+def salvage_grown_transcript(
+    original: List[Dict[str, Any]],
+    candidate: List[Dict[str, Any]],
+    budget: Optional[int] = None,
+) -> Optional[List[Dict[str, Any]]]:
+    """Mechanically shrink a compression candidate, or return ``None``.
+
+    Already-compacted middles can be summarized slightly larger while retained
+    tool bodies, stale reasoning, or a synthetic todo snapshot tip the final
+    candidate over the input size. Work on copies and admit the salvage only
+    when the same rough estimator proves it is strictly smaller than the input.
+
+    Shrink order is cheapest-information-loss first: stale reasoning keys and
+    codex replay sidecars, then old tool bodies, then an oversized summary cap.
+    The synthetic todo snapshot (which carries the pruned-skill reload notice,
+    see ``_salvage_reduce_todo_snapshot``) is only reduced as a LAST resort
+    when everything else still leaves the candidate at or over budget.
+    """
+    if not candidate or not original:
+        return None
+    if budget is None:
+        budget = estimate_messages_tokens_rough(original)
+    if budget <= 0:
+        return None
+
+    out: List[Dict[str, Any]] = []
+    tool_indices: List[int] = []
+    last_assistant_idx = -1
+    for msg in candidate:
+        if not isinstance(msg, dict):
+            out.append(msg)
+            continue
+        copied = dict(msg)
+        out.append(copied)
+        role = copied.get("role")
+        if role == "tool":
+            tool_indices.append(len(out) - 1)
+        elif role == "assistant":
+            last_assistant_idx = len(out) - 1
+
+    salvage_reasoning_keys = _NEWEST_TURN_ONLY_BUDGET_KEYS + ("reasoning_details",)
+    keep_tools = set(tool_indices[-_SALVAGE_KEEP_RECENT_TOOLS:])
+    for index, msg in enumerate(out):
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("role") == "assistant" and index != last_assistant_idx:
+            for key in salvage_reasoning_keys:
+                msg.pop(key, None)
+        if msg.get("role") == "tool" and index not in keep_tools:
+            content = msg.get("content")
+            if isinstance(content, str) and len(content) > _PRUNE_MIN_CHARS:
+                msg["content"] = _PRUNED_TOOL_PLACEHOLDER
+        content = msg.get("content")
+        if (
+            isinstance(content, str)
+            and len(content) > _SALVAGE_SUMMARY_MAX_CHARS
+            and _looks_like_compaction_summary(msg, content)
+        ):
+            msg["content"] = (
+                content[:_SALVAGE_SUMMARY_MAX_CHARS].rstrip()
+                + "\n…[summary truncated so compaction can shrink]\n\n"
+                + _SUMMARY_END_MARKER
+            )
+    # Heavier codex replay sidecars (encrypted reasoning blobs) — reuse the
+    # proven prune with its last-user-turn safety boundary (#71058).
+    _prune_stale_reasoning_replay(out)
+
+    if estimate_messages_tokens_rough(out) >= budget:
+        _salvage_reduce_todo_snapshot(out)
+
+    if not any(
+        isinstance(message, dict) and message.get("role") == "user"
+        for message in out
+    ):
+        return None
+    if estimate_messages_tokens_rough(out) < budget:
+        return out
+    return None
 
 # Handoff prefixes that shipped in earlier releases. A summary persisted under
 # one of these can be inherited into a resumed lineage (#35344); when it is
@@ -1885,6 +2027,7 @@ class ContextCompressor(ContextEngine):
         self._cooldown_persist_failed = False
         self._last_summary_error = None
         self._last_compress_aborted = False
+        self._last_compress_refused_would_grow = False
         self.last_real_prompt_tokens = 0
         self.last_compression_rough_tokens = 0
         self.last_rough_tokens_when_real_prompt_fit = 0
@@ -2167,6 +2310,7 @@ class ContextCompressor(ContextEngine):
         self._summary_failure_cooldown_until = 0.0
         self._cooldown_persist_failed = False
         self._last_compress_aborted = False
+        self._last_compress_refused_would_grow = False
         self._context_probed = False
         self._context_probe_persistable = False
         self.last_real_prompt_tokens = 0
@@ -2370,6 +2514,31 @@ class ContextCompressor(ContextEngine):
             return
         self._ineffective_compression_count = count
         self._persist_ineffective_compression_count()
+
+    def record_rejected_compaction(self) -> None:
+        """Record one compaction whose result was REJECTED before committing.
+
+        The anti-growth guard in the commit layer (conversation_compression)
+        discards a candidate that would grow the transcript and keeps the
+        original. Without recording the attempt, the anti-thrash breaker
+        never sees a strike, so automatic compression retries the SAME
+        unchanged transcript on every turn — same summary request, same
+        refusal, same user-facing warning (#88568). This counts one
+        ineffective strike (persisted, so the normal >= 2 latch and its
+        recovery window apply) WITHOUT arming post-compaction real-usage
+        verification — nothing was committed, so there is no new compaction
+        to verify — and without touching the fallback-summary streak (no
+        summary was accepted).
+        """
+        self._record_ineffective_compression_verdict(
+            self._ineffective_compression_count + 1
+        )
+        if not self.quiet_mode:
+            logger.warning(
+                "Compaction rejected before commit (would grow the "
+                "transcript); ineffective_compression_count=%d",
+                self._ineffective_compression_count,
+            )
 
     def record_completed_compaction(
         self, *, used_fallback: bool = False, feasibility_skip: bool = False,
@@ -3488,6 +3657,39 @@ class ContextCompressor(ContextEngine):
             prune_boundary = len(result) - protected_count
         else:
             prune_boundary = len(result) - protect_tail_count
+
+        # Official identical-result stubs point back to the first full result
+        # in the turn.  Compression normally keeps the newest duplicate full
+        # and rewrites older copies, but the stub makes those contents differ:
+        # the old referenced payload can fall into the summarized middle while
+        # the protected tail contains only a dangling reference.  Rehydrate the
+        # newest stub from its referenced message before the ordinary dedupe
+        # pass.  Dedupe then demotes the older copy and keeps the newest payload
+        # verbatim, preserving both the compressor's established policy and the
+        # guardrail's append-only runtime behavior.  Persisted-output previews
+        # are copied the same way, retaining their durable spill path.
+        call_id_to_result_index = {
+            str(msg.get("tool_call_id") or ""): i
+            for i, msg in enumerate(result)
+            if msg.get("role") == "tool" and msg.get("tool_call_id")
+        }
+        rehydrated_references: set[str] = set()
+        for i in range(len(result) - 1, -1, -1):
+            msg = result[i]
+            if msg.get("role") != "tool":
+                continue
+            reference_id = identical_result_reference_call_id(msg.get("content"))
+            if not reference_id or reference_id in rehydrated_references:
+                continue
+            original_idx = call_id_to_result_index.get(reference_id)
+            if original_idx is None or original_idx == i:
+                continue
+            original_content = result[original_idx].get("content")
+            if not isinstance(original_content, str):
+                continue
+            result[i] = {**msg, "content": original_content}
+            drop_stale_api_content(result[i])
+            rehydrated_references.add(reference_id)
 
         # Pass 1: Deduplicate identical tool results.
         # When the same file is read multiple times, keep only the most recent
@@ -6927,6 +7129,7 @@ This compaction should PRIORITISE preserving all information related to the focu
         self._last_aux_model_failure_error = None
         self._last_aux_model_failure_model = None
         self._last_compress_aborted = False
+        self._last_compress_refused_would_grow = False
         self._last_compression_made_progress = False
         # NOTE: do NOT reset _last_summary_auth_failure or
         # _last_summary_network_failure here.  These flags are set by

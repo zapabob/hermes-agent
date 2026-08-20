@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -32,3 +35,60 @@ def test_allow_preflight_blockers_flag_can_be_enabled():
     args = sync_all.parse_args(["--merge", "--allow-preflight-blockers"])
 
     assert args.allow_preflight_blockers is True
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--dry-run", "--merge"],
+        ["--dry-run", "--openclaw-execute"],
+        ["--dry-run", "--allow-preflight-blockers"],
+    ],
+)
+def test_dry_run_rejects_write_capable_modes(argv):
+    sync_all = load_sync_all_module()
+
+    with pytest.raises(SystemExit) as exc_info:
+        sync_all.parse_args(argv)
+
+    assert exc_info.value.code == 2
+
+
+def test_working_tree_clean_rejects_untracked_paths(monkeypatch):
+    sync_all = load_sync_all_module()
+
+    monkeypatch.setattr(
+        sync_all,
+        "_git",
+        lambda *args, **kwargs: type("Proc", (), {"returncode": 0, "stdout": "?? local.txt\n"})(),
+    )
+
+    assert sync_all._working_tree_clean() is False
+
+
+def test_working_tree_clean_accepts_empty_porcelain(monkeypatch):
+    sync_all = load_sync_all_module()
+
+    monkeypatch.setattr(
+        sync_all,
+        "_git",
+        lambda *args, **kwargs: type("Proc", (), {"returncode": 0, "stdout": ""})(),
+    )
+
+    assert sync_all._working_tree_clean() is True
+
+
+def test_collect_blockers_includes_unresolved_conflicts(tmp_path):
+    sync_all = load_sync_all_module()
+    report_path = tmp_path / "resolver-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "blocked_paths": ["manual.py"],
+                "unresolved_conflicts": ["conflicted.py"],
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert sync_all._collect_blockers(report_path) == ["manual.py", "conflicted.py"]

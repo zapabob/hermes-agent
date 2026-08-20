@@ -58,7 +58,10 @@ The ONLY import surface is `@hermes/plugin-sdk` (plus `react` /
   `awaitingResponse`, `busyBySession`, `cwd`, `gateway` (socket state, not
   turn-busy), `model`, `profile`, `viewport`, plus the tile-aware focused
   session atoms: `focusedSessionId` (runtime id — key for `session.*` RPC),
-  `focusedStoredSessionId` (durable id — navigation / list matching), and
+  `focusedStoredSessionId` (durable id — navigation / list matching),
+  `focusedSessionProfile` (owner profile of the focused chat — prefer over
+  `profile` for per-bot/profile readouts; `profile` is the gateway socket's
+  home, which does not move with tab focus), and
   `focusedUsage` (live streamed `UsageStats` of the focused session, no RPC
   needed). `busy` is true while the focused chat is working after a send
   (thinking and streaming). `awaitingResponse` is true until the first
@@ -103,10 +106,15 @@ The ONLY import surface is `@hermes/plugin-sdk` (plus `react` /
   user's instructions) — it won't discover the name on its own.
 - `ctx.storage.get/set/remove` — persistence namespaced to your plugin.
 - `ctx.os` — the curated OS door, attributed to your plugin:
-  `ctx.os.notify({ title, body?, silent? })` posts a native OS notification.
-  Fires only while the user is away from Hermes (use `host.notify` for the
-  in-app toast); gated by Settings ▸ Notifications ▸ "Plugin notifications"
-  and throttled per plugin — reserve it for genuinely notable events.
+  `ctx.os.notify({ title, body?, silent?, icon?, activate?, onActivate?, actions? })`
+  posts a native OS notification. Fires only while the user is away from Hermes
+  (use `host.notify` for the in-app toast); gated by Settings ▸ Notifications ▸
+  "Plugin notifications" and throttled per plugin — reserve it for genuinely
+  notable events. `activate` accepts a plugin deep link
+  (`hermes://index-network/intent/1`), a hash path (`/index-network/intent/1`),
+  or `{ path, params }` — same resolver as OS deep links. Action buttons may
+  set their own `activate` or an `onAction`
+  callback (renderer-only; only the action id crosses IPC).
   `ctx.os.openExternal(url)`, `ctx.os.revealPath(path)`, and
   `ctx.os.writeClipboard(text)` resolve `false` (never throw) when the
   capability isn't available.

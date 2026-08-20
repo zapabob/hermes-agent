@@ -8,3 +8,7 @@ packages:
 allowBuilds:
   agent-browser: set this to true or false
 
+overrides:
+  # tar <7.5.21 is affected by the open Dependabot security advisories.
+  # Keep pnpm's graph aligned with the existing npm override at the root.
+  tar: 7.5.22

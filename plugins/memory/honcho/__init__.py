@@ -562,8 +562,14 @@ class HonchoMemoryProvider(MemoryProvider):
                         return
                     if r and r.strip():
                         with self._prefetch_lock:
-                            self._prefetch_result = r
-                            self._prefetch_result_fired_at = 0
+                            # A query-aware result may have completed while the
+                            # generic startup prewarm was still running.  The
+                            # prewarm is the older, less-specific answer and
+                            # must never overwrite a result already queued for
+                            # the next turn.
+                            if not self._prefetch_result:
+                                self._prefetch_result = r
+                                self._prefetch_result_fired_at = 0
                         self._last_dialectic_turn = 0
                         self._dialectic_empty_streak = 0
                     else:

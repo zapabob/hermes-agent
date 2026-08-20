@@ -605,6 +605,15 @@ def build_turn_context(
     # NOTE: _turns_since_memory and _iters_since_skill are NOT reset here.
     agent.iteration_budget = IterationBudget(agent.max_iterations)
 
+    # Wall-clock run budget: per-run_conversation clock. Only stamped when a
+    # budget is configured so the default path stays clock-free; the wrap-up
+    # latch resets each turn (one notice per run, not per session).
+    if getattr(agent, "run_budget_seconds", None):
+        agent._run_budget_started_at = time.time()
+    else:
+        agent._run_budget_started_at = None
+    agent._run_budget_wrapup_injected = False
+
     # Log conversation turn start for debugging/observability.
     _preview_text = summarize_user_message_for_log(user_message)
     _msg_preview = (_preview_text[:80] + "...") if len(_preview_text) > 80 else _preview_text
@@ -1154,6 +1163,45 @@ def build_turn_context(
                     agent._last_content_with_tools = None
                     agent._last_content_tools_all_housekeeping = False
                     agent._mute_post_response = False
+    elif not agent.compression_enabled:
+        # Uncompressed session guard (#89297): when compression is explicitly
+        # disabled, sessions can grow past the model's context window across
+        # hundreds of messages with nothing to shrink them. The warning itself
+        # fires from the conversation loop's pre-API site, which reuses the
+        # unconditionally computed request estimate at zero marginal cost and
+        # covers both turn-start and mid-turn growth (every provider request
+        # passes through it). Here we only RE-ARM the dedup once the session
+        # is back under the window, so the guard can warn again after the
+        # user compacts (/compress with force=True works with compression
+        # disabled) and the context later regrows past the limit.
+        _ctx_len = getattr(
+            getattr(agent, "context_compressor", None), "context_length", None
+        )
+        _warn_key = ("uncompressed_ctx_overflow", _ctx_len)
+        # Only the uncompressed-session warning is re-armed here. Other
+        # context warnings (for example a compression cooldown) belong to
+        # their own lifecycle and must not be cleared by this branch.
+        if (
+            isinstance(_ctx_len, int)
+            and _ctx_len > 0
+            and getattr(agent, "_last_ctx_overflow_warn", None) == _warn_key
+        ):
+            # The request window includes the cached system prompt and tool
+            # schemas, not just transcript rows. Re-arm from the same
+            # overhead-aware estimator used by the provider call; a cheap
+            # message-character gate would incorrectly clear the warning for
+            # a tiny transcript with a large system/tool prefix.
+            _uncompressed_tokens = estimate_request_tokens_rough(
+                messages,
+                system_prompt=active_system_prompt or "",
+                tools=agent.tools or None,
+            )
+            if _uncompressed_tokens <= _ctx_len:
+                _clear_warn = getattr(
+                    agent, "_clear_context_overflow_warn", None
+                )
+                if callable(_clear_warn):
+                    _clear_warn()
 
     if _preflight_compressed:
         # Compression rebuilt the list (tail messages are fresh compaction

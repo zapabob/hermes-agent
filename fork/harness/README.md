@@ -38,10 +38,15 @@ Moving these directories breaks merge replay and scheduled vendor sync jobs.
 ## Typical workflow
 
 ```powershell
-py -3 scripts\sync_all.py --dry-run --allow-preflight-blockers
+py -3 scripts\sync_all.py --dry-run
+$preMergeSha = git rev-parse HEAD
 py -3 scripts\sync_all.py --merge --target main --allow-preflight-blockers
-py -3 scripts\merge_tools\apply_post_merge_overlay.py --upstream-ref upstream/main
+py -3 scripts\merge_tools\apply_post_merge_overlay.py --upstream-ref upstream/main --old-head $preMergeSha
 ```
+
+Only pass `--allow-preflight-blockers` after reviewing and approving every
+`manual_api_followup` path in the dry-run report. The standalone overlay command
+is for recovery or an explicit re-run; `sync_all.py --merge` applies it normally.
 
 After merge, run targeted tests:
 

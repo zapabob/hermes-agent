@@ -254,22 +254,36 @@ def _list_registered_web_providers():
 def _get_backend(capability: str = "search") -> str:
     """Determine which web backend to use (shared fallback).
 
-    Reads ``web.backend`` from config.yaml (set by ``hermes tools``).
-    Falls back to whichever API key is present for users who configured
-    keys manually without running setup.
-
-    ``capability`` ("search" | "extract") only affects auto-detect: for
-    ``extract`` we skip search-only backends (``_SEARCH_ONLY_BACKENDS``) so a
-    search-only credential never shadows the keyless Parallel free-MCP extract
-    fallback. An explicit ``web.backend`` value is honored as-is (explicit wins,
-    surfacing that backend's own search-only error rather than rerouting).
+    Reads ``web.backend`` from config.yaml (set by ``hermes tools``). A
+    stored backend name is returned as-is — no availability probe, no
+    fallback — so the vendor path can raise its own honest error when the
+    selection is broken. The credential/entitlement autodetect ladder runs
+    ONLY when no web selection has ever been stored.
     """
     configured = (_load_web_config().get("backend") or "").lower().strip()
-    if configured in _LEGACY_WEB_BACKENDS or _registered_web_provider(configured) is not None:
+    if configured:
+        # Strict: the stored selection is final, known name or not — an
+        # unknown/typoed name surfaces as the vendor path's honest error
+        # rather than silently rerouting through the credential ladder.
+        # The managed "Nous Subscription" selection ("nous") is serviced by
+        # the firecrawl provider, whose client resolver routes it through
+        # the managed Tool Gateway.
+        from tools.tool_backend_helpers import NOUS_MANAGED_PROVIDER
+
+        if configured == NOUS_MANAGED_PROVIDER:
+            return "firecrawl"
         return configured
 
-    # Fallback for manual / legacy config — pick the highest-priority
-    # available backend. Explicit user credentials (TAVILY_API_KEY etc.)
+    from tools.tool_backend_helpers import selection_exists
+
+    if selection_exists("web"):
+        # A web selection exists (e.g. use_gateway key or per-capability
+        # backends) but the shared backend name is empty — keep the
+        # firecrawl default rather than credential-laddering.
+        return "firecrawl"
+
+    # Never-configured install — pick the highest-priority available
+    # backend. Explicit user credentials (TAVILY_API_KEY etc.)
     # beat the managed-tool-gateway probe so a deliberate setup is not
     # pre-empted by a Nous OAuth token whose subscription tier may not
     # actually grant web-search access (the gateway then fails at runtime
@@ -313,7 +327,33 @@ def _get_backend(capability: str = "search") -> str:
         except Exception as exc:  # noqa: BLE001 — a broken provider is skipped
             logger.debug("web provider %r.is_available() raised: %s", provider.name, exc)
 
-    return "parallel"
+    # Keyless free-tier walk — zero credentials anywhere. Providers with a
+    # public anonymous endpoint (Parallel, Exa — see
+    # plugins/web/keyless_mcp.py) can still serve, unless the user disabled
+    # the tier via ``web.keyless_fallback: false``. Strictly last so it
+    # never pre-empts any keyed/importable backend above. Discovery must
+    # run first — this path is reachable from contexts that haven't loaded
+    # plugins yet (subprocess agent runs, delegate children, scripts).
+    try:
+        _ensure_web_plugins_loaded()
+        from agent.web_search_registry import _keyless_preference, _keyless_tier_enabled
+
+        if _keyless_tier_enabled():
+            for name in _keyless_preference():
+                provider = _registered_web_provider(name)
+                if provider is None:
+                    continue
+                try:
+                    if provider.is_keyless_available():
+                        return name
+                except Exception as exc:  # noqa: BLE001 — skip broken provider
+                    logger.debug(
+                        "web provider %r.is_keyless_available() raised: %s", name, exc
+                    )
+    except Exception as exc:  # noqa: BLE001 — registry optional; never fatal
+        logger.debug("keyless fallback walk failed: %s", exc)
+
+    return "firecrawl"  # default (backward compat)
 
 
 def _get_search_backend() -> str:
@@ -344,13 +384,12 @@ def _get_extract_backend() -> str:
 def _get_capability_backend(capability: str) -> str:
     """Shared helper for per-capability backend selection.
 
-    Reads ``web.{capability}_backend`` from config. Any explicit value is
-    honored **regardless of availability** — including unrecognized typos like
-    ``parrallel`` — so the dispatcher surfaces that backend's own setup/config
-    error rather than silently rerouting to the keyless Parallel default (which
-    would send user queries to a different provider and hide the
-    misconfiguration). This matches ``web_search_registry``'s "explicit config
-    wins" rule. Only an *unset* value falls through to ``_get_backend()``.
+    Reads ``web.{capability}_backend`` from config; a stored value is
+    returned unconditionally (strict selection — no availability probe).
+    A selected-but-broken backend surfaces the vendor path's honest error
+    instead of being silently replaced by whatever the credential ladder
+    finds. Falls through to the shared ``_get_backend()`` only when no
+    per-capability override is stored.
     """
     cfg = _load_web_config()
     specific = (cfg.get(f"{capability}_backend") or "").lower().strip()
@@ -830,6 +869,7 @@ def web_search_tool(query: str, limit: int = 5) -> str:
         _ensure_web_plugins_loaded()
         from agent.web_search_registry import (
             get_active_search_provider,
+            get_fallback_provider,
             get_provider as _wsp_get_provider,
             _disabled_web_plugin_for,
         )
@@ -837,9 +877,35 @@ def web_search_tool(query: str, limit: int = 5) -> str:
         backend = _get_search_backend()
         provider = _wsp_get_provider(backend) if backend else None
         if provider is None or not provider.supports_search():
-            # Fall back to availability-walked active provider when the
-            # configured backend isn't a registered search provider (typo,
-            # uninstalled plugin, or capability mismatch).
+            from tools.tool_backend_helpers import (
+                selection_error,
+                selection_exists,
+            )
+
+            if provider is None and backend and selection_exists("web"):
+                disabled_key = _disabled_web_plugin_for(capability="search")
+                if disabled_key:
+                    _vendor = disabled_key.split("/", 1)[-1]
+                    error_text = (
+                        f"web.search_backend is set to '{_vendor}', but its "
+                        f"plugin ('{disabled_key}') is disabled in config. "
+                        f"Re-enable it with `hermes plugins enable {disabled_key}` "
+                        "(or remove it from plugins.disabled)."
+                    )
+                else:
+                    error_text = selection_error(
+                        "web",
+                        f"'{backend}'",
+                        "no registered web search provider has that name",
+                    )
+                response_data = {"success": False, "error": error_text}
+                result_json = json.dumps(response_data, indent=2, ensure_ascii=False)
+                debug_call_data["error"] = error_text
+                _debug.log_call("web_search_tool", debug_call_data)
+                _debug.save()
+                return result_json
+            # Never-configured install: fall back to the availability-walked
+            # active provider (legacy autodetect behavior).
             provider = get_active_search_provider()
 
         if provider is None:
@@ -873,23 +939,37 @@ def web_search_tool(query: str, limit: int = 5) -> str:
             )
             response_data = provider.search(query, limit)
 
-            # Keep the configured provider as the primary path. Only a
-            # genuine provider failure/empty result enters the local
-            # CloakBrowser fallback; this avoids changing normal routing.
+            # Keep the configured provider as the primary path. An automatic
+            # retry is allowed only when no provider was explicitly selected,
+            # and it must be a different provider. This is important for the
+            # fork's CloakBrowser default: its old fallback called CloakBrowser
+            # again, which could never recover a provider-local failure.
             if not response_data.get("success") or not response_data.get("data", {}).get("web"):
-                from plugins.web.cloakbrowser.fallback import (
-                    manual_browser_hint,
-                    search_after_failure,
-                )
-
                 primary_error = response_data.get("error", "empty search result")
-                fallback_data = search_after_failure(query, limit)
-                if fallback_data.get("success"):
-                    response_data = fallback_data
+                fallback_provider = get_fallback_provider(
+                    "search", exclude=getattr(provider, "name", None)
+                )
+                if fallback_provider is not None:
+                    logger.info(
+                        "Web search retry via %s after %s failed",
+                        fallback_provider.name,
+                        provider.name,
+                    )
+                    fallback_data = fallback_provider.search(query, limit)
+                    if fallback_data.get("success") and fallback_data.get("data", {}).get("web"):
+                        fallback_data.setdefault(
+                            "fallback", {"provider": fallback_provider.name, "automatic": True}
+                        )
+                        response_data = fallback_data
+                    else:
+                        response_data["error"] = (
+                            f"{primary_error}; {fallback_data.get('error', 'fallback provider failed')}"
+                        )
                 else:
+                    from plugins.web.cloakbrowser.fallback import manual_browser_hint
+
                     response_data["error"] = (
-                        f"{primary_error}; {fallback_data.get('error', 'CloakBrowser failed')}. "
-                        + manual_browser_hint(query)
+                        f"{primary_error}. " + manual_browser_hint(query)
                     )
 
         debug_call_data["results_count"] = len(response_data.get("data", {}).get("web", []))
@@ -1041,6 +1121,7 @@ async def web_extract_tool(
             _ensure_web_plugins_loaded()
             from agent.web_search_registry import (
                 get_active_extract_provider,
+                get_fallback_provider,
                 get_provider as _wsp_get_provider,
                 _disabled_web_plugin_for,
             )
@@ -1064,6 +1145,35 @@ async def web_extract_tool(
                                 "firecrawl, tavily, exa, or parallel."
                             ),
                         },
+                        ensure_ascii=False,
+                    )
+                from tools.tool_backend_helpers import (
+                    selection_error,
+                    selection_exists,
+                )
+
+                if backend and selection_exists("web"):
+                    # Strict selection: a stored-but-unregistered backend
+                    # errors by name instead of silently switching to
+                    # whatever the availability walk finds.
+                    disabled_key = _disabled_web_plugin_for(capability="extract")
+                    if disabled_key:
+                        _vendor = disabled_key.split("/", 1)[-1]
+                        error_text = (
+                            f"web.extract_backend is set to '{_vendor}', but "
+                            f"its plugin ('{disabled_key}') is disabled in "
+                            f"config. Re-enable it with `hermes plugins "
+                            f"enable {disabled_key}` (or remove it from "
+                            "plugins.disabled)."
+                        )
+                    else:
+                        error_text = selection_error(
+                            "web",
+                            f"'{backend}'",
+                            "no registered web extract provider has that name",
+                        )
+                    return json.dumps(
+                        {"success": False, "error": error_text},
                         ensure_ascii=False,
                     )
                 provider = get_active_extract_provider()
@@ -1116,6 +1226,43 @@ async def web_extract_tool(
                 results = await asyncio.to_thread(
                     provider.extract, safe_urls, format=format
                 )
+
+            # Automatic rotation is opt-in through the absence of an
+            # explicit backend selection. Retry only a wholly failed/empty
+            # batch, and exclude the provider that just ran so a CloakBrowser
+            # failure cannot recurse into the same CloakBrowser path.
+            extraction_ok = isinstance(results, list) and any(
+                isinstance(item, dict)
+                and item.get("content")
+                and not item.get("error")
+                for item in results
+            )
+            if not extraction_ok:
+                fallback_provider = get_fallback_provider(
+                    "extract", exclude=getattr(provider, "name", None)
+                )
+                if fallback_provider is not None:
+                    logger.info(
+                        "Web extract retry via %s after %s failed",
+                        fallback_provider.name,
+                        provider.name,
+                    )
+                    if inspect.iscoroutinefunction(fallback_provider.extract):
+                        fallback_results = await fallback_provider.extract(
+                            safe_urls, format=format
+                        )
+                    else:
+                        fallback_results = await asyncio.to_thread(
+                            fallback_provider.extract, safe_urls, format=format
+                        )
+                    fallback_ok = isinstance(fallback_results, list) and any(
+                        isinstance(item, dict)
+                        and item.get("content")
+                        and not item.get("error")
+                        for item in fallback_results
+                    )
+                    if fallback_ok:
+                        results = fallback_results
 
         # Reconstruct the original input order across invalid, blocked, and
         # provider-processed entries. Providers are expected to preserve the
@@ -1243,8 +1390,14 @@ def check_web_api_key() -> bool:
     # Any plugin-registered provider the registry considers active for either
     # capability. Delegating to the registry's own availability-filtered
     # resolvers keeps a single authority for "is a custom provider usable"
-    # rather than re-implementing the walk here.
+    # rather than re-implementing the walk here. This also covers the
+    # keyless free tier (Parallel/Exa anonymous MCP endpoints): the registry
+    # walk falls back to keyless-capable providers when nothing is keyed,
+    # so a zero-credential install still lights the web tools up. Discovery
+    # must run first — check_fn fires at tool-registration time, before any
+    # dispatch has populated the registry.
     try:
+        _ensure_web_plugins_loaded()
         from agent.web_search_registry import (
             get_active_search_provider,
             get_active_extract_provider,

@@ -34,7 +34,7 @@ from urllib.parse import quote
 
 # The source identifier used for error-synthesis exclusion. This must
 # match (as a normalized substring) the job name as it appears in the
-# GitHub Actions API. The ci.yml job key is ``review-labels`` with
+# GitHub Actions API. The ci.yaml job key is ``review-labels`` with
 # ``name: Review label gate``, and the reusable workflow's job is also
 # ``name: Review label gate``, so the API shows the job as
 # "Review label gate / Review label gate". Normalizing "review-label-gate"

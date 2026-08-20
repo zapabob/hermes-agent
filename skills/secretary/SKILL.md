@@ -1,3 +1,17 @@
+---
+name: secretary
+description: "Coordinate A2A agents with deterministic greetings."
+version: 0.1.0
+author: Hermes Agent
+license: MIT
+platforms: [linux, macos, windows]
+metadata:
+  hermes:
+    tags: [secretary, a2a, coordination, agents, llmops]
+    category: autonomous-ai-agents
+    related_skills: [hermes-agent]
+---
+
 # secretary
 
 **Secretary bot with seed42 memory base and random topic greetings for A2A agents**

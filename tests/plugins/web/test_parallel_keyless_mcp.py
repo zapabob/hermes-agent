@@ -238,15 +238,18 @@ class TestProviderKeylessSearch:
     def test_search_without_key_uses_mcp(self, monkeypatch):
         monkeypatch.delenv("PARALLEL_API_KEY", raising=False)
         captured = {}
+        import plugins.web.keyless_mcp as km
 
-        def _fake(query, limit, api_key):
-            captured.update(query=query, limit=limit, api_key=api_key)
+        def _fake(query, limit):
+            captured.update(query=query, limit=limit)
             return {"success": True, "data": {"web": []}}
 
-        monkeypatch.setattr(pp, "_mcp_web_search", _fake)
+        # The provider delegates keyless transport to the shared MCP module;
+        # patch that seam rather than an old provider-local helper.
+        monkeypatch.setattr(km, "parallel_search_keyless", _fake)
         out = pp.ParallelWebSearchProvider().search("kittens", limit=4)
         assert out["success"] is True
-        assert captured == {"query": "kittens", "limit": 4, "api_key": None}
+        assert captured == {"query": "kittens", "limit": 4}
 
     def test_is_available_reflects_key(self, monkeypatch):
         # is_available() gates the registry's active-provider walk + picker, so
@@ -316,16 +319,17 @@ class TestMcpWebFetch:
     def test_extract_without_key_uses_web_fetch(self, monkeypatch):
         monkeypatch.delenv("PARALLEL_API_KEY", raising=False)
         captured = {}
+        import plugins.web.keyless_mcp as km
 
-        def _fake(urls, api_key):
-            captured.update(urls=list(urls), api_key=api_key)
+        def _fake(urls):
+            captured.update(urls=list(urls))
             return [{"url": urls[0], "title": "", "content": "x",
                      "raw_content": "x", "metadata": {}}]
 
-        monkeypatch.setattr(pp, "_mcp_web_fetch", _fake)
+        monkeypatch.setattr(km, "parallel_extract_keyless", _fake)
         out = asyncio.run(pp.ParallelWebSearchProvider().extract(["https://x.test"]))
         assert out[0]["content"] == "x"
-        assert captured == {"urls": ["https://x.test"], "api_key": None}
+        assert captured == {"urls": ["https://x.test"]}
 
 
 # ─── keyed v1 REST search ────────────────────────────────────────────────────

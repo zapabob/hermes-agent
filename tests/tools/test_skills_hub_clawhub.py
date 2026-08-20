@@ -181,7 +181,14 @@ class TestClawHubSource(unittest.TestCase):
             return _MockResponse(status_code=404, json_data={})
 
         mock_get.side_effect = side_effect
-        mock_safe_get.return_value = _MockResponse(status_code=200, text="# Skill")
+        def safe_side_effect(url, *args, **kwargs):
+            if "/download?" in url:
+                return _MockResponse(status_code=404)
+            if url == "https://files.example/skill-md":
+                return _MockResponse(status_code=200, text="# Skill")
+            raise AssertionError(url)
+
+        mock_safe_get.side_effect = safe_side_effect
 
         bundle = self.src.fetch("caldav-calendar")
 
@@ -190,7 +197,12 @@ class TestClawHubSource(unittest.TestCase):
         self.assertIn("SKILL.md", bundle.files)
         self.assertEqual(bundle.files["SKILL.md"], "# Skill")
         self.assertEqual(bundle.files["README.md"], "hello")
-        mock_safe_get.assert_called_once_with("https://files.example/skill-md", timeout=20)
+        mock_safe_get.assert_any_call(
+            "https://files.example/skill-md",
+            timeout=20,
+            headers=None,
+            params=None,
+        )
 
     @patch("tools.skills_hub.httpx.get")
     def test_fetch_falls_back_to_versions_list(self, mock_get):
@@ -238,12 +250,17 @@ class TestClawHubSource(unittest.TestCase):
 
         mock_get.side_effect = side_effect
         mock_safe.side_effect = lambda url: not url.startswith("http://127.0.0.1/")
+        mock_safe_get.side_effect = lambda url, **_kwargs: (
+            _MockResponse(status_code=404)
+            if "/download?" in url
+            else (_ for _ in ()).throw(AssertionError(url))
+        )
 
         bundle = self.src.fetch("caldav-calendar")
 
         self.assertIsNone(bundle)
-        self.assertEqual(mock_get.call_count, 3)
-        mock_safe_get.assert_not_called()
+        self.assertEqual(mock_get.call_count, 2)
+        mock_safe_get.assert_called_once()
 
     @patch("tools.skills_hub._write_index_cache")
     @patch("tools.skills_hub._read_index_cache", return_value=None)
@@ -369,6 +386,62 @@ class TestClawHubSource(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].identifier, "only-skill")
         mock_write_cache.assert_called_once()
+
+    def test_parse_identifier_accepts_clawhub_shapes(self):
+        self.assertEqual(ClawHubSource._parse_identifier("skillopt"), ("skillopt", None))
+        self.assertEqual(ClawHubSource._parse_identifier("clawhub/skillopt"), ("skillopt", None))
+        self.assertEqual(
+            ClawHubSource._parse_identifier("@harrylabsj/skillopt"),
+            ("skillopt", "harrylabsj"),
+        )
+        self.assertEqual(
+            ClawHubSource._parse_identifier("harrylabsj/skills/skillopt"),
+            ("skillopt", "harrylabsj"),
+        )
+
+    def test_parse_identifier_rejects_github_style_paths(self):
+        self.assertIsNone(
+            ClawHubSource._parse_identifier("latipun7/agent-skill-collections/skillopt")
+        )
+        self.assertIsNone(
+            ClawHubSource._parse_identifier(
+                "latipun7/agent-skill-collections/skills/skillopt"
+            )
+        )
+        self.assertIsNone(
+            ClawHubSource._parse_identifier(
+                "skills-sh/latipun7/agent-skill-collections/skills/skillopt"
+            )
+        )
+
+    @patch("tools.skills_hub.httpx.get")
+    def test_inspect_does_not_claim_github_style_identifier(self, mock_get):
+        meta = self.src.inspect("latipun7/agent-skill-collections/skills/skillopt")
+        self.assertIsNone(meta)
+        mock_get.assert_not_called()
+
+    @patch("tools.skills_hub.httpx.get")
+    def test_fetch_does_not_claim_github_style_identifier(self, mock_get):
+        bundle = self.src.fetch("latipun7/agent-skill-collections/skillopt")
+        self.assertIsNone(bundle)
+        mock_get.assert_not_called()
+
+    @patch("tools.skills_hub.httpx.get")
+    def test_inspect_rejects_owner_mismatch_on_clawhub_url_path(self, mock_get):
+        mock_get.return_value = _MockResponse(
+            status_code=200,
+            json_data={
+                "slug": "skillopt",
+                "displayName": "SkillOpt",
+                "summary": "Train, evaluate, and improve Agent skill files",
+                "owner": {"handle": "harrylabsj"},
+            },
+        )
+
+        meta = self.src.inspect("latipun7/skills/skillopt")
+
+        self.assertIsNone(meta)
+        mock_get.assert_called_once()
 
 
 class TestClawHubCatalogWalkBounded(unittest.TestCase):

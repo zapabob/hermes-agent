@@ -88,15 +88,17 @@ test('sessions workspace: filtering searches title, preview, and source without 
 
 test('sessions workspace: opening a stored row uses profile-aware navigation and records selection', async () => {
   const runtime = load({ profile: 'default' })
-  await runtime.__sessions.openProfileSession('ops', 'stored-123', 0)
-  assert.deepEqual(plain(runtime.calls), [['openSession', 'stored-123', { profile: 'ops' }]])
+  await runtime.__sessions.openProfileSession('ops', { id: 'stored-123', message_count: 4 }, 0)
+  assert.deepEqual(plain(runtime.calls), [
+    ['openSession', 'stored-123', { profile: 'ops', awaitHydration: true, expectHistory: true, keepAllProfilesScope: true }]
+  ])
   assert.equal(runtime.__sessions.$botSelectedSessions.get().ops, 'stored-123')
 })
 
 test('sessions workspace: malformed profile or session input is a no-op', async () => {
   const runtime = load()
-  await runtime.__sessions.openProfileSession('../ops', 'stored-123', 0)
-  await runtime.__sessions.openProfileSession('ops', '', 0)
+  await runtime.__sessions.openProfileSession('../ops', { id: 'stored-123' }, 0)
+  await runtime.__sessions.openProfileSession('ops', { id: '' }, 0)
   assert.deepEqual(runtime.calls, [])
 })
 
@@ -107,8 +109,16 @@ test('sessions workspace: a gateway lifecycle change clears selection and reject
   assert.equal(runtime.__sessions.$sessionsGatewayGeneration.get(), 1)
   assert.deepEqual(plain(runtime.__sessions.$botSelectedSessions.get()), {})
 
-  await runtime.__sessions.openProfileSession('ops', 'stored-123', 0)
+  await runtime.__sessions.openProfileSession('ops', { id: 'stored-123' }, 0)
   assert.deepEqual(runtime.calls, [])
+})
+
+test('sessions workspace: an empty session with no preview does not demand history', async () => {
+  const runtime = load()
+  await runtime.__sessions.openProfileSession('ops', { id: 'stored-empty', message_count: 0 }, 0)
+  assert.deepEqual(plain(runtime.calls), [
+    ['openSession', 'stored-empty', { profile: 'ops', awaitHydration: true, expectHistory: false, keepAllProfilesScope: true }]
+  ])
 })
 
 test('sessions workspace: an in-flight open cannot restore selection after gateway replacement', async () => {
@@ -117,7 +127,7 @@ test('sessions workspace: an in-flight open cannot restore selection after gatew
     openSession: async () => runtime.__sessions.handleSessionsGatewayTransition()
   })
 
-  await runtime.__sessions.openProfileSession('ops', 'stored-123', 0)
+  await runtime.__sessions.openProfileSession('ops', { id: 'stored-123', preview: 'last line' }, 0)
   assert.equal(runtime.calls.length, 1)
   assert.deepEqual(plain(runtime.__sessions.$botSelectedSessions.get()), {})
 })
@@ -126,15 +136,15 @@ test('source contract: bot rows and Active now activate the owner before canonic
   assert.match(pluginSource, /async function prepareBotSource\(bot, pinnedChat\)/)
   assert.match(pluginSource, /await host\.ensureAgent\(bot\.connectionId, bot\.name\)/)
   assert.match(pluginSource, /host\.request\('profiles\.list', \{\}\)/)
-  assert.match(pluginSource, /const open = async \(\) => \{[\s\S]*await prepareBotSource\(bot, pinnedChat\)[\s\S]*openBotCanonicalChat\(bot\.name, pinnedChat\)/)
-  assert.match(pluginSource, /onOpen: bot => \{[\s\S]*await prepareBotSource\(bot, pinnedChat\)[\s\S]*openBotCanonicalChat\(bot\.name, pinnedChat\)/)
+  assert.match(pluginSource, /const open = async \(\) => \{[\s\S]*await prepareBotSource\(bot, pinnedChat\)[\s\S]*openBotCanonicalChat\(bot\.name, pinnedChat, previewSession\)/)
+  assert.match(pluginSource, /onOpen: bot => \{[\s\S]*await prepareBotSource\(bot, pinnedChat\)[\s\S]*bot\.preferred_session \|\| bot\.last_session/)
   assert.match(pluginSource, /openBotSessionsWorkspace\(bot\)[\s\S]*children: 'Sessions'/)
 })
 
 test('source contract: workspaces disclose the bounded recent-session inventory', () => {
   assert.match(pluginSource, /queryKey: \[ID, 'profile-sessions', botName, gatewayGeneration\]/)
   assert.match(pluginSource, /enabled: Boolean\(botName\)/)
-  assert.match(pluginSource, /host\.request\('session\.list', \{ profile: botName, limit: PROFILE_SESSION_LIST_LIMIT \}\)/)
+  assert.match(pluginSource, /host\.request\('session\.list', \{ profile: botName, limit: PROFILE_SESSION_LIST_LIMIT, include_hidden: true \}\)/)
   assert.match(pluginSource, /Showing the \$\{PROFILE_SESSION_LIST_LIMIT\} most recent sessions\./)
   assert.match(pluginSource, /No matching sessions in the \$\{PROFILE_SESSION_LIST_LIMIT\} most recent\./)
   assert.doesNotMatch(pluginSource, /children: 'Activate profile'/)

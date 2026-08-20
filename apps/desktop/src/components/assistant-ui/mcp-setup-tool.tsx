@@ -274,7 +274,7 @@ function McpSetupPending({ args }: ToolCallMessagePartProps) {
 
     try {
       if (action === 'enable') {
-        await setMcpServerEnabled(server, true, scope.profile, scope.connectionId)
+        await setMcpServerEnabled(server, true, scope)
         triggerHaptic('submit')
         await respond({ server, status: 'enabled' })
 
@@ -284,10 +284,10 @@ function McpSetupPending({ args }: ToolCallMessagePartProps) {
       if (action === 'authorize') {
         const flow = await completeMcpDesktopOAuth({
           serverName: server,
-          start: name => authMcpServer(name, scope.profile, scope.connectionId),
-          status: flowId => getMcpOAuthFlow(flowId, scope.profile, scope.connectionId),
+          start: name => authMcpServer(name, scope),
+          status: flowId => getMcpOAuthFlow(flowId, scope),
           cancelled: () => cancelRef.current,
-          cancel: flowId => cancelMcpOAuthFlow(flowId, scope.profile, scope.connectionId),
+          cancel: flowId => cancelMcpOAuthFlow(flowId, scope),
           openExternal: url => window.hermesDesktop.openExternal(url)
         })
 
@@ -305,7 +305,7 @@ function McpSetupPending({ args }: ToolCallMessagePartProps) {
       let resolved = entry
 
       if (resolved === undefined) {
-        const catalog = await getMcpCatalog(scope.profile, scope.connectionId)
+        const catalog = await getMcpCatalog(scope)
         resolved = catalog.entries.find(candidate => candidate.name === server) ?? null
         setEntry(resolved)
       }
@@ -324,21 +324,21 @@ function McpSetupPending({ args }: ToolCallMessagePartProps) {
         // flow dies after the config write (cancel, closed OAuth tab), roll
         // the write back — decline means "no server", not an unauthorized
         // entry squatting in mcp_servers (authoritative-write rule).
-        await addMcpServer({ name: known.name, url: known.url }, scope.profile, scope.connectionId)
+        await addMcpServer({ name: known.name, url: known.url }, scope)
 
         let flow
 
         try {
           flow = await completeMcpDesktopOAuth({
             serverName: known.name,
-            start: name => authMcpServer(name, scope.profile, scope.connectionId),
-            status: flowId => getMcpOAuthFlow(flowId, scope.profile, scope.connectionId),
+            start: name => authMcpServer(name, scope),
+            status: flowId => getMcpOAuthFlow(flowId, scope),
             cancelled: () => cancelRef.current,
-            cancel: flowId => cancelMcpOAuthFlow(flowId, scope.profile, scope.connectionId),
+            cancel: flowId => cancelMcpOAuthFlow(flowId, scope),
             openExternal: url => window.hermesDesktop.openExternal(url)
           })
         } catch (error) {
-          await removeMcpServer(known.name, scope.profile, scope.connectionId).catch(() => {
+          await removeMcpServer(known.name, scope).catch(() => {
             // Rollback is best-effort; the primary error/cancel wins.
           })
           throw error
@@ -359,13 +359,13 @@ function McpSetupPending({ args }: ToolCallMessagePartProps) {
         return
       }
 
-      const res = await installMcpCatalogEntry(server, envDraft, scope.profile, scope.connectionId)
+      const res = await installMcpCatalogEntry(server, envDraft, scope)
 
       // Git-backed entries clone in the background — poll to completion so a
       // non-zero exit surfaces as a real failure instead of a false success.
       if (res.background && res.action) {
         for (;;) {
-          const status = throwIfCancelled(await getActionStatus(res.action, 1, scope.profile, scope.connectionId))
+          const status = throwIfCancelled(await getActionStatus(res.action, 1, scope))
 
           if (!status.running) {
             if (status.exit_code !== 0) {

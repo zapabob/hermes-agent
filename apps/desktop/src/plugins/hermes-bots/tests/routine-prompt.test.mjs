@@ -1,10 +1,27 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { dirname } from 'node:path'
 import test from 'node:test'
 import vm from 'node:vm'
 
 const pluginSource = readFileSync(new URL('../plugin.js', import.meta.url), 'utf8')
+
+function shellInvocation() {
+  if (process.platform !== 'win32') return { command: 'sh', env: process.env }
+
+  const candidates = [
+    process.env.HERMES_TEST_SHELL,
+    'C:\\Program Files\\Git\\usr\\bin\\sh.exe',
+    'C:\\Program Files\\Git\\bin\\sh.exe'
+  ].filter(Boolean)
+  const command = candidates.find(candidate => candidate === 'sh' || existsSync(candidate)) ?? 'sh'
+  if (command === 'sh') return { command, env: process.env }
+
+  const pathKey = Object.keys(process.env).find(key => key.toLowerCase() === 'path') ?? 'PATH'
+  const env = { ...process.env, [pathKey]: `${dirname(command)};${process.env[pathKey] ?? ''}` }
+  return { command, env }
+}
 
 function load(request = async () => ({ jobs: [] })) {
   const values = new Map()
@@ -56,9 +73,10 @@ test('security: delegated routine arguments remain literal shell values', () => 
   const title = 'Audit $(printf TITLE_EXPANDED) `printf TITLE_TICK` \'quoted\''
   const instruction = 'Line one $(printf TASK_EXPANDED) `printf TASK_TICK`\nLine two \'quoted\''
   const prompt = __routines.routinePrompt('research', title, instruction, 'default')
-  const command = prompt.slice(prompt.indexOf('hermes '), prompt.lastIndexOf('\n\nIf the command'))
-  const script = `hermes() { printf '%s\\037' "$@"; }\n${command}`
-  const result = spawnSync('sh', ['-c', script], { encoding: 'utf8' })
+  const commandText = prompt.slice(prompt.indexOf('hermes '), prompt.lastIndexOf('\n\nIf the command'))
+  const script = `hermes() { printf '%s\\037' "$@"; }\n${commandText}`
+  const { command: shell, env } = shellInvocation()
+  const result = spawnSync(shell, ['-c', script], { encoding: 'utf8', env })
 
   assert.equal(result.status, 0, result.stderr)
   assert.deepEqual(result.stdout.split('\x1f').slice(0, -1), [
@@ -136,9 +154,10 @@ test('security: upgrade pauses persisted delegated routines before they can exec
 
   const recreated = runtime.__routines.routinePrompt('research', title, instruction, 'default')
   assert.equal(runtime.__routines.isLegacyDelegatedRoutine({ ...persisted, prompt_preview: recreated.slice(0, 100) }), false)
-  const command = recreated.slice(recreated.indexOf('hermes '), recreated.lastIndexOf('\n\nIf the command'))
-  const script = `hermes() { printf '%s\\037' "$@"; }\n${command}`
-  const executed = spawnSync('sh', ['-c', script], { encoding: 'utf8' })
+  const commandText = recreated.slice(recreated.indexOf('hermes '), recreated.lastIndexOf('\n\nIf the command'))
+  const script = `hermes() { printf '%s\\037' "$@"; }\n${commandText}`
+  const { command: shell, env } = shellInvocation()
+  const executed = spawnSync(shell, ['-c', script], { encoding: 'utf8', env })
   assert.equal(executed.status, 0, executed.stderr)
   assert.deepEqual(executed.stdout.split('\x1f').slice(0, -1), [
     '-p',

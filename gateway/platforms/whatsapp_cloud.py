@@ -453,8 +453,9 @@ class WhatsAppCloudAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         # Outbound HTTP client. Tighter keepalive matches other platform
         # adapters so idle CLOSE_WAIT drains promptly (#18451).
         from gateway.platforms._http_client_limits import platform_httpx_limits
+        from tools.url_safety import create_ssrf_safe_async_client
 
-        self._http_client = httpx.AsyncClient(
+        self._http_client = create_ssrf_safe_async_client(
             timeout=30.0, limits=platform_httpx_limits()
         )
 
@@ -1367,10 +1368,27 @@ class WhatsAppCloudAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         if not temp_url:
             return None, None
 
+        # Graph's signed URL is remote input. The async preflight avoids
+        # blocking the gateway event loop; the SSRF-safe shared client repeats
+        # validation at TCP-connect time to close DNS-rebinding. Redirects are
+        # disabled so the bearer token cannot cross an origin boundary.
+        from tools.url_safety import async_is_safe_url
+
+        if not await async_is_safe_url(str(temp_url)):
+            logger.warning(
+                "[whatsapp_cloud] refusing unsafe Graph media URL for id=%s",
+                media_id,
+            )
+            return None, None
+
         # Step 2 — bytes (auth required even though URL is signed; Meta
         # documents this explicitly — the URL alone is not enough).
         try:
-            blob_resp = await self._http_client.get(temp_url, headers=headers)
+            blob_resp = await self._http_client.get(
+                temp_url,
+                headers=headers,
+                follow_redirects=False,
+            )
         except Exception:
             logger.exception(
                 "[whatsapp_cloud] media bytes fetch raised (id=%s)", media_id

@@ -9,12 +9,13 @@ import { createClientSessionState } from '@/lib/chat-runtime'
 
 import { useSessionStateCache } from '../use-session-state-cache'
 
+import { type MessageStreamHarness, renderMessageStream } from './test-harness'
 import { STREAM_DELTA_FLUSH_MS } from './utils'
 
 import { useMessageStream } from './index'
 
 const SID = 'session-1'
-let appendAssistantDelta: ((sessionId: string, delta: string) => void) | null = null
+let stream: MessageStreamHarness
 let states: Map<string, ClientSessionState>
 type UpdateSessionState = (
   sessionId: string,
@@ -23,44 +24,17 @@ type UpdateSessionState = (
 ) => ClientSessionState
 let updateSessionState: ReturnType<typeof vi.fn<UpdateSessionState>>
 
-function Harness() {
-  const activeSessionIdRef = useRef<string | null>(SID)
-  const sessionStateByRuntimeIdRef = useRef(states)
-  const queryClientRef = useRef(new QueryClient())
-
-  const stream = useMessageStream({
-    activeSessionIdRef,
-    hydrateFromStoredSession: vi.fn(async () => undefined),
-    queryClient: queryClientRef.current,
-    refreshHermesConfig: vi.fn(async () => undefined),
-    refreshSessions: vi.fn(async () => undefined),
-    sessionStateByRuntimeIdRef,
-    updateSessionState
-  })
-
-  useEffect(() => {
-    appendAssistantDelta = stream.appendAssistantDelta
-  }, [stream.appendAssistantDelta])
-
-  return null
-}
-
+/** The shared harness, but writing through a spy so the unmount test can count
+ *  the writes that happen after teardown. */
 function mountStream() {
-  render(<Harness />)
-  expect(appendAssistantDelta).not.toBeNull()
+  stream = renderMessageStream(SID, { states, updateSessionState })
 }
 
-function assistantText() {
-  const message = states.get(SID)?.messages.at(-1)
-  const part = message?.parts.at(-1)
-
-  return part?.type === 'text' ? part.text : ''
-}
+const assistantText = () => stream.text()
 
 describe('useMessageStream delta flush scheduling', () => {
   beforeEach(() => {
     vi.useFakeTimers()
-    appendAssistantDelta = null
     states = new Map()
     updateSessionState = vi.fn((sessionId: string, updater: (state: ClientSessionState) => ClientSessionState) => {
       const next = updater(states.get(sessionId) ?? createClientSessionState())
@@ -83,7 +57,7 @@ describe('useMessageStream delta flush scheduling', () => {
   it('flushes streaming text on a bounded timer while the window is unfocused', async () => {
     mountStream()
 
-    act(() => appendAssistantDelta!(SID, 'still streaming'))
+    act(() => stream.appendDelta(SID, 'still streaming'))
 
     expect(window.requestAnimationFrame).not.toHaveBeenCalled()
     expect(assistantText()).toBe('')
@@ -99,7 +73,7 @@ describe('useMessageStream delta flush scheduling', () => {
     vi.mocked(performance.now).mockReturnValue(0)
     mountStream()
 
-    act(() => appendAssistantDelta!(SID, 'caught up on focus'))
+    act(() => stream.appendDelta(SID, 'caught up on focus'))
     expect(assistantText()).toBe('')
     expect(vi.getTimerCount()).toBe(1)
 
@@ -122,7 +96,7 @@ describe('useMessageStream delta flush scheduling', () => {
     })
     mountStream()
 
-    act(() => appendAssistantDelta!(SID, 'focused without visibility change'))
+    act(() => stream.appendDelta(SID, 'focused without visibility change'))
     expect(assistantText()).toBe('')
     expect(vi.getTimerCount()).toBe(1)
 
@@ -135,7 +109,7 @@ describe('useMessageStream delta flush scheduling', () => {
     vi.mocked(performance.now).mockReturnValue(0)
     mountStream()
 
-    act(() => appendAssistantDelta!(SID, 'final delta'))
+    act(() => stream.appendDelta(SID, 'final delta'))
     expect(vi.getTimerCount()).toBe(1)
 
     cleanup()
@@ -166,7 +140,7 @@ describe('useMessageStream delta flush scheduling', () => {
 
     mountStream()
 
-    act(() => appendAssistantDelta!(SID, 'first'))
+    act(() => stream.appendDelta(SID, 'first'))
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0)
     })
@@ -179,7 +153,7 @@ describe('useMessageStream delta flush scheduling', () => {
     now = 1100
     act(() => rafCallbacks[0](1040))
 
-    act(() => appendAssistantDelta!(SID, 'second'))
+    act(() => stream.appendDelta(SID, 'second'))
     await act(async () => {
       await vi.advanceTimersByTimeAsync(79)
     })
@@ -203,7 +177,7 @@ describe('useMessageStream delta flush scheduling', () => {
 
     mountStream()
 
-    act(() => appendAssistantDelta!(SID, 'first'))
+    act(() => stream.appendDelta(SID, 'first'))
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0)
     })
@@ -212,7 +186,7 @@ describe('useMessageStream delta flush scheduling', () => {
 
     // 100ms later (well past the 33ms floor): the next flush is immediate.
     now = 1100
-    act(() => appendAssistantDelta!(SID, 'second'))
+    act(() => stream.appendDelta(SID, 'second'))
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0)
     })
@@ -232,7 +206,7 @@ describe('useMessageStream delta flush scheduling', () => {
 
     mountStream()
 
-    act(() => appendAssistantDelta!(SID, 'a'))
+    act(() => stream.appendDelta(SID, 'a'))
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0)
     })
@@ -240,7 +214,7 @@ describe('useMessageStream delta flush scheduling', () => {
     // A second flush starts before the first flush's frame lands.
     // sinceLast=10ms, so the wait is STREAM_DELTA_FLUSH_MS - 10.
     now = 1010
-    act(() => appendAssistantDelta!(SID, 'b'))
+    act(() => stream.appendDelta(SID, 'b'))
     await act(async () => {
       await vi.advanceTimersByTimeAsync(STREAM_DELTA_FLUSH_MS)
     })
@@ -253,7 +227,7 @@ describe('useMessageStream delta flush scheduling', () => {
     now = 1030
     act(() => rafCallbacks[0](1000))
 
-    act(() => appendAssistantDelta!(SID, 'c'))
+    act(() => stream.appendDelta(SID, 'c'))
     await act(async () => {
       await vi.advanceTimersByTimeAsync(STREAM_DELTA_FLUSH_MS)
     })
@@ -270,6 +244,7 @@ describe('useMessageStream composed with the real useSessionStateCache', () => {
   // measured frame cost includes the deferred $messages commit it adapts to.
   let cache: ReturnType<typeof useSessionStateCache> | null = null
   let published: ChatMessage[]
+  let appendAssistantDelta: ((sessionId: string, delta: string) => void) | null = null
 
   function ComposedHarness() {
     const busyRef: MutableRefObject<boolean> = { current: false }

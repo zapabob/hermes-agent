@@ -2,7 +2,7 @@
 
 [project]
 name = "hermes-agent"
-version = "0.20.3"
+version = "0.20.4"
 description = "The self-improving AI agent — creates skills from experience, improves them during use, and runs anywhere"
 readme = "README.md"
 # Upper bound is load-bearing, not cosmetic. uv resolves the project's
@@ -390,8 +390,6 @@ override-dependencies = [
   "cryptography>=50,<51",
 ]
 exclude-newer = "14 days"
-# h2: temporary exclude-newer exception for the CVE-2026-71554 (GHSA-6hr6-w5qg-qmwg,
-# request-smuggling) fix in 4.4.1, published 2026-08-03. Remove after 2026-08-17.
 # aiohttp, cryptography: same shape — the advisory fixes are newer than the
 # 14-day window, so the resolver cannot see them without an exception.
 #
@@ -414,7 +412,7 @@ exclude-newer = "14 days"
 # cutoff can still brick installs. Exempting exact pins is pure brick-risk
 # removal at no supply-chain cost. Guarded by
 # tests/test_packaging_metadata.py::test_build_system_requires_exempt_from_exclude_newer.
-exclude-newer-package = { vercel = false, nemo-relay = false, huggingface_hub = false, h2 = false, aiohttp = false, cryptography = false, defusedxml = false, python-olm = false, unpaddedbase64 = false, setuptools = false, pillow = false, mcp = false }
+exclude-newer-package = { vercel = false, nemo-relay = false, huggingface_hub = false, aiohttp = false, cryptography = false, defusedxml = false, python-olm = false, unpaddedbase64 = false, setuptools = false, pillow = false, mcp = false }
 
 [tool.setuptools]
 # Top-level single-file modules (not packages). Without this, uv2nix's

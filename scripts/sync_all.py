@@ -69,7 +69,8 @@ def _write_report(name: str, payload: dict[str, object]) -> Path:
 
 
 def _working_tree_clean() -> bool:
-    return _git("diff-index", "--quiet", "HEAD", "--", check=False).returncode == 0
+    proc = _git("status", "--porcelain=v1", "--untracked-files=normal", check=False)
+    return proc.returncode == 0 and not proc.stdout.strip()
 
 
 def _unmerged() -> list[str]:
@@ -79,7 +80,9 @@ def _unmerged() -> list[str]:
 
 def _collect_blockers(report_path: Path) -> list[str]:
     payload = json.loads(report_path.read_text(encoding="utf-8"))
-    return list(payload.get("blocked_paths") or [])
+    blocked_paths = list(payload.get("blocked_paths") or [])
+    unresolved_conflicts = list(payload.get("unresolved_conflicts") or [])
+    return list(dict.fromkeys([*blocked_paths, *unresolved_conflicts]))
 
 
 def stage_inventory(upstream_ref: str, strategy_file: Path) -> dict[str, object]:
@@ -201,7 +204,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "blockers. The blocker list is still recorded in the report."
         ),
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.dry_run and args.merge:
+        parser.error("--dry-run cannot be combined with --merge")
+    if args.dry_run and args.openclaw_execute:
+        parser.error("--dry-run cannot be combined with --openclaw-execute")
+    if args.allow_preflight_blockers and not args.merge:
+        parser.error("--allow-preflight-blockers requires --merge")
+    return args
 
 
 def main() -> int:

@@ -31,7 +31,10 @@ def test_configure_callback_port_reuses_stored_client_redirect_port(tmp_path):
 
 def test_configure_callback_port_picks_free_port_without_client_info(tmp_path):
     storage = mcp_oauth.HermesTokenStorage("fresh-server", hermes_home=tmp_path)
-    cfg: dict = {"redirect_port": 0}
+    # Unknown servers are CIMD-eligible by default and therefore use one of
+    # the published pinned callback ports.  This test covers the ephemeral
+    # reservation branch, so opt out explicitly as a DCR-only server would.
+    cfg: dict = {"redirect_port": 0, "cimd": False}
 
     with patch.object(mcp_oauth, "_reserve_callback_port", return_value=48123) as reserve:
         port = mcp_oauth._configure_callback_port(cfg, storage)

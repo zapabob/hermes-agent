@@ -50,7 +50,7 @@ import { useComposerPlaceholder } from './hooks/use-composer-placeholder'
 import { useComposerPopout } from './hooks/use-composer-popout'
 import { useComposerQueue } from './hooks/use-composer-queue'
 import { useComposerSubmit } from './hooks/use-composer-submit'
-import { useComposerTrigger } from './hooks/use-composer-trigger'
+import { triggerKeyUpHandler, useComposerTrigger } from './hooks/use-composer-trigger'
 import { useComposerUndo } from './hooks/use-composer-undo'
 import { useComposerUrlDialog } from './hooks/use-composer-url-dialog'
 import { useComposerVoice } from './hooks/use-composer-voice'
@@ -321,7 +321,7 @@ export function ChatBar({
     return onCancel()
   }, [activeQueueSessionKeyRef, onCancel])
 
-  const { compactPill, stacked } = useComposerMetrics({
+  const { compactPill, foldVoice, minimal, stacked } = useComposerMetrics({
     composerDockRef,
     composerRef,
     composerSurfaceRef,
@@ -904,21 +904,7 @@ export function ChatBar({
     }
   }
 
-  const handleEditorKeyUp = () => {
-    // If this keyup belongs to a key the open trigger popover already consumed
-    // in keydown (Arrow/Enter/Tab/Escape), skip the refresh. Those keys never
-    // edit text, and for Escape the keydown already closed the menu — a refresh
-    // here would re-detect the still-present `/` and instantly reopen it. We
-    // read a ref set during keydown rather than `trigger`, because by keyup
-    // time React has re-rendered and `trigger` may already be null.
-    if (triggerKeyConsumedRef.current) {
-      triggerKeyConsumedRef.current = false
-
-      return
-    }
-
-    window.setTimeout(refreshTrigger, 0)
-  }
+  const handleEditorKeyUp = triggerKeyUpHandler(triggerKeyConsumedRef, refreshTrigger)
 
   const {
     dragActive,
@@ -998,7 +984,9 @@ export function ChatBar({
         status: conversation.status
       }}
       disabled={disabled}
+      foldVoice={foldVoice}
       hasComposerPayload={hasComposerPayload}
+      minimal={minimal}
       onDictate={dictate}
       onQueue={queueDraft}
       onToggleAutoSpeak={handleToggleAutoSpeak}
@@ -1256,7 +1244,13 @@ export function ChatBar({
               {hudMode && busy && <span aria-hidden className="arc-border arc-composer" />}
               <div
                 className={cn(
-                  'group/composer-surface relative z-4 isolate grid grid-rows-[auto_1fr] overflow-hidden rounded-[inherit] border border-[color-mix(in_srgb,var(--dt-composer-ring)_calc(18%*var(--composer-ring-strength)),var(--dt-input))]',
+                  // grid-cols-[minmax(0,1fr)]: the implicit `auto` column sized
+                  // itself to its items' min-content, so a status row whose
+                  // content out-measured a narrow pane silently widened the
+                  // track past the surface — and every `w-full` child (the fade,
+                  // the input/controls row) laid out against that phantom width
+                  // and got clipped by overflow-hidden, send button first.
+                  'group/composer-surface relative z-4 isolate grid grid-cols-[minmax(0,1fr)] grid-rows-[auto_1fr] overflow-hidden rounded-[inherit] border border-[color-mix(in_srgb,var(--dt-composer-ring)_calc(18%*var(--composer-ring-strength)),var(--dt-input))]',
                   COMPOSER_DROP_FADE_CLASS,
                   dragActive && COMPOSER_DROP_ACTIVE_CLASS
                 )}
@@ -1278,7 +1272,7 @@ export function ChatBar({
                   // A tile's rail reviews ITS worktree: pin the pane's scope to
                   // this surface's cwd. Main keeps the classic follow-the-
                   // active-session scope (null).
-                  onOpen={() => toggleReview(scope.target === 'main' ? null : (cwd ?? null))}
+                  onOpen={() => toggleReview(scope.target === 'main' ? null : (cwd ?? null), scope.target)}
                   onOpenWorktree={openInWorktree}
                   onSwitchBranch={handleSwitchBranch}
                   repoPath={cwd}
@@ -1295,7 +1289,9 @@ export function ChatBar({
                   {/* Contribution seams: banners above, a row below, inline
                     additions beside the "+" menu and before the controls.
                     All four render nothing until something contributes. */}
-                  <ContribSlot area={COMPOSER_AREAS.top} />
+                  <div className="empty:hidden min-w-0 max-w-full overflow-hidden" data-composer-contrib-slot="top">
+                    <ContribSlot area={COMPOSER_AREAS.top} />
+                  </div>
                   <VoiceActivity state={voiceActivityState} />
                   <VoicePlaybackActivity />
                   {queueEdit && editingQueuedPrompt && (
@@ -1331,17 +1327,32 @@ export function ChatBar({
                         : 'grid-cols-[auto_1fr_auto] items-center gap-(--composer-control-gap) [grid-template-areas:"menu_input_controls"]'
                     )}
                   >
-                    <div className="flex translate-y-[3px] items-start gap-(--composer-control-gap) self-start [grid-area:menu]">
+                    <div className="flex min-w-0 max-w-full translate-y-[3px] items-start gap-(--composer-control-gap) self-start overflow-hidden [grid-area:menu]">
                       {contextMenu}
                       <ContribSlot area={COMPOSER_AREAS.leading} />
                     </div>
                     <div className="min-w-0 [grid-area:input]">{input}</div>
-                    <div className="flex items-center justify-end gap-(--composer-control-gap) [grid-area:controls]">
-                      <ContribSlot area={COMPOSER_AREAS.actions} />
+                    <div className="flex min-w-0 items-center justify-end gap-(--composer-control-gap) [grid-area:controls]">
+                      {/* Action contributions are optional chrome. At the minimal
+                          rung the core Send/Stop affordance is the last thing
+                          standing; hiding plugin actions keeps them from
+                          consuming the fixed-width control budget. They return
+                          unchanged as soon as the pane has room again. */}
+                      <div
+                        className={cn(
+                          'min-w-0 max-w-full shrink overflow-x-auto overflow-y-hidden',
+                          minimal && 'hidden'
+                        )}
+                        data-composer-contrib-slot="actions"
+                      >
+                        <ContribSlot area={COMPOSER_AREAS.actions} />
+                      </div>
                       {controls}
                     </div>
                   </div>
-                  <ContribSlot area={COMPOSER_AREAS.bottom} />
+                  <div className="empty:hidden min-w-0 max-w-full overflow-hidden" data-composer-contrib-slot="bottom">
+                    <ContribSlot area={COMPOSER_AREAS.bottom} />
+                  </div>
                 </div>
               </div>
             </div>
@@ -1351,7 +1362,9 @@ export function ChatBar({
               the pop-out drag region. Same px as the strip above, so the two
               bracket the composer on one vertical line. */}
           <div className={cn(composerFloatingStrip, 'px-[5px] pt-1.5 empty:hidden')}>
-            <ContribSlot area={COMPOSER_AREAS.underside} />
+            <div className="empty:hidden min-w-0 max-w-full overflow-hidden" data-composer-contrib-slot="underside">
+              <ContribSlot area={COMPOSER_AREAS.underside} />
+            </div>
           </div>
         </div>
       </ComposerPrimitive.Unstable_TriggerPopoverRoot>

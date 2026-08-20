@@ -460,3 +460,126 @@ class TestBlueBubblesWebhookRegistration:
         assert len(deleted_ids) == 2
 
 
+class _AttachmentResponse:
+    def __init__(self, status_code, *, location=None, body=b""):
+        self.status_code = status_code
+        self.headers = {}
+        if location is not None:
+            self.headers["location"] = location
+        if body:
+            self.headers["content-length"] = str(len(body))
+        self._body = body
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+    async def aiter_bytes(self):
+        if self._body:
+            yield self._body
+
+
+class _AttachmentStream:
+    def __init__(self, action):
+        self.action = action
+
+    async def __aenter__(self):
+        if isinstance(self.action, Exception):
+            raise self.action
+        return self.action
+
+    async def __aexit__(self, *_args):
+        return False
+
+
+class _AttachmentClient:
+    def __init__(self, actions):
+        self.actions = list(actions)
+        self.calls = []
+        self.closed = False
+
+    def stream(self, method, url, **kwargs):
+        self.calls.append((method, url, kwargs))
+        if not self.actions:
+            raise AssertionError(f"unexpected attachment request: {url}")
+        return _AttachmentStream(self.actions.pop(0))
+
+    async def aclose(self):
+        self.closed = True
+
+
+class TestBlueBubblesRedirectSSRF:
+    """Attachment redirects keep the configured private origin narrowly trusted."""
+
+    def _adapter_with_clients(self, monkeypatch, trusted, guarded):
+        adapter = _make_adapter(monkeypatch, server_url="http://localhost:1234")
+        adapter.client = trusted
+        monkeypatch.setattr(adapter, "_build_attachment_http_client", lambda: guarded)
+        return adapter
+
+    def test_loopback_to_loopback_redirect_is_allowed(self, monkeypatch):
+        trusted = _AttachmentClient([
+            _AttachmentResponse(302, location="/attachment/final"),
+            _AttachmentResponse(200, body=b"attachment-bytes"),
+        ])
+        guarded = _AttachmentClient([])
+        adapter = self._adapter_with_clients(monkeypatch, trusted, guarded)
+
+        body = asyncio.run(adapter._download_attachment_bytes(
+            "http://localhost:1234/attachment/start",
+            max_bytes=1024,
+        ))
+
+        assert body == b"attachment-bytes"
+        assert [call[1] for call in trusted.calls] == [
+            "http://localhost:1234/attachment/start",
+            "http://localhost:1234/attachment/final",
+        ]
+        assert guarded.calls == []
+        assert guarded.closed is True
+
+    @pytest.mark.parametrize(
+        "target",
+        [
+            "http://169.254.169.254/latest/meta-data/",
+            "http://10.0.0.7/internal",
+        ],
+    )
+    def test_foreign_private_redirect_uses_guarded_client(
+        self, monkeypatch, target
+    ):
+        from tools.url_safety import SSRFConnectionBlocked
+
+        trusted = _AttachmentClient([_AttachmentResponse(302, location=target)])
+        guarded = _AttachmentClient([
+            SSRFConnectionBlocked(f"blocked private target: {target}"),
+        ])
+        adapter = self._adapter_with_clients(monkeypatch, trusted, guarded)
+
+        with pytest.raises(SSRFConnectionBlocked):
+            asyncio.run(adapter._download_attachment_bytes(
+                "http://localhost:1234/attachment/start",
+                max_bytes=1024,
+            ))
+
+        assert len(trusted.calls) == 1
+        assert [call[1] for call in guarded.calls] == [target]
+        assert guarded.closed is True
+
+    def test_connect_time_guard_is_installed_independently_of_hooks(
+        self, monkeypatch
+    ):
+        from unittest.mock import MagicMock, patch
+
+        adapter = _make_adapter(monkeypatch)
+        guarded = MagicMock()
+        with patch(
+            "tools.url_safety.create_ssrf_safe_async_client",
+            return_value=guarded,
+        ) as factory:
+            assert adapter._build_attachment_http_client() is guarded
+
+        kwargs = factory.call_args.kwargs
+        assert kwargs["follow_redirects"] is False
+        assert kwargs["timeout"] == 60.0
+

@@ -75,11 +75,15 @@ def overlay_path(path: str, upstream_ref: str, base_sha: str, old_head: str, *, 
 
 def load_overlay_paths(strategy_file: Path) -> list[str]:
     payload = json.loads(strategy_file.read_text(encoding="utf-8"))
+    auto_overlay_paths = {
+        str(path).replace("\\", "/")
+        for path in payload.get("post_merge_auto_overlay_paths", [])
+    }
     paths: list[str] = []
     for rule in payload.get("rules", []):
-        if rule.get("action") != "official_with_overlay":
+        pattern = str(rule.get("pattern", "")).replace("\\", "/")
+        if rule.get("action") != "official_with_overlay" and pattern not in auto_overlay_paths:
             continue
-        pattern = rule.get("pattern", "")
         if "*" in pattern or "?" in pattern:
             continue
         paths.append(pattern)
@@ -125,6 +129,14 @@ def main() -> int:
         print(f"{result_path}: {status}")
         if status.startswith("failed") or status == "conflict-markers":
             failures.append((result_path, status))
+
+    from merge_semantic_invariants import validate_repo
+
+    invariant_failures = validate_repo(REPO_ROOT)
+    for failure in invariant_failures:
+        print(f"Semantic invariant failed: {failure}", file=sys.stderr)
+    if invariant_failures:
+        return 1
 
     if failures:
         print(f"\nOverlay failures: {len(failures)}", file=sys.stderr)

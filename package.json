@@ -71,7 +71,6 @@
     "fsevents@2.3.2": true,
     "fsevents@2.3.3": true,
     "get-windows": true,
-    "get-windows@9.3.0": true,
-    "file:../../../node_modules/.pnpm/get-windows@9.3.0_encoding@0.1.13/node_modules/get-windows": true
+    "get-windows@9.3.0": true
   }
 }

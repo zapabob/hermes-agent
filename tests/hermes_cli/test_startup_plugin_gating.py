@@ -74,8 +74,17 @@ def _live_subcommand_names() -> set[str]:
 # ── _plugin_cli_discovery_needed ───────────────────────────────────────────
 
 
+@pytest.mark.parametrize("command", ["harness", "peer", "worktree"])
+def test_fork_and_official_builtins_skip_plugin_discovery(command):
+    with patch.object(sys, "argv", ["hermes", command]):
+        assert _plugin_cli_discovery_needed() is False
+
+
 # ── _BUILTIN_SUBCOMMANDS ↔ argparse registration parity ────────────────────
 
+
+def test_builtin_subcommands_match_live_argparse_surface():
+    assert _live_subcommand_names() == set(_BUILTIN_SUBCOMMANDS) - {"help"}
 
 
 

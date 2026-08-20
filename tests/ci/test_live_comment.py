@@ -1,7 +1,7 @@
 """Tests for scripts/ci/live_comment.py run selection.
 
 The poller now reports on a run it is not part of, and merges jobs from
-sibling runs of the same commit (the Docker image build, which left ci.yml
+sibling runs of the same commit (the Docker image build, which left ci.yaml
 to stop holding the CI run open). ``select_watched_runs`` decides which
 sibling runs count.
 """

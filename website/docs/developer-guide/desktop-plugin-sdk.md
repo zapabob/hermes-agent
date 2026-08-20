@@ -434,6 +434,7 @@ host.state.awaitingResponse // ReadableAtom<boolean>  true until the first assis
 host.state.busy             // ReadableAtom<boolean>  focused chat is working after a send
 host.state.busyBySession    // ReadableAtom<Record<string, boolean>>  runtime id → mid-turn
 host.state.focusedSessionId // ReadableAtom<string | null>  (runtime id of the FOCUSED session — tile-aware; prefer for session.* RPC)
+host.state.focusedSessionProfile // ReadableAtom<string>  (owner profile of the focused chat — prefer over `profile` for per-bot/profile readouts)
 host.state.focusedStoredSessionId // ReadableAtom<string | null>  (durable id — navigation / session-list matching)
 host.state.focusedUsage     // ReadableAtom<UsageStats | null>  (live streamed usage of the focused session, no RPC needed)
 host.state.cwd              // ReadableAtom<string>
@@ -453,7 +454,8 @@ busy flag.
 ```ts
 host.notify({ kind, message, title?, detail?, action? })  // toast; returns id
 host.notifyError(error, fallbackMessage)                   // toast an error
-ctx.os.notify({ title, body?, silent? })   // native OS notification (attributed to your plugin)
+ctx.os.notify({ title, body?, silent?, icon?, activate?, onActivate?, actions? })
+                                           // native OS notification (attributed to your plugin)
 ctx.os.openExternal(url)                   // OS default handler (browser, mail, spotify:) → Promise<boolean>
 ctx.os.revealPath(path)                    // reveal in Finder / Explorer → Promise<boolean>
 ctx.os.writeClipboard(text)                // system clipboard → Promise<boolean>
@@ -462,6 +464,11 @@ host.openSession(id, { profile?, intent? }) // open a stored session core-style;
                                            //   profile: soft-swap to that profile's backend first
                                            //   intent: 'in-place' (default) | 'stack' | 'tab' | 'window'
 host.newChat(profile?)                     // fresh chat draft, optionally in another profile
+host.openWorkspace(id, { render, title?, minWidth?, onClose? })
+                                           // dock a plugin-rendered tab into the MAIN
+                                           //   workspace zone and reveal it; returns a disposer
+host.paneVisibility(paneId)                // ReadableAtom<boolean> — is a contributed pane
+                                           //   actually on screen (its zone's active tab)?
 host.onEvent(type, fn)                     // gateway event stream ('*' = all); returns disposer
 host.logs(...)                             // tail an app log file
 host.status()                              // one-shot system status snapshot
@@ -479,6 +486,29 @@ profile without changing the active chat or gateway. The profile-only overload i
 retained only for the sole-local/legacy topology; registry-aware plugins should pass
 the descriptor so two sources exposing the same profile name cannot collide.
 
+`host.openWorkspace(id, { render, title?, minWidth?, onClose? })` docks a
+plugin-rendered view into the **main workspace zone** — the same center area
+session tiles and previews use — as a tab, and reveals it. Re-calling it with
+the same `id` refreshes the content in place and re-fronts the tab instead of
+opening a duplicate. Closing the tab (the tab's Close control or ⌘W) tears the
+registration down and fires your `onClose`; the returned disposer closes it
+programmatically. Feature-detect it (`typeof host.openWorkspace ===
+'function'`) and fall back to a regular contributed pane on older desktop
+builds — Bot Mode's group-chat rooms are the reference consumer (main-window
+takeover when available, in-panel view otherwise).
+
+`host.paneVisibility(paneId)` returns a readonly reactive atom that is `true`
+while a contributed pane is actually on screen: present in the layout tree,
+not dismissed or hidden, its zone un-minimized, and holding its zone's active
+tab slot (a lone pane in its own zone counts). The id is the
+contribution-scoped pane id, `<pluginId>:<paneId>`. Atoms are memoized per id,
+so calling it in render is safe. Use it to register companion UI only while
+your pane is visible — Bot Mode's Cronjobs pane is the reference consumer: it
+registers while the Bots pane holds the sidebar tab and unregisters when the
+user tabs back to Sessions. Feature-detect on older desktops
+(`typeof host.paneVisibility === 'function'`) and fall back to
+always-registered behavior.
+
 `host.profileRoutes()` inventories every registered source in the current connection
 registry. Connect-on-demand SSH sources expose a credential-free `default` seed
 route without opening a tunnel, so a plugin can be the first caller that dials them;
@@ -495,7 +525,12 @@ preserves backend identity without exposing connection secrets.
 Profile-shaped plugins get first-class methods too:
 `profiles.list` (each profile + its most recent conversation as
 `last_session`; pass `include_sessions: false` to skip the per-profile DB
-probe) and `profiles.create` (`name`, `description`, `clone_from`,
+probe; pass `preferred_session_ids: { profileName: sessionId }` for an
+exact, existence-checked lookup of one pinned session per profile — each
+named row gains a `preferred_session` summary that resolves hidden rows
+and compression lineages to their live tip, or `null` when the id is
+definitively gone; older gateways ignore the param and omit the field)
+and `profiles.create` (`name`, `description`, `clone_from`,
 `clone_all`, `no_skills`, `soul`, optional `model` + `provider` pin) — the
 ws twins of the dashboard's `/api/profiles` REST routes.
 `host.state.busy` is the focused chat's live turn (thinking and streaming).
@@ -525,6 +560,32 @@ approval/turn alerts use. It fires only while the user is away from Hermes
 they're looking at the app. Users can silence it per device under Settings ▸
 Notifications ▸ "Plugin notifications", and repeats from the same plugin are
 throttled, so treat it as a signal for genuinely notable events — not a log.
+
+Rich presentation + activation (extends the original `ctx.os` door):
+
+```ts
+ctx.os.notify({
+  title: 'New match found',
+  body: 'Someone matched your signal',
+  icon: '/abs/path/to/icon.png', // Electron Notification icon
+  // Body click → focus Hermes + navigate. Same vocabulary as OS deep links:
+  activate: 'hermes://index-network/intent/1',
+  // or: activate: '/index-network/intent/1'
+  // or: activate: { path: '/index-network/intent/1' }
+  onActivate: () => focusLocalState('1'), // optional renderer callback
+  actions: [
+    { id: 'open', label: 'Open', activate: 'hermes://index-network/intent/1' },
+    { id: 'dismiss', label: 'Dismiss', onAction: () => dismiss('1') },
+  ],
+})
+```
+
+`activate` is deeplink-compatible: `hermes://index-network/intent/1` and the
+hash path `/index-network/intent/1` resolve to the same in-app route (and the
+same `hermes://…` URL works as an OS deep link). Action buttons only render on
+signed macOS builds; elsewhere the body click still activates. Navigation only
+happens on user click — never from a background event alone.
+
 The other doors (`openExternal`, `revealPath`, `writeClipboard`) resolve
 `false` instead of throwing when the capability isn't available (older desktop
 shell, plain browser) — branch on the result rather than sniffing the bridge.
@@ -627,6 +688,21 @@ backend, the remote box's `~/.hermes/plugins` is not reachable as a filesystem �
 only locally installed packages contribute a desktop half (same rule as the
 standalone door).
 :::
+
+### Distributing with an install link {#install-link}
+
+Ship your plugin repo (agent half, desktop half, or both) and link to it with
+the `hermes://` scheme — a plain anchor on your website or README:
+
+```html
+<a href="hermes://plugin/install?repo=owner/repo&enable=1">Install in Hermes</a>
+```
+
+The user gets a confirmation dialog (repo id, source links, a probe of what
+the repo ships) and picks components before anything is installed — deep links
+never auto-install. `force=1` replaces an existing install; dev builds use
+`hermes-dev://`. Full link reference:
+[One-click install links](/user-guide/features/plugins#one-click-install-links-desktop).
 
 ### The Python side
 
@@ -779,7 +855,7 @@ not treat this pipeline as a trust boundary.
 | Category | Exports |
 |----------|---------|
 | Host | `host` (`.state.*`, `.notify`, `.notifyError`, `.navigate`, `.onEvent`, `.logs`, `.status`, `.restartGateway`, `.request`) |
-| Plugin contract | `HermesPlugin`, `PluginContext`, `PluginContribution`, `PluginStorage`, `PluginOs`, `PluginRestOptions`, `PluginNativeNotificationInput`, `Contribution` |
+| Plugin contract | `HermesPlugin`, `PluginContext`, `PluginContribution`, `PluginStorage`, `PluginOs`, `PluginRestOptions`, `PluginNativeNotificationInput`, `PluginNotificationAction`, `HermesOpenTarget`, `Contribution` |
 | Area constants | `PANES_AREA`, `ROUTES_AREA`, `SIDEBAR_NAV_AREA`, `STATUSBAR_AREAS`, `TITLEBAR_AREAS`, `PALETTE_AREA`, `KEYBINDS_AREA`, `THEMES_AREA`, `COMPOSER_AREAS` |
 | Area payloads | `RouteContribution`, `SidebarNavContribution`, `StatusbarItem`, `TitlebarTool`, `PaletteContribution`, `KeybindContribution`, `ComposerMiddleware`, `ComposerAttachmentProvider` |
 | React / state | `useValue`, `atom`, `computed`, `useQuery`, `useMutation`, `useQueryClient`, `queryClient`, `Contribute` |

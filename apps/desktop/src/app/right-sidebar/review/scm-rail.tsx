@@ -411,7 +411,7 @@ export function ReviewScmRail() {
             <p className="px-2.5 py-1 text-[0.66rem] text-(--ui-text-tertiary)">{c.noBranches}</p>
           ) : (
             <>
-              <BranchGroupHeader count={localBranches.length} label={c.local} />
+              <BranchGroupHeader count={localBranches.length} label={c.local ?? 'Local'} />
               {localBranches.map(branch => (
                 <ScmRow
                   actions={
