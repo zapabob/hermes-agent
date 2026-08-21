@@ -51,6 +51,11 @@
       "note": "Official npm lockfiles carry dependency and vulnerability fixes."
     },
     {
+      "pattern": "tests/tools/test_website_policy.py",
+      "action": "upstream",
+      "note": "Official upstream removed test_website_policy.py; follow upstream deletion."
+    },
+    {
       "pattern": "apps/desktop/src/app/session/hooks/use-prompt-actions.ts",
       "action": "upstream",
       "note": "Official desktop split moved this hook into use-prompt-actions/; drop the deleted legacy file during sync."
