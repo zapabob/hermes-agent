@@ -99,7 +99,7 @@ def _ra():
 
 
 AGENT_RUNTIME_POST_HOOK_TOOL_NAMES = frozenset(
-    {"todo", "session_search", "memory", "clarify", "read_terminal", "read_preview", "read_window_below", "setup_mcp", "tour", "delegate_task"}
+    {"todo", "session_search", "memory", "clarify", "read_terminal", "read_preview", "drive_preview", "annotate_preview", "read_window_below", "setup_mcp", "tour", "delegate_task"}
 )
 
 
@@ -2580,6 +2580,18 @@ def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: boo
             client_kwargs["default_headers"] = existing
     except Exception:
         _ra().logger.debug("Copilot default-header guard skipped", exc_info=True)
+
+    # OpenCode Free: the tier is served ANONYMOUSLY — any bearer the relay
+    # doesn't recognize (including placeholders) is a 401. Route every
+    # opencode-free client through the shared keyless header policy: an
+    # empty Authorization default_header overrides the SDK's
+    # "Bearer <api_key>" so no credential ever reaches the wire.
+    if agent.provider == "opencode-free":
+        from hermes_cli.models import opencode_zen_free_headers
+
+        _existing = dict(client_kwargs.get("default_headers") or {})
+        _existing.update(opencode_zen_free_headers())
+        client_kwargs["default_headers"] = _existing
     # Uses the module-level `OpenAI` name, resolved lazily on first
     # access via __getattr__ below. Tests patch via `run_agent.OpenAI`.
     client = _ra().OpenAI(**client_kwargs)
@@ -2620,9 +2632,11 @@ def switch_model(agent, new_model, new_provider, api_key='', base_url='', api_mo
     # hit /v1/v1/messages.  `model_switch.switch_model()` already strips
     # this, but we guard here so any direct callers (future code paths,
     # tests) can't reintroduce the double-/v1 404 bug.
+    from hermes_cli.models import opencode_provider_family
+
     if (
         api_mode == "anthropic_messages"
-        and new_provider in {"opencode-zen", "opencode-go"}
+        and opencode_provider_family(new_provider) is not None
         and isinstance(base_url, str)
         and base_url
     ):
@@ -3235,6 +3249,37 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
                     start=next_args.get("start"),
                     count=next_args.get("count"),
                     callback=getattr(agent, "read_preview_callback", None),
+                ),
+                next_args,
+            )
+    elif function_name == "drive_preview":
+        def _execute(next_args: dict) -> Any:
+            from tools.drive_preview_tool import drive_preview_tool as _drive_preview_tool
+            return _finish_agent_tool(
+                _drive_preview_tool(
+                    action=next_args.get("action", ""),
+                    ref=next_args.get("ref"),
+                    selector=next_args.get("selector"),
+                    text=next_args.get("text"),
+                    key=next_args.get("key"),
+                    submit=next_args.get("submit"),
+                    amount=next_args.get("amount"),
+                    to=next_args.get("to"),
+                    limit=next_args.get("max"),
+                    callback=getattr(agent, "drive_preview_callback", None),
+                ),
+                next_args,
+            )
+    elif function_name == "annotate_preview":
+        def _execute(next_args: dict) -> Any:
+            from tools.annotate_preview_tool import annotate_preview_tool as _annotate_preview_tool
+            return _finish_agent_tool(
+                _annotate_preview_tool(
+                    action=next_args.get("action", "add"),
+                    ref=next_args.get("ref"),
+                    selector=next_args.get("selector"),
+                    label=next_args.get("label"),
+                    callback=getattr(agent, "drive_preview_callback", None),
                 ),
                 next_args,
             )

@@ -1841,7 +1841,7 @@ def _setup_worktree(repo_root: str = None, sync_base: bool = True,
 
     repo_root = repo_root or _git_repo_root()
     if not repo_root:
-        print("\033[31m✗ --worktree requires being inside a git repository.\033[0m")
+        _cprint("\033[31m✗ --worktree requires being inside a git repository.\033[0m")
         print("  cd into your project repo first, then run hermes -w")
         return None
 
@@ -1860,7 +1860,7 @@ def _setup_worktree(repo_root: str = None, sync_base: bool = True,
 
     wt_path = worktrees_dir / wt_name
     if name and wt_path.exists():
-        print(f"\033[31m✗ Worktree already exists: {wt_path}\033[0m")
+        _cprint(f"\033[31m✗ Worktree already exists: {wt_path}\033[0m")
         print("  Pick a different name, or remove it with: "
               f"git worktree remove {wt_path}")
         return None
@@ -1930,7 +1930,7 @@ def _setup_worktree(repo_root: str = None, sync_base: bool = True,
                 )
             if result.returncode != 0:
                 _cleanup_failed_worktree_add(repo_root, wt_path, branch_name)
-                print(f"\033[31m✗ Failed to create worktree: {result.stderr.strip()}\033[0m")
+                _cprint(f"\033[31m✗ Failed to create worktree: {result.stderr.strip()}\033[0m")
                 return None
     except Exception as e:
         # A timed-out/failed `worktree add` is NOT atomic: git leaves the
@@ -1941,7 +1941,7 @@ def _setup_worktree(repo_root: str = None, sync_base: bool = True,
         # the error (Aug 2026 incident: 30s timeout during pack-sprawl left
         # exactly this poison).
         _cleanup_failed_worktree_add(repo_root, wt_path, branch_name)
-        print(f"\033[31m✗ Failed to create worktree: {e}\033[0m")
+        _cprint(f"\033[31m✗ Failed to create worktree: {e}\033[0m")
         return None
 
     # Copy files listed in .worktreeinclude (gitignored files the agent needs)
@@ -2043,7 +2043,7 @@ def _setup_worktree(repo_root: str = None, sync_base: bool = True,
         "base": base_ref,
     }
 
-    print(f"\033[32m✓ Worktree created:\033[0m {wt_path}")
+    _cprint(f"\033[32m✓ Worktree created:\033[0m {wt_path}")
     print(f"  Branch: {branch_name}")
     print(f"  Base:   {base_label}")
 
@@ -2570,10 +2570,10 @@ def _cleanup_worktree(info: Dict[str, str] = None) -> None:
             # origin/*, so already-public commits look "unpushed". Be honest
             # about why we're keeping it — the startup pruner deepens the
             # clone in the background and will reap it on a later startup.
-            print(f"\n\033[33m⚠ Shallow clone — cannot verify push state, keeping: {wt_path}\033[0m")
+            _cprint(f"\n\033[33m⚠ Shallow clone — cannot verify push state, keeping: {wt_path}\033[0m")
             print("  The next `hermes -w` session deepens the clone and prunes merged worktrees automatically.")
         else:
-            print(f"\n\033[33m⚠ Worktree has unpushed commits, keeping: {wt_path}\033[0m")
+            _cprint(f"\n\033[33m⚠ Worktree has unpushed commits, keeping: {wt_path}\033[0m")
             print(f"  To clean up manually: git worktree remove --force {wt_path}")
         _active_worktree = None
         return
@@ -2608,13 +2608,7 @@ def _cleanup_worktree(info: Dict[str, str] = None) -> None:
         logger.debug("Failed to delete branch %s: %s", branch, e)
 
     _active_worktree = None
-    # Windows legacy consoles (notably cp932) cannot encode the success
-    # glyph. Preserve the pretty output where supported, but never let an
-    # exit-time status message raise after cleanup has already succeeded.
-    try:
-        print(f"\033[32m✓ Worktree cleaned up: {wt_path}\033[0m")
-    except UnicodeEncodeError:
-        print(f"\033[32mWorktree cleaned up: {wt_path}\033[0m")
+    _cprint(f"\033[32m✓ Worktree cleaned up: {wt_path}\033[0m")
 
 
 def _run_state_db_auto_maintenance(session_db) -> None:
@@ -5565,25 +5559,26 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 or os.getenv("OPENROUTER_API_KEY")
             )
         # Max turns priority: CLI arg > config file > env var > default
+        # All paths go through resolve_turn_limit() so that agent.max_turns
+        # accepts "none"/"unlimited" (→ sys.maxsize) in addition to ints.
+        # See hermes_cli.config.resolve_turn_limit for the full spelling table.
+        from hermes_cli.config import resolve_turn_limit as _resolve_turn_limit
         if max_turns is not None:  # CLI arg was explicitly set
-            self.max_turns = max_turns
-        elif CLI_CONFIG["agent"].get("max_turns"):
-            self.max_turns = CLI_CONFIG["agent"]["max_turns"]
-        elif CLI_CONFIG.get("max_turns"):  # Backwards compat: root-level max_turns
+            self.max_turns = _resolve_turn_limit(max_turns)
+        elif CLI_CONFIG["agent"].get("max_turns") is not None:
+            self.max_turns = _resolve_turn_limit(CLI_CONFIG["agent"]["max_turns"])
+        elif CLI_CONFIG.get("max_turns") is not None:  # Backwards compat: root-level max_turns
             # KEEP (evaluated for the v12 support-floor cleanup, July 2026):
             # no versioned config migration ever rewrote root-level max_turns
             # to agent.max_turns on disk — only load-time normalization
             # (_normalize_max_turns_config) folds it, and configs read through
             # other paths may bypass it. This fallback is therefore the only
             # safety net for configs that still carry the root key.
-            self.max_turns = CLI_CONFIG["max_turns"]
-        elif os.getenv("HERMES_MAX_ITERATIONS"):
-            try:
-                self.max_turns = int(os.getenv("HERMES_MAX_ITERATIONS", ""))
-            except (TypeError, ValueError):
-                self.max_turns = 500
+            self.max_turns = _resolve_turn_limit(CLI_CONFIG["max_turns"])
         else:
-            self.max_turns = 500
+            # Env var bridge (set by gateway/run.py from config.yaml, or by the
+            # user directly). Empty/unset → default (unlimited).
+            self.max_turns = _resolve_turn_limit(os.getenv("HERMES_MAX_ITERATIONS"))
 
         # Wall-clock run budget: CLI flag wins over config; both optional.
         # None keeps the feature fully off (AIAgent stays dormant).
@@ -5591,7 +5586,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             self.run_budget_seconds = run_budget
         else:
             self.run_budget_seconds = CLI_CONFIG["agent"].get("run_budget_seconds")
-        
+
         # Parse and validate toolsets
         self.enabled_toolsets = toolsets
         from agent.skill_utils import parse_config_string_list
@@ -5797,6 +5792,14 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         self._slash_confirm_state = None
         self._slash_confirm_deadline = 0
         self._model_picker_state = None
+        # Rotating task-oriented composer placeholder (C-09), chosen once per
+        # session so it stays stable while the empty input box is on screen.
+        try:
+            from hermes_cli.tips import get_random_composer_placeholder
+            self._composer_placeholder = get_random_composer_placeholder()
+        except Exception:
+            self._composer_placeholder = ""
+        self._command_palette_state = None
         # Armed when a bare `/resume` prints the recent-sessions list so the
         # very next bare numeric input (e.g. `3`) resolves to that session.
         # Holds the exact list used for index resolution; one-shot (cleared on
@@ -7456,7 +7459,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             return f"⚕ {self.model if getattr(self, 'model', None) else 'Hermes'}"
 
     def _get_status_bar_fragments(self):
-        if not self._status_bar_visible or getattr(self, "_model_picker_state", None):
+        if not self._status_bar_visible or getattr(self, '_model_picker_state', None) or getattr(self, '_command_palette_state', None):
             return []
         try:
             snapshot = self._get_status_bar_snapshot()
@@ -7779,7 +7782,9 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 pass
             return changed
 
-        if resolved_provider in {"opencode-zen", "opencode-go"}:
+        from hermes_cli.models import opencode_provider_family
+
+        if opencode_provider_family(resolved_provider) is not None:
             try:
                 from hermes_cli.models import (
                     normalize_opencode_model_id,
@@ -9656,6 +9661,50 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         model = getattr(self, "model", None) or "(unknown)"
         is_running = bool(getattr(self, "_agent_running", False))
 
+        # Reasoning level (C-02): resolve the effective effort for display.
+        reasoning_label = None
+        try:
+            rc = getattr(agent, "reasoning_config", None) or getattr(self, "reasoning_config", None)
+            if isinstance(rc, dict):
+                if rc.get("enabled") is False:
+                    reasoning_label = "off"
+                elif rc.get("effort"):
+                    reasoning_label = str(rc.get("effort"))
+            show_r = getattr(self, "show_reasoning", None)
+            if reasoning_label:
+                reasoning_label += f" (display: {'on' if show_r else 'off'})" if show_r is not None else ""
+        except Exception:
+            reasoning_label = None
+
+        # Approval mode (C-02).
+        approval_label = None
+        try:
+            from tools.approval import _get_approval_mode, is_approval_bypass_active_for_session
+            approval_label = _get_approval_mode()
+            try:
+                if is_approval_bypass_active_for_session(getattr(self, "session_key", "") or ""):
+                    approval_label += " (YOLO bypass active)"
+            except Exception:
+                pass
+        except Exception:
+            approval_label = None
+
+        # Context window usage (C-02): reuse the status-bar snapshot which
+        # already computes tokens / max / percent.
+        ctx_label = None
+        try:
+            snap = self._get_status_bar_snapshot()
+            ctx_tokens = snap.get("context_tokens") or 0
+            ctx_max = snap.get("context_length")
+            ctx_pct = snap.get("context_percent")
+            if ctx_max:
+                left = ""
+                if isinstance(ctx_pct, (int, float)):
+                    left = f"{max(0, 100 - int(ctx_pct))}% left · "
+                ctx_label = f"{left}{ctx_tokens:,} / {ctx_max:,} tokens used"
+        except Exception:
+            ctx_label = None
+
         lines = [
             "Hermes CLI Status",
             "",
@@ -9664,8 +9713,14 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         ]
         if title:
             lines.append(f"Title: {title}")
+        lines.append(f"Model: {model} ({provider})")
+        if reasoning_label:
+            lines.append(f"Reasoning: {reasoning_label}")
+        if approval_label:
+            lines.append(f"Approvals: {approval_label}")
+        if ctx_label:
+            lines.append(f"Context: {ctx_label}")
         lines.extend([
-            f"Model: {model} ({provider})",
             f"Created: {created_at.strftime('%Y-%m-%d %H:%M')}",
             f"Last Activity: {updated_at.strftime('%Y-%m-%d %H:%M')}",
             f"Tokens: {total_tokens:,}",
@@ -9687,9 +9742,31 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             return self._fast_command_available()
         return True
 
-    def show_help(self):
-        """Display help information with categorized commands."""
-        from hermes_cli.commands import COMMANDS_BY_CATEGORY
+    def show_help(self, arg: str = ""):
+        """Display help. Bare /help shows categorized core commands with the
+        skill list collapsed to one line; /help skills lists all skill
+        commands; /help <query> filters commands by substring.
+        """
+        from hermes_cli.commands import COMMANDS_BY_CATEGORY, HELP_SESSION_SUBGROUPS
+
+        arg = (arg or "").strip()
+        skill_commands = _ensure_skill_commands()
+
+        # /help skills — the full skill-command list (kept out of the default
+        # view so core commands don't scroll off screen).
+        if arg.lower() in ("skills", "skill"):
+            if not skill_commands:
+                _cprint("\n  No skill commands installed.\n")
+                return
+            _cprint(f"\n  ⚡ {_BOLD}Skill Commands{_RST} ({len(skill_commands)} installed):")
+            for cmd, info in sorted(skill_commands.items()):
+                ChatConsole().print(
+                    f"    [bold {_accent_hex()}]{cmd:<22}[/] [dim]-[/] {_escape(info['description'])}"
+                )
+            _cprint("")
+            return
+
+        query = arg.lower() if arg else ""
 
         try:
             from hermes_cli.skin_engine import get_active_help_header
@@ -9705,30 +9782,77 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         _cprint(f"{_BOLD}|{header:^{inner_width}}|{_RST}")
         _cprint(f"{_BOLD}+{'-' * inner_width}+{_RST}")
 
+        def _emit(cmd: str, desc: str) -> bool:
+            if not self._command_available(cmd):
+                return False
+            if query and query not in cmd.lower() and query not in desc.lower():
+                return False
+            ChatConsole().print(
+                f"    [bold {_accent_hex()}]{cmd:<15}[/] [dim]-[/] {_escape(desc)}"
+            )
+            return True
+
         for category, commands in COMMANDS_BY_CATEGORY.items():
-            _cprint(f"\n  {_BOLD}── {category} ──{_RST}")
+            if category == "Session":
+                # Split the oversized Session category into readable sub-groups
+                # (Session / Context / Background & Automation) in the renderer.
+                sub_of: dict[str, str] = {}
+                for _sub, _names in HELP_SESSION_SUBGROUPS.items():
+                    for _n in _names:
+                        sub_of[f"/{_n}"] = _sub
+                buckets: dict[str, list[tuple[str, str]]] = {"Session": []}
+                for _sub in HELP_SESSION_SUBGROUPS:
+                    buckets[_sub] = []
+                for cmd, desc in commands.items():
+                    buckets[sub_of.get(cmd, "Session")].append((cmd, desc))
+                for _sub in ("Session", *HELP_SESSION_SUBGROUPS.keys()):
+                    rows = buckets.get(_sub) or []
+                    printed_header = False
+                    for cmd, desc in rows:
+                        if not self._command_available(cmd):
+                            continue
+                        if query and query not in cmd.lower() and query not in desc.lower():
+                            continue
+                        if not printed_header:
+                            _cprint(f"\n  {_BOLD}── {_sub} ──{_RST}")
+                            printed_header = True
+                        _emit(cmd, desc)
+                continue
+
+            printed_header = False
             for cmd, desc in commands.items():
                 if not self._command_available(cmd):
                     continue
-                ChatConsole().print(
-                    f"    [bold {_accent_hex()}]{cmd:<15}[/] [dim]-[/] {_escape(desc)}"
-                )
+                if query and query not in cmd.lower() and query not in desc.lower():
+                    continue
+                if not printed_header:
+                    _cprint(f"\n  {_BOLD}── {category} ──{_RST}")
+                    printed_header = True
+                _emit(cmd, desc)
 
-        skill_commands = _ensure_skill_commands()
-        if skill_commands:
+        # Skill commands: collapsed to a one-line pointer by default so the
+        # 60+ skill entries don't bury the core command reference (C-04).
+        if query:
+            # In filter mode, DO include matching skill commands inline.
+            matched_skills = [
+                (cmd, info) for cmd, info in sorted(skill_commands.items())
+                if query in cmd.lower() or query in (info.get("description", "").lower())
+            ]
+            if matched_skills:
+                _cprint(f"\n  ⚡ {_BOLD}Skill Commands{_RST} (matching '{arg}'):")
+                for cmd, info in matched_skills:
+                    ChatConsole().print(
+                        f"    [bold {_accent_hex()}]{cmd:<22}[/] [dim]-[/] {_escape(info['description'])}"
+                    )
+        elif skill_commands:
             _cprint(
-                f"\n  ⚡ {_BOLD}Skill Commands{_RST} ({len(skill_commands)} installed):"
+                f"\n  ⚡ {_BOLD}Skill Commands{_RST}: {len(skill_commands)} installed "
+                f"— {_DIM}/help skills{_RST} to list them"
             )
-            for cmd, info in sorted(skill_commands.items()):
-                ChatConsole().print(
-                    f"    [bold {_accent_hex()}]{cmd:<22}[/] [dim]-[/] {_escape(info['description'])}"
-                )
 
         _bundles_now = get_skill_bundles()
-        if _bundles_now:
-            _cprint(
-                f"\n  ▣ {_BOLD}Skill Bundles{_RST} ({len(_bundles_now)} installed):"
-            )
+        if _bundles_now and not query:
+            _cprint(f"\n  ▣ {_BOLD}Skill Bundles{_RST} ({len(_bundles_now)} installed):")
             for cmd, info in sorted(_bundles_now.items()):
                 skill_count = len(info.get("skills", []))
                 desc = info.get("description") or f"Load {skill_count} skills"
@@ -9738,7 +9862,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 )
 
         quick_commands = self.config.get("quick_commands", {})
-        if quick_commands:
+        if quick_commands and not query:
             _cprint(f"\n  ⚡ {_BOLD}Quick Commands{_RST} ({len(quick_commands)} configured):")
             for name, qcmd in sorted(quick_commands.items()):
                 desc = qcmd.get("description", qcmd.get("type", ""))
@@ -9746,8 +9870,12 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     f"    [bold {_accent_hex()}]{('/' + name):<22}[/] [dim]-[/] {_escape(desc)}"
                 )
 
-        _cprint(f"\n  {_DIM}Tip: Just type your message to chat with Hermes!{_RST}")
-        _cprint(f"  {_DIM}Multi-line: Ctrl+J, Alt+Enter, or \\+Enter for a new line{_RST}")
+        if query:
+            _cprint(f"\n  {_DIM}Filtered by '{arg}' — run /help for the full list.{_RST}\n")
+            return
+
+        _cprint(f"\n  {_DIM}Tip: /help skills lists skill commands · /help <text> filters · Ctrl+P opens the command palette{_RST}")
+        _cprint(f"  {_DIM}Multi-line: Ctrl+J, Alt+Enter, or \\\\+Enter for a new line{_RST}")
         _cprint(f"  {_DIM}Draft editor: Ctrl+G (Alt+G in VSCode/Cursor){_RST}")
         if _is_termux_environment():
             _cprint(
@@ -11080,14 +11208,122 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         lines.append(("class:approval-border", "╰" + ("─" * box_width) + "╯\n"))
         return lines
 
-    def _open_model_picker(
-        self,
-        providers: list,
-        current_model: str,
-        current_provider: str,
-        user_provs=None,
-        custom_provs=None,
-    ) -> None:
+    def _build_command_palette_entries(self) -> list:
+        """Flat list of (command, description) for the Ctrl+P palette.
+
+        Sourced from the same COMMAND_REGISTRY that backs /help, filtered to
+        commands available on this surface, plus installed skill commands.
+        Selecting an entry inserts the exact command string — never a fuzzy
+        resolution.
+        """
+        from hermes_cli.commands import COMMANDS_BY_CATEGORY
+
+        entries: list[tuple[str, str, str]] = []  # (command, category, desc)
+        for category, commands in COMMANDS_BY_CATEGORY.items():
+            for cmd, desc in commands.items():
+                if not self._command_available(cmd):
+                    continue
+                entries.append((cmd, category, desc))
+        try:
+            for cmd, info in sorted(_ensure_skill_commands().items()):
+                entries.append((cmd, "Skill", info.get("description", "")))
+        except Exception:
+            pass
+        return entries
+
+    def _open_command_palette(self) -> None:
+        """Open the Ctrl+P fuzzy command palette modal."""
+        if getattr(self, "_command_palette_state", None):
+            return
+        # Don't stack over other modals.
+        if (self._model_picker_state or self._clarify_state or self._approval_state
+                or self._slash_confirm_state or self._sudo_state or self._secret_state):
+            return
+        self._capture_modal_input_snapshot()
+        self._command_palette_state = {
+            "entries": self._build_command_palette_entries(),
+            "filter": "",
+            "selected": 0,
+            "_scroll_offset": 0,
+        }
+        self._invalidate(min_interval=0.0)
+
+    def _close_command_palette(self) -> None:
+        self._command_palette_state = None
+        self._restore_modal_input_snapshot()
+        self._invalidate(min_interval=0.0)
+
+    def _command_palette_visible_entries(self) -> list:
+        """Return (command, category, desc) rows matching the active filter.
+
+        Ranked, command-name-focused matching (a bare subsequence over the
+        whole "cmd category desc" string is uselessly permissive — "steer"
+        would match 130+ rows via description text). Priority:
+          0 exact command match
+          1 command startswith query
+          2 query substring in command
+          3 query subsequence in command
+          4 query substring in description
+        Rows that match nowhere are dropped. Ties keep registry order.
+        """
+        state = self._command_palette_state or {}
+        entries = state.get("entries") or []
+        q = (state.get("filter", "") or "").strip().lower()
+        if not q:
+            return list(entries)
+
+        def _subseq(needle: str, hay: str) -> bool:
+            it = iter(hay)
+            return all(ch in it for ch in needle)
+
+        ranked = []
+        for order, row in enumerate(entries):
+            cmd, _cat, desc = row
+            name = cmd.lower().lstrip("/")
+            qn = q.lstrip("/")
+            desc_l = (desc or "").lower()
+            if name == qn:
+                rank = 0
+            elif name.startswith(qn):
+                rank = 1
+            elif qn in name:
+                rank = 2
+            elif _subseq(qn, name):
+                rank = 3
+            elif q in desc_l:
+                rank = 4
+            else:
+                continue
+            ranked.append((rank, order, row))
+        ranked.sort(key=lambda t: (t[0], t[1]))
+        return [row for (_r, _o, row) in ranked]
+
+    def _handle_command_palette_selection(self) -> None:
+        """Insert the selected command into the composer (does not auto-run)."""
+        state = self._command_palette_state
+        if not state:
+            return
+        rows = self._command_palette_visible_entries()
+        selected = state.get("selected", 0)
+        if not (0 <= selected < len(rows)):
+            self._close_command_palette()
+            return
+        cmd = rows[selected][0]  # exact command string, e.g. "/model"
+        self._close_command_palette()
+        # Prefill the composer so the user can add args / confirm — never
+        # auto-execute (a palette pick should be explicit, and many commands
+        # take arguments).
+        try:
+            app = getattr(self, "_app", None)
+            if app is not None:
+                buf = app.current_buffer
+                buf.text = cmd + " "
+                buf.cursor_position = len(buf.text)
+                self._invalidate(min_interval=0.0)
+        except Exception:
+            logger.debug("command palette prefill failed", exc_info=True)
+
+    def _open_model_picker(self, providers: list, current_model: str, current_provider: str, user_provs=None, custom_provs=None) -> None:
         """Open prompt_toolkit-native /model picker modal."""
         self._capture_modal_input_snapshot()
         default_idx = next(
@@ -11101,6 +11337,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             "current_provider": current_provider,
             "user_provs": user_provs,
             "custom_provs": custom_provs,
+            "filter": "",
         }
         self._invalidate(min_interval=0.0)
 
@@ -11214,6 +11451,29 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 )
             except Exception as exc:
                 logger.warning("CLI one-turn model restore failed: %s", exc)
+
+    @staticmethod
+    def _filter_model_picker_entries(entries: list, query: str) -> list:
+        """Return (original_index, label) pairs for entries matching ``query``.
+
+        Subsequence ("fuzzy") match, case-insensitive: the query characters
+        must appear in order in the label. An empty query matches everything.
+        Crucially the returned pairs carry the ORIGINAL index into ``entries``,
+        so a selection in the filtered view still resolves to exactly one
+        concrete model — filtering only narrows the list, it never introduces
+        an ambiguous or fuzzy *resolution* (the anti-"claude→old-model" rule).
+        """
+        pairs = list(enumerate(entries))
+        q = (query or "").strip().lower()
+        if not q:
+            return pairs
+
+        def _subseq(needle: str, hay: str) -> bool:
+            it = iter(hay)
+            return all(ch in it for ch in needle)
+
+        out = [(i, e) for (i, e) in pairs if _subseq(q, str(e).lower())]
+        return out
 
     @staticmethod
     def _compute_model_picker_viewport(
@@ -11446,32 +11706,36 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             state["provider_data"] = provider_data
             state["model_list"] = model_list
             state["selected"] = 0
+            state["filter"] = ""
+            state["_filtered_pairs"] = None
             self._invalidate(min_interval=0.0)
             return
         if stage == "model":
             provider_data = state.get("provider_data") or {}
             model_list = state.get("model_list") or []
-            back_idx = len(model_list)
-            cancel_idx = len(model_list) + 1
+            # Map the selected row through the active fuzzy filter so the
+            # index lines up with what the picker is currently showing. The
+            # filtered pair carries the ORIGINAL index into model_list, so the
+            # resolved model is always one concrete, unambiguous entry.
+            filtered_pairs = state.get("_filtered_pairs")
+            if filtered_pairs is None:
+                filtered_pairs = list(enumerate(model_list))
+            visible_labels = [e for (_i, e) in filtered_pairs]
+            back_idx = len(visible_labels)
+            cancel_idx = len(visible_labels) + 1
             if selected == back_idx:
                 state["stage"] = "provider"
-                state["selected"] = next(
-                    (
-                        i
-                        for i, p in enumerate(state.get("providers") or [])
-                        if p.get("slug") == provider_data.get("slug")
-                    ),
-                    0,
-                )
+                state["filter"] = ""
+                state["_filtered_pairs"] = None
+                state["selected"] = next((i for i, p in enumerate(state.get("providers") or []) if p.get("slug") == provider_data.get("slug")), 0)
                 self._invalidate(min_interval=0.0)
                 return
             if selected >= cancel_idx:
                 self._close_model_picker()
                 return
-            if selected < len(model_list):
+            if 0 <= selected < len(visible_labels):
                 from hermes_cli.model_switch import switch_model
-
-                chosen_model = model_list[selected]
+                chosen_model = visible_labels[selected]
                 result = switch_model(
                     raw_input=chosen_model,
                     current_provider=self.provider or "",
@@ -12132,7 +12396,10 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 return True
             return False
         elif canonical == "help":
-            self.show_help()
+            _help_parts = cmd_original.split(None, 1)
+            self.show_help(_help_parts[1].strip() if len(_help_parts) > 1 else "")
+        elif canonical == "palette":
+            self._open_command_palette()
         elif canonical == "whoami":
             self._handle_whoami_command()
         elif canonical == "profile":
@@ -12260,8 +12527,12 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
                             new_title = SessionDB.sanitize_title(raw_title)
                         except ValueError as e:
+                            # sanitize_title rejected the input (e.g. too long).
+                            # Print that one reason and stop — don't fall
+                            # through to the "empty after cleanup" branch and
+                            # print a second, contradictory error (SC-05).
                             _cprint(f"  {e}")
-                            new_title = None
+                            return True
                         if not new_title:
                             _cprint(
                                 "  Title is empty after cleanup. Please use printable characters."
@@ -12361,12 +12632,15 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 try:
                     _undo_n = int(_undo_parts[1])
                 except ValueError:
-                    print(
-                        f"(._.) Invalid count {_undo_parts[1]!r} — use /undo or /undo N."
-                    )
-                    return
+                    print(f"(._.) Invalid count {_undo_parts[1]!r} — use /undo or /undo N.")
+                    return True  # bad arg — command handled, keep the REPL alive
                 if _undo_n < 1:
                     _undo_n = 1
+            # Nothing to undo → say so immediately; don't pop a destructive
+            # confirmation dialog for a guaranteed no-op (SC-06).
+            if not self.conversation_history:
+                print("(._.) No messages to undo.")
+                return True
             _undo_desc = (
                 "This removes the last user/assistant exchange from history."
                 if _undo_n == 1
@@ -17863,6 +18137,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         slash_confirm_widget=None,
         clarify_widget,
         model_picker_widget=None,
+        command_palette_widget=None,
         spinner_widget=None,
         spacer,
         status_bar,
@@ -17889,6 +18164,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 slash_confirm_widget,
                 clarify_widget,
                 model_picker_widget,
+                command_palette_widget,
                 spinner_widget,
                 spacer,
                 *self._get_extra_tui_widgets(),
@@ -18937,20 +19213,123 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             if state.get("stage") == "provider":
                 max_idx = len(state.get("providers") or [])
             else:
-                max_idx = len(state.get("model_list") or []) + 1
+                # +1 for "← Back" and Cancel over the filtered visible rows.
+                _fp = state.get("_filtered_pairs")
+                _visible = len(_fp) if _fp is not None else len(state.get("model_list") or [])
+                max_idx = _visible + 1
             state["selected"] = min(max_idx, state.get("selected", 0) + 1)
             event.app.invalidate()
 
-        @kb.add(
-            "escape",
-            filter=Condition(lambda: bool(self._model_picker_state)),
-            eager=True,
-        )
+        def _model_picker_typing_active() -> bool:
+            # Type-to-filter is only live on the model stage (concrete list).
+            st = self._model_picker_state
+            return bool(st) and st.get("stage") == "model"
+
+        def _make_model_filter_char_handler(ch: str):
+            def handler(event):
+                st = self._model_picker_state
+                if not st or st.get("stage") != "model":
+                    return
+                st["filter"] = (st.get("filter", "") or "") + ch
+                st["selected"] = 0
+                st["_scroll_offset"] = 0
+                event.app.invalidate()
+            return handler
+
+        # Printable ASCII (space through ~) narrows the model list as you type.
+        import string as _string
+        for _ch in _string.digits + _string.ascii_letters + "-_.:/ ":
+            kb.add(_ch, filter=Condition(_model_picker_typing_active))(
+                _make_model_filter_char_handler(_ch)
+            )
+
+        @kb.add('backspace', filter=Condition(_model_picker_typing_active))
+        def model_picker_filter_backspace(event):
+            st = self._model_picker_state
+            if not st:
+                return
+            cur = st.get("filter", "") or ""
+            st["filter"] = cur[:-1]
+            st["selected"] = 0
+            st["_scroll_offset"] = 0
+            event.app.invalidate()
+
+        @kb.add('escape', filter=Condition(lambda: bool(self._model_picker_state)), eager=True)
         def model_picker_escape(event):
-            """ESC closes the /model picker."""
+            """ESC clears an active filter first, else closes the picker."""
+            st = self._model_picker_state
+            if st and st.get("stage") == "model" and (st.get("filter") or ""):
+                st["filter"] = ""
+                st["selected"] = 0
+                st["_scroll_offset"] = 0
+                event.app.invalidate()
+                return
             self._close_model_picker()
             event.app.current_buffer.reset()
             event.app.invalidate()
+
+        # --- Ctrl+P command palette keybindings ---
+        def _palette_active() -> bool:
+            return bool(self._command_palette_state)
+
+        @kb.add('c-p', filter=Condition(
+            lambda: not self._command_palette_state
+            and not self._model_picker_state and not self._clarify_state
+            and not self._approval_state and not self._slash_confirm_state
+            and not self._sudo_state and not self._secret_state
+        ))
+        def open_command_palette(event):
+            self._open_command_palette()
+            event.app.invalidate()
+
+        @kb.add('up', filter=Condition(_palette_active))
+        def command_palette_up(event):
+            st = self._command_palette_state
+            if st:
+                st["selected"] = max(0, st.get("selected", 0) - 1)
+                event.app.invalidate()
+
+        @kb.add('down', filter=Condition(_palette_active))
+        def command_palette_down(event):
+            st = self._command_palette_state
+            if st:
+                n = st.get("_visible_count", len(self._command_palette_visible_entries()))
+                st["selected"] = min(max(0, n - 1), st.get("selected", 0) + 1)
+                event.app.invalidate()
+
+        @kb.add('enter', filter=Condition(_palette_active))
+        def command_palette_enter(event):
+            self._handle_command_palette_selection()
+            event.app.invalidate()
+
+        @kb.add('backspace', filter=Condition(_palette_active))
+        def command_palette_backspace(event):
+            st = self._command_palette_state
+            if st:
+                st["filter"] = (st.get("filter", "") or "")[:-1]
+                st["selected"] = 0
+                st["_scroll_offset"] = 0
+                event.app.invalidate()
+
+        @kb.add('escape', filter=Condition(_palette_active), eager=True)
+        def command_palette_escape(event):
+            self._close_command_palette()
+            event.app.invalidate()
+
+        def _make_palette_char_handler(ch: str):
+            def handler(event):
+                st = self._command_palette_state
+                if not st:
+                    return
+                st["filter"] = (st.get("filter", "") or "") + ch
+                st["selected"] = 0
+                st["_scroll_offset"] = 0
+                event.app.invalidate()
+            return handler
+
+        import string as _pstring
+        for _pch in _pstring.digits + _pstring.ascii_letters + "-_.:/ ":
+            kb.add(_pch, filter=Condition(_palette_active))(_make_palette_char_handler(_pch))
 
         # Number keys for quick approval selection (1-9, 0 for 10th item)
         def _make_approval_number_handler(idx):
@@ -18993,14 +19372,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # Buffer.auto_up/auto_down handle both: cursor movement when multi-line,
         # history browsing when on the first/last line (or single-line input).
         _normal_input = Condition(
-            lambda: (
-                not self._clarify_state
-                and not self._approval_state
-                and not self._slash_confirm_state
-                and not self._sudo_state
-                and not self._secret_state
-                and not self._model_picker_state
-            )
+            lambda: not self._clarify_state and not self._approval_state and not self._slash_confirm_state and not self._sudo_state and not self._secret_state and not self._model_picker_state and not self._command_palette_state
         )
 
         def _recall_without_recollapse(buf, move):
@@ -19082,6 +19454,13 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             # Cancel /model picker (foreground UI — cancel and stop here).
             if self._model_picker_state:
                 self._close_model_picker()
+                event.app.current_buffer.reset()
+                event.app.invalidate()
+                return
+
+            # Cancel command palette (foreground UI — cancel and stop here).
+            if self._command_palette_state:
+                self._close_command_palette()
                 event.app.current_buffer.reset()
                 event.app.invalidate()
                 return
@@ -19725,7 +20104,11 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 _stash_hint = ""
             if _stash_hint:
                 return _stash_hint
-            return ""
+            # Idle + empty composer: show a rotating task-oriented example to
+            # nudge the user toward a high-value first action (C-09). Chosen
+            # once per session (self._composer_placeholder) so it stays stable
+            # while being read, not flickering every render.
+            return getattr(cli_ref, "_composer_placeholder", "") or ""
 
         input_area.control.input_processors.append(
             _PlaceholderProcessor(_get_placeholder)
@@ -20382,9 +20765,22 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 provider_data = state.get("provider_data") or {}
                 model_list = state.get("model_list") or []
                 title = f"⚙ Model Picker — {provider_data.get('name', provider_data.get('slug', 'Provider'))}"
-                choices = list(model_list) + ["← Back", "Cancel"]
-                if model_list:
-                    hint = f"Select a model ({len(model_list)} available)"
+                # Fuzzy filter: narrow the concrete model list by the typed
+                # query. Selection still resolves to a real entry (see the
+                # filtered_pairs index mapping in the selection handler), so
+                # this never introduces an ambiguous model resolution.
+                _query = state.get("filter", "") or ""
+                filtered_pairs = cli_ref._filter_model_picker_entries(model_list, _query)
+                state["_filtered_pairs"] = filtered_pairs
+                model_labels = [e for (_i, e) in filtered_pairs]
+                choices = list(model_labels) + ["← Back", "Cancel"]
+                if _query:
+                    hint = (
+                        f"Filter: {_query}▏  ({len(model_labels)}/{len(model_list)} match "
+                        "— type to narrow, Backspace to clear)"
+                    )
+                elif model_list:
+                    hint = f"Select a model ({len(model_list)} available) — type to filter"
                 else:
                     hint = "No models listed for this provider. Use Back or Cancel."
 
@@ -20448,6 +20844,62 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 wrap_lines=True,
             ),
             filter=Condition(lambda: cli_ref._model_picker_state is not None),
+        )
+
+        # --- Ctrl+P command palette: display widget ---
+        def _get_command_palette_display():
+            state = cli_ref._command_palette_state
+            if not state:
+                return []
+            rows = cli_ref._command_palette_visible_entries()
+            state["_visible_count"] = len(rows)
+            _query = state.get("filter", "") or ""
+            total = len(state.get("entries") or [])
+            title = "⚙ Command Palette"
+            if _query:
+                hint = f"Filter: {_query}▏  ({len(rows)}/{total} match — Enter inserts, Esc cancels)"
+            else:
+                hint = f"Type to filter {total} commands — ↑/↓ then Enter inserts, Esc cancels"
+
+            labels = [f"{c}  —  {d}" if d else c for (c, _cat, d) in rows]
+            if not labels:
+                labels = ["(no matching commands)"]
+            box_width = _panel_box_width(title, [hint] + labels, min_width=50, max_width=90)
+            inner_text_width = max(8, box_width - 6)
+            selected = state.get("selected", 0)
+            try:
+                from prompt_toolkit.application import get_app
+                term_rows = get_app().output.get_size().rows
+            except Exception:
+                term_rows = shutil.get_terminal_size((100, 24)).lines
+            scroll_offset, visible = HermesCLI._compute_model_picker_viewport(
+                selected, state.get("_scroll_offset", 0), len(labels), term_rows,
+            )
+            state["_scroll_offset"] = scroll_offset
+
+            lines = []
+            lines.append(('class:clarify-border', '╭─ '))
+            lines.append(('class:clarify-title', title))
+            lines.append(('class:clarify-border', ' ' + ('─' * max(0, box_width - len(title) - 3)) + '╮\n'))
+            _append_blank_panel_line(lines, 'class:clarify-border', box_width)
+            _append_panel_line(lines, 'class:clarify-border', 'class:clarify-hint', hint, box_width)
+            _append_blank_panel_line(lines, 'class:clarify-border', box_width)
+            for idx in range(scroll_offset, min(scroll_offset + visible, len(labels))):
+                label = labels[idx]
+                style = 'class:clarify-selected' if idx == selected else 'class:clarify-choice'
+                prefix = '❯ ' if idx == selected else '  '
+                for wrapped in _wrap_panel_text(prefix + label, inner_text_width, subsequent_indent='    '):
+                    _append_panel_line(lines, 'class:clarify-border', style, wrapped, box_width)
+            _append_blank_panel_line(lines, 'class:clarify-border', box_width)
+            lines.append(('class:clarify-border', '╰' + ('─' * box_width) + '╯\n'))
+            return lines
+
+        command_palette_widget = ConditionalContainer(
+            Window(
+                FormattedTextControl(_get_command_palette_display),
+                wrap_lines=True,
+            ),
+            filter=Condition(lambda: cli_ref._command_palette_state is not None),
         )
 
         # Horizontal rules above and below the input.
@@ -20560,6 +21012,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     slash_confirm_widget=slash_confirm_widget,
                     clarify_widget=clarify_widget,
                     model_picker_widget=model_picker_widget,
+                    command_palette_widget=command_palette_widget,
                     spinner_widget=spinner_widget,
                     spacer=spacer,
                     status_bar=status_bar,

@@ -54,6 +54,7 @@ from hermes_state_common import (  # noqa: F401  (re-exported for back-compat)
     _FTS_CJK_TRIGGERS,
     _FTS_TRIGGERS,
     _LISTABLE_CHILD_SQL,
+    _PREVIEW_ELIGIBLE_SQL,
     _PREVIEW_RAW_SELECT,
     _RESET_END_REASONS,
     _RESET_END_REASONS_SQL,
@@ -8914,6 +8915,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                         (SELECT {_PREVIEW_RAW_SELECT}
                          FROM messages m
                          WHERE m.session_id = s.id AND m.role = 'user' AND m.content IS NOT NULL
+                           AND {_PREVIEW_ELIGIBLE_SQL}
                          ORDER BY m.timestamp, m.id LIMIT 1),
                         ''
                     ) AS _preview_raw,
@@ -8937,6 +8939,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                         (SELECT {_PREVIEW_RAW_SELECT}
                          FROM messages m
                          WHERE m.session_id = s.id AND m.role = 'user' AND m.content IS NOT NULL
+                           AND {_PREVIEW_ELIGIBLE_SQL}
                          ORDER BY m.timestamp, m.id LIMIT 1),
                         ''
                     ) AS _preview_raw,
@@ -8976,6 +8979,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                         (SELECT {_PREVIEW_RAW_SELECT}
                          FROM messages m
                          WHERE m.session_id = s.id AND m.role = 'user' AND m.content IS NOT NULL
+                           AND {_PREVIEW_ELIGIBLE_SQL}
                          ORDER BY m.timestamp, m.id LIMIT 1),
                         ''
                     ) AS _preview_raw,
@@ -11728,6 +11732,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         max_cost: Optional[float] = None,
         min_tool_calls: Optional[int] = None,
         max_tool_calls: Optional[int] = None,
+        include_pinned: bool = False,
     ) -> Tuple[str, list]:
         """Build the shared WHERE clause for bulk prune/archive selection.
 
@@ -11840,6 +11845,13 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             clauses.append("s.archived = 1")
         elif archived is False:
             clauses.append("s.archived = 0")
+        # Pinned sessions are a durable "keep" flag (exempt from the stale
+        # auto-archive sweep). Bulk prune/delete/archive must honor that too:
+        # exclude pinned rows unless the caller explicitly opts in. Without
+        # this, `sessions prune`/`delete`/`archive` with a filter silently
+        # destroyed pinned conversations (round-3 QA SES-01, data loss).
+        if not include_pinned:
+            clauses.append("COALESCE(s.pinned, 0) = 0")
         return " AND ".join(clauses), params
 
     @staticmethod
@@ -11889,6 +11901,26 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 params,
             )
             return [dict(row) for row in cursor.fetchall()]
+
+    def count_prune_matches(
+        self,
+        older_than_days: Optional[float] = None,
+        source: str = None,
+        **filters,
+    ) -> int:
+        """Count sessions a matching prune/archive would touch.
+
+        Same filter surface as :meth:`list_prune_candidates` (including the
+        ``include_pinned`` tri-state), but returns only a count. Used by the
+        CLI to report how many pinned sessions are being spared.
+        """
+        self._apply_prune_age_filter(older_than_days, filters)
+        where, params = self._prune_filter_where(source=source, **filters)
+        with self._lock:
+            cursor = self._conn.execute(
+                f"SELECT COUNT(*) FROM sessions s WHERE {where}", params
+            )
+            return int(cursor.fetchone()[0])
 
     def count_open_prune_matches(
         self,
@@ -12717,6 +12749,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                             (SELECT {_PREVIEW_RAW_SELECT}
                              FROM messages m
                              WHERE m.session_id = s.id AND m.role = 'user' AND m.content IS NOT NULL
+                               AND {_PREVIEW_ELIGIBLE_SQL}
                              ORDER BY m.timestamp, m.id LIMIT 1),
                             ''
                         ) AS _preview_raw,
@@ -12747,6 +12780,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                             (SELECT {_PREVIEW_RAW_SELECT}
                              FROM messages m
                              WHERE m.session_id = s.id AND m.role = 'user' AND m.content IS NOT NULL
+                               AND {_PREVIEW_ELIGIBLE_SQL}
                              ORDER BY m.timestamp, m.id LIMIT 1),
                             ''
                         ) AS _preview_raw,

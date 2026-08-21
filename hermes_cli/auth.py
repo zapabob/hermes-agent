@@ -500,6 +500,16 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
         ),
         base_url_env_var="OPENCODE_GO_BASE_URL",
     ),
+    "opencode-free": ProviderConfig(
+        id="opencode-free",
+        name="OpenCode Free",
+        auth_type="api_key",
+        inference_base_url="https://opencode.ai/zen/v1",
+        # Deliberately NO api_key_env_vars: the free tier is served
+        # anonymously (any unrecognized bearer is a 401), so there is no
+        # secret to configure. Select via `hermes model` / `/model free`.
+        api_key_env_vars=(),
+    ),
     "kilocode": ProviderConfig(
         id="kilocode",
         name="Kilo Code",
@@ -2264,6 +2274,7 @@ def resolve_provider(
         "github-copilot-acp": "copilot-acp", "copilot-acp-agent": "copilot-acp",
         "aigateway": "ai-gateway", "vercel": "ai-gateway", "vercel-ai-gateway": "ai-gateway",
         "opencode": "opencode-zen", "zen": "opencode-zen",
+        "free": "opencode-free", "opencode_free": "opencode-free",
         "qwen-portal": "qwen-oauth", "qwen-cli": "qwen-oauth", "qwen-oauth": "qwen-oauth",
         "hf": "huggingface", "hugging-face": "huggingface", "huggingface-hub": "huggingface",
         "mimo": "xiaomi", "xiaomi-mimo": "xiaomi",
@@ -7395,6 +7406,25 @@ def get_api_key_provider_status(provider_id: str) -> Dict[str, Any]:
     pconfig = PROVIDER_REGISTRY.get(provider_id)
     if not pconfig or pconfig.auth_type != "api_key":
         return {"configured": False}
+
+    # Keyless providers (opencode-free) are served anonymously: no credential
+    # exists, so every install counts as configured/logged in. Derived from
+    # the HermesOverlay keyless flag — the same source the provider catalog
+    # and GUI contract tests use.
+    try:
+        from hermes_cli.providers import HERMES_OVERLAYS
+        _overlay = HERMES_OVERLAYS.get(provider_id)
+    except Exception:
+        _overlay = None
+    if _overlay is not None and getattr(_overlay, "keyless", False):
+        return {
+            "configured": True,
+            "provider": provider_id,
+            "name": pconfig.name,
+            "key_source": "keyless",
+            "base_url": pconfig.inference_base_url,
+            "logged_in": True,
+        }
 
     api_key = ""
     key_source = ""

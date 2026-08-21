@@ -83,6 +83,7 @@ class TestBundledPluginsRegister:
             "ddgs",
             "exa",
             "firecrawl",
+            "keenable",
             "parallel",
             "scrapling",
             "searxng",
@@ -224,25 +225,20 @@ class TestIsAvailable:
         monkeypatch.setenv("FIRECRAWL_API_URL", "http://localhost:3002")
         assert p.is_available() is True
 
-    def test_cloakbrowser_reflects_package_import(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_firecrawl_explicit_config_allows_keyless_cloud(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         _ensure_plugins_loaded()
         from agent.web_search_registry import get_provider
 
-        p = get_provider("cloakbrowser")
+        p = get_provider("firecrawl")
         assert p is not None
-
-        def _raise(*_a, **_k):
-            raise ImportError("no cloakbrowser")
-
-        monkeypatch.setattr(
-            "plugins.web.cloakbrowser.provider._ensure_cloakbrowser",
-            _raise,
-        )
         assert p.is_available() is False
 
         monkeypatch.setattr(
-            "plugins.web.cloakbrowser.provider._ensure_cloakbrowser",
-            lambda: None,
+            "tools.web_tools._load_web_config",
+            lambda: {"backend": "firecrawl"},
+            raising=False,
         )
         assert p.is_available() is True
 

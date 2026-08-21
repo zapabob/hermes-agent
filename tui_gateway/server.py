@@ -35,6 +35,7 @@ from hermes_cli.env_loader import load_hermes_dotenv
 from utils import is_truthy_value
 from tools.environments.local import hermes_subprocess_env
 from agent.replay_cleanup import sanitize_replay_history
+from agent.compaction_display import project_compaction_message_for_display
 from agent.skill_commands import describe_skill_invocation
 from agent.conversation_loop import INTERRUPT_WAITING_FOR_MODEL_PREFIX
 from tui_gateway import git_probe
@@ -155,6 +156,10 @@ _db = None
 _db_error: str | None = None
 _stdout_lock = threading.Lock()
 _cfg_lock = threading.Lock()
+# Shared profile UI metadata can be updated concurrently by Desktop, mobile,
+# and multiple worker-pool RPCs.  Its compare/check/write transaction needs a
+# dedicated lock rather than the unrelated process-config cache lock.
+_profile_ui_meta_lock = threading.Lock()
 _sessions_lock = threading.RLock()  # reentrant: _close_session_by_id may run under callers that already hold it
 _prompt_lock = threading.Lock()
 _cfg_cache: dict | None = None
@@ -3568,6 +3573,7 @@ def _block(
         "clarify.request",
         "terminal.read.request",
         "preview.read.request",
+        "preview.act.request",
         "window.read.request",
         "mcp.setup.request",
         "tour.request",
@@ -6470,6 +6476,20 @@ def _agent_cbs(sid: str) -> dict:
             {k: v for k, v in (("start", start), ("count", count)) if v is not None},
             timeout=45,
         ),
+        # drive_preview tool (desktop GUI): the renderer injects the interaction
+        # engine into the preview pane's webview (or drives the pane's history)
+        # and answers preview.act.respond with the outcome plus a refreshed
+        # element inventory. Same budget as the preview read, which it ends
+        # with — a click on a slow page pays for the settle and the re-scan.
+        # annotate_preview rides this same callback: it resolves a target
+        # through the same engine and differs only in the verb it sends, so it
+        # needs a tool of its own but not a channel of its own.
+        "drive_preview_callback": lambda payload: _block(
+            "preview.act.request",
+            sid,
+            dict(payload),
+            timeout=45,
+        ),
         # read_window_below tool (desktop GUI): the renderer asks its main
         # process (which owns native window enumeration) which OS window sits
         # directly underneath the Hermes window, and answers
@@ -6706,14 +6726,20 @@ def _apply_personality_to_session(
 
 
 def _cfg_max_turns(cfg: dict, default: int) -> int:
-    try:
-        env_max = int(os.environ.get("HERMES_TUI_MAX_TURNS", "") or 0)
-        if env_max > 0:
-            return env_max
-    except (TypeError, ValueError):
-        pass
+    from hermes_cli.config import resolve_turn_limit as _resolve_turn_limit
+    # Env var override (highest priority)
+    env_val = os.environ.get("HERMES_TUI_MAX_TURNS")
+    if env_val:
+        return _resolve_turn_limit(env_val, default=default)
+    # Config file value — route through resolve_turn_limit so that
+    # "none"/"unlimited"/0 are first-class spellings, not int() crashes.
     agent_cfg = cfg.get("agent") or {}
-    return int(agent_cfg.get("max_turns") or cfg.get("max_turns") or default)
+    raw = agent_cfg.get("max_turns")
+    if raw is None:
+        raw = cfg.get("max_turns")
+    if raw is not None:
+        return _resolve_turn_limit(raw, default=default)
+    return default
 
 
 def _parse_tui_skills_env() -> list[str]:
@@ -7767,6 +7793,9 @@ def _history_to_messages(history: list[dict]) -> list[dict]:
 
     for m in history:
         if not isinstance(m, dict):
+            continue
+        m = project_compaction_message_for_display(m)
+        if m is None:
             continue
         role = m.get("role")
         if role not in {"user", "assistant", "tool", "system"}:
@@ -14027,14 +14056,17 @@ def _format_live_usage_output(session: dict) -> str:
 def _format_live_history_output(session: dict) -> str:
     with session["history_lock"]:
         history = list(session.get("history", []))
-    db = _get_db()
-    if db is not None and session.get("session_key"):
-        try:
-            history = db.get_messages_as_conversation(
-                session["session_key"], include_ancestors=True, include_row_ids=True
-            )
-        except Exception:
-            pass
+    # _session_db, not _get_db(): a profile session's transcript lives in its
+    # own profile's state.db, and this read is scoped by session id — through
+    # the launch handle it comes back empty and /history renders nothing.
+    with _session_db(session) as db:
+        if db is not None and session.get("session_key"):
+            try:
+                history = db.get_messages_as_conversation(
+                    session["session_key"], include_ancestors=True, include_row_ids=True
+                )
+            except Exception:
+                pass
     messages = _history_to_messages(history)
     if not messages:
         return "No conversation history yet."
@@ -14067,16 +14099,18 @@ def _format_live_prompt_output(session: dict) -> str:
 
 def _format_live_context_output(session: dict) -> str:
     messages = []
-    db = _get_db()
-    if db is not None and session.get("session_key"):
-        try:
-            messages = _history_to_messages(
-                db.get_messages_as_conversation(
-                    session["session_key"], include_ancestors=True, include_row_ids=True
+    # Same session-scoped read as /history — resolve it against the db that
+    # owns this session's rows, not the launch profile's handle.
+    with _session_db(session) as db:
+        if db is not None and session.get("session_key"):
+            try:
+                messages = _history_to_messages(
+                    db.get_messages_as_conversation(
+                        session["session_key"], include_ancestors=True, include_row_ids=True
+                    )
                 )
-            )
-        except Exception:
-            messages = []
+            except Exception:
+                messages = []
     if not messages:
         with session["history_lock"]:
             messages = _history_to_messages(list(session.get("history", [])))
