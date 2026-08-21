@@ -1,10 +1,10 @@
 # Start Qwen3.8-27B abliterated MTP llama-server for OpenManus harness.
-# Q8_0 K / Turbo3 V KV cache, 65536 context, MTP speculative decoding.
+# Q8_0 K / Turbo3 V KV cache, 131072 context, MTP speculative decoding.
 param(
     [string]$ServerExe = "$env:LOCALAPPDATA\Programs\llama-turboquant\bin\llama-server.exe",
     [string]$GgufPath = "C:\Users\downl\Desktop\SO8T\gguf_models\soyaakinohara\qwen3.8-27b-abliterated-3.69bpw-12GB-MTP.gguf\qwen3.8-27b-abliterated-3.69bpw-12GB-MTP.gguf",
     [int]$Port = 8080,
-    [int]$CtxSize = 65536,
+    [int]$CtxSize = 131072,
     [int]$Parallel = 1,
     [int]$DraftNMax = 3,
     [switch]$CpuMoe,
