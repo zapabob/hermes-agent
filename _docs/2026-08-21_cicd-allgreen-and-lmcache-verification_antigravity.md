@@ -34,6 +34,7 @@
 
 ## 3. 検証結果 (Verification Evidence)
 
+### ① ローカル検証
 | チェック項目 | コマンド | 結果 |
 | :--- | :--- | :--- |
 | **Python Lint** | `ruff check .` | **PASS (All checks passed)** |
@@ -44,7 +45,16 @@
 | **Go Vet (HeyGen CLI)** | `cd vendor/heygen-cli; go vet ./...` | **PASS (Exit code 0)** |
 | **Core Unit Tests** | `py -3 -m pytest tests/test_plugin_storage.py tests/test_fast_safe_load.py tests/test_lmcache_plugin.py -q` | **PASS (21 passed / 100%)** |
 
+### ② GitHub Actions CI/CD パイプライン結果
+- **Workflow Run**: [Run 32435303434](https://github.com/zapabob/hermes-agent/actions/runs/32435303434)
+- **Status**: **ALL GREEN (Success)**
+  - `✓ Python Lint & Windows Footguns in 26s`
+  - `✓ TypeScript Typecheck in 1m5s`
+  - `✓ Core Unit Verification in 20s`
+  - `✓ Go Modules Vet & Test in 1m26s`
+
 ---
 
 ## 4. 残存リスクと今後の推奨事項
 - 今回追加・修正した変更はすべて既存のインターフェースおよび挙動と完全互換であり、リグレッションはありません。
+- サブモジュール（`vendor/openmanus`, `vendor/shinka-osint`）も最新コミットにて push 完了済みです。
