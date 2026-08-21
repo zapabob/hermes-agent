@@ -32,12 +32,12 @@ import {
   SiUnrealengine,
   SiVercel,
   SiWebflow,
-  SiZapier
+  SiZapier,
+  type IconType
 } from '@icons-pack/react-simple-icons'
-import type { ComponentType, SVGProps } from 'react'
 
 export interface McpBrand {
-  Icon: ComponentType<SVGProps<SVGSVGElement>>
+  Icon: IconType
   color: string
   /** The official mark is black/white (GitHub, Vercel, Notion): render it in
    *  `currentColor` so it follows the theme instead of vanishing on dark. The

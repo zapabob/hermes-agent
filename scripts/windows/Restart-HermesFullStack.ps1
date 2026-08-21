@@ -11,6 +11,7 @@ param(
     [string]$RepoRoot = "C:\Users\downl\Documents\New project\hermes-agent",
     [switch]$SkipDesktopRebuild,
     [switch]$SkipLlama,
+    [switch]$UseHotswapRouter,
     [switch]$SkipWebUI,
     [switch]$SkipDesktop,
     [switch]$SkipGoWatchdog,
@@ -21,12 +22,17 @@ param(
     [string]$LlamaServerExe = "$env:LOCALAPPDATA\Programs\llama-turboquant\bin\llama-server.exe",
     [string]$LlamaGgufPath = "C:\Users\downl\Desktop\SO8T\gguf_models\soyaakinohara\qwen3.8-27b-abliterated-3.69bpw-12GB-MTP.gguf\qwen3.8-27b-abliterated-3.69bpw-12GB-MTP.gguf",
     [int]$LlamaPort = 8080,
-    [int]$LlamaCtxSize = 65536,
+    [int]$LlamaCtxSize = 131072,
     [string]$A2ARoot = "C:\Users\downl\go-a2a-servers",
     [int]$A2AHubPort = 9123
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($LlamaCtxSize -lt 65536) {
+    Write-Warning "LlamaCtxSize $LlamaCtxSize is below minimum 65536 — clamping to 65536."
+    $LlamaCtxSize = 65536
+}
 
 function Write-Step([string]$Message) {
     Write-Host ("[{0}] {1}" -f (Get-Date -Format "HH:mm:ss"), $Message) -ForegroundColor Cyan
@@ -179,11 +185,23 @@ if (-not $SkipA2A -and (Test-Path -LiteralPath $A2ARoot)) {
     }
 }
 
-# --- Step 4: Start Qwen3.8-27B llama-server ---
+# --- Step 4: Start Qwen3.8-27B llama-server (min 65536 ctx) ---
 if (-not $SkipLlama) {
-    Write-Step "Starting Qwen3.8-27B llama-server on port $LlamaPort..."
+    $hotswapPreset = Join-Path $HermesHome "llama\models-hotswap-primary-secondary.ini"
+    $hotswapScript = Join-Path $PSScriptRoot "start-llama-hotswap.ps1"
     $qwenScript = Join-Path $PSScriptRoot "start-llama-qwen38-openmanus.ps1"
-    if (Test-Path -LiteralPath $qwenScript) {
+
+    if ($UseHotswapRouter -and (Test-Path -LiteralPath $hotswapPreset) -and (Test-Path -LiteralPath $hotswapScript)) {
+        Write-Step "Starting Llama Hot-Swap Router with preset ($hotswapPreset)..."
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $hotswapScript `
+            -RuntimePresetPath $hotswapPreset `
+            -ModelsMax 1 `
+            -ForceRestart `
+            -WarmSecondary `
+            -WaitSeconds $LlamaWaitSeconds
+    }
+    elseif (Test-Path -LiteralPath $qwenScript) {
+        Write-Step "Starting Dedicated Qwen3.8-27B llama-server (Port: $LlamaPort, Ctx: $LlamaCtxSize)..."
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $qwenScript `
             -ServerExe $LlamaServerExe `
             -GgufPath $LlamaGgufPath `

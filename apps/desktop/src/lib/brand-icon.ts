@@ -165,14 +165,14 @@ import {
   SiYoutube,
   SiZedindustries,
   SiZoom,
-  SiZotero
+  SiZotero,
+  type IconType
 } from '@icons-pack/react-simple-icons'
-import type { ComponentType, SVGProps } from 'react'
 
 // Simple Icons components accept a `title` prop on top of the usual SVG props.
 // It matters: they always render a <title> element, defaulting to the brand
 // name, so callers need to be able to blank it out (see `LinkBrandIcon`).
-export type BrandIcon = ComponentType<SVGProps<SVGSVGElement> & { title?: string }>
+export type BrandIcon = IconType
 
 // simpleicons.org brand marks keyed by registrable domain. Lookup walks the
 // host's suffixes (see `resolveBrandIcon`), so one `github.com` entry also
