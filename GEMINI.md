@@ -1,6 +1,6 @@
-# Hermes Agent - Development Guide
+# Hermes Agent - Development Guide & Architecture Manual
 
-Instructions for AI coding assistants and developers working on the `hermes-agent` codebase.
+Instructions, design contracts, and operational standards for AI assistants and developers on `hermes-agent`.
 
 **Never give up on the right solution.**
 
@@ -8,406 +8,331 @@ Instructions for AI coding assistants and developers working on the `hermes-agen
 
 ## 1. What Hermes Is & Core Philosophy
 
-Hermes is a personal AI agent that runs the same agent core across a CLI, a messaging gateway (Telegram, Discord, Slack, LINE, WeCom, Weixin, Yuanbao, and ~20 other platforms), a TUI, and an Electron desktop app. It learns across sessions (memory + skills), delegates to subagents, runs scheduled jobs, and drives a real terminal and browser. It is extended primarily through **plugins and skills**, not by growing the core.
+Hermes is a personal AI agent running a single core across CLI, Gateway (Telegram, Discord, Slack, LINE, WeCom, Weixin, Yuanbao, Signal, etc.), TUI, and Electron Desktop. It learns across sessions (memory + skills), delegates to subagents, schedules jobs, and drives a real terminal and browser. Capabilities are added via **plugins and skills**, not by growing the core.
 
-Two sacred properties shape almost every design decision and are the lens for reviewing any change:
-
-- **Per-conversation prompt caching is sacred.** A long-lived conversation reuses a cached prefix every turn. Anything that mutates past context, swaps toolsets, or rebuilds the system prompt mid-conversation invalidates that cache and multiplies the user's cost. We do not do it (the one exception is context compression).
-- **The core is a narrow waist; capability lives at the edges.** Every model tool we add is sent on every API call, so the bar for a new *core* tool is high. Most new capability should arrive as a CLI command + skill, a service-gated tool (`check_fn`), or a plugin — not as core surface.
+### Sacred Invariants
+1. **Per-conversation prompt caching is sacred**: Long-lived conversations reuse cached model prefixes. Mutating past context, mid-turn toolset swapping, or rebuilding system prompts destroys the KV cache and multiplies API cost. (Sole exception: `agent/context_compressor.py`).
+2. **The core is a narrow waist; capability lives at the edges**: Core tools are transmitted on every API call. New capabilities must use the Footprint Ladder (CLI, skills, service-gated tools via `check_fn`, MCP, plugins).
+3. **Surface capability is session-scoped**: UI features (desktop panes, reactions) resolve availability dynamically from `session.platform`, never from static environment variables (`os.environ["HERMES_DESKTOP"]`).
+4. **Deterministic, Reversible Execution**: Destructive operations must provide recovery paths, auditability, and write approvals.
 
 ---
 
-## 2. Contribution Rubric — What We Want / What We Don't
-
-This is the project's intent layer. Use it for humans (targeting contributions) and automated review (safe closes on `implemented_on_main`, `cannot_reproduce`, `incoherent`). Taste-based "won't-implement" closes stay with human maintainers.
-
-Hermes ships a lot — most merges are bug fixes to reported behavior, and the product surface (platforms, channels, providers, models, desktop/TUI) expands aggressively. Restraint is aimed squarely at the **core agent + model tool schema**. We are expansive at the edges and conservative at the waist.
+## 2. Contribution Rubric & Footprint Ladder
 
 ### What We Want
-- **Fix real bugs, well**: Reproduce against current `main`, pinpoint the exact manifesting line, and fix the whole bug class across sibling call paths.
-- **Expand reach at the edges**: New platform adapters, channels, providers, models, and desktop/TUI features integrating with standard setup/config (`hermes tools`, `hermes setup`, auto-install) rather than bolting on raw env vars.
-- **Refactor god-files into clean modules**: Extract multi-thousand-line clusters out of `cli.py`, `run_agent.py`, `gateway/run.py` into focused mixins or modules.
-- **Extend, don't duplicate**: Check existing infrastructure before adding managers/hooks. When 3+ PRs integrate the same category, design a shared ABC + orchestrator.
-- **Behavior contracts over snapshots**: Assert invariants between data, not frozen values (model lists, config version literals, enumeration counts).
-- **E2E validation**: Exercise real resolution chains with real imports against a temporary `HERMES_HOME` (mocks hide integration bugs).
-- **Cache-, alternation-, and invariant-safe**: Preserve prompt caching, strict message role alternation, and byte-stable system prompts.
-- **Contributor credit preserved**: Rebase-merge external work to keep authorship in git history.
+- **Fix real bugs thoroughly**: Reproduce on `main`, pinpoint exact manifesting lines, fix whole bug class across call paths.
+- **Expand reach at edges**: Add platform adapters, providers, UI features via standard configs (`hermes tools`, `config.yaml`).
+- **Refactor god-files**: Modularize `cli.py`, `run_agent.py`, `gateway/run.py` into focused mixins/helpers.
+- **Extend, don't duplicate**: Formulate shared ABCs when 3+ PRs touch similar domain logic.
+- **Behavior contracts over snapshots**: Assert structural invariants, not hardcoded literals or counts.
+- **E2E validation**: Validate full resolution chains against isolated, temporary `HERMES_HOME`.
+- **Cache- & Alternation-safe**: Byte-stable prompts, strict `system -> user -> assistant -> tool` message roles.
+- **Preserve contributor credit**: Rebase-merge external contributions.
 
-### What We Don't Want (Rejected Even If Well-Built)
-- **Speculative infrastructure**: Hooks, callbacks, or extension points with no concrete consumer.
-- **New `HERMES_*` env vars for non-secret config**: `.env` is strictly for secrets (API keys, tokens, passwords). All behavioral settings (timeouts, thresholds, feature flags, display prefs) go in `config.yaml`.
-- **A new core tool when terminal + file or a skill suffices**: Fix the mount or write a skill instead.
-- **Lazy-reading escape hatches on instructional tools**: No `offset`/`limit` pagination on skills/prompts (models read page 1 and skip the rest).
-- **Mitigations that destroy feature utility**: Always read original commit intent (`git log -p -S`) before restricting behavior.
-- **Outbound telemetry without opt-in gating**: No analytics or attribution tags without a user-facing config gate and setup toggle.
-- **Core-modifying plugins or in-tree third-party SaaS integrations**: Observability backends, vendor SaaS connectors, and analytics dashboards must live in **standalone plugin repos** (`~/.hermes/plugins/`), not under `plugins/` in this tree.
+### What We Reject
+- Speculative infrastructure (unused hooks/callbacks).
+- New `HERMES_*` env vars for non-secret settings (`.env` is strictly for secrets; settings belong in `config.yaml`).
+- New core tools when a skill, CLI command, or file tool suffices.
+- Lazy-reading pagination (`offset`/`limit`) on skill or prompt tools.
+- Mitigations destroying feature utility (always inspect `git log -p -S` first).
+- Outbound telemetry without opt-in user config gates.
+- In-tree third-party SaaS/observability connectors (belong in standalone repos under `~/.hermes/plugins/`).
 
-### Verify the Premise Before Calling It a Bug
-- **"Intentional design, not a gap"**: Limitations are often deliberate (e.g. isolated profiles vs. shared live inheritance). Check commit intent before assuming something is unfinished.
-- **"The premise doesn't hold against how X actually works"**: Trace runtime execution before accepting a rationale (e.g. rate-limit breakers tripping on confirmed-empty buckets). Point to the exact line where the bug manifests.
-- **"The absence was deliberate"**: Restoring seemingly missing files (e.g. `__init__.py`) can break import shadowing guards and delete plugin `register()`.
-
-### The Footprint Ladder (New Capability Decision)
-Each rung adds more permanent surface than the one above. Choose the highest (least-footprint) rung:
-1. **Extend existing code** — Zero new surface.
-2. **CLI command + skill** — Zero model-tool footprint. Default choice for subscriptions, cron tasks, service setup (`hermes webhook`, `hermes cron`, `hermes tools`).
-3. **Service-gated tool (`check_fn`)** — Structured I/O appearing only when prerequisites are configured (Home Assistant, memory tools).
-4. **Plugin** — Third-party or user-specific capability in `~/.hermes/plugins/` or a pip package.
-5. **MCP server (in catalog)** — Structured model tool connecting via built-in MCP client; zero core schema footprint.
-6. **New core tool** — Fundamental, universally useful, and unreachable via terminal/file/MCP (`terminal`, `read_file`, `web_search`, `browser_navigate`).
-
-### Surface Capability Is a Property of the Session, Never Process Env
-Tools requiring client presence (desktop panes, in-app browser, reactions, projects) must resolve availability from the **session's own source**, not from an environment variable (`HERMES_DESKTOP=1`) on the backend process.
-- **The toolset is the surface gate**: Keep tools off `_HERMES_CORE_TOOLS` and put them in a named toolset (`desktop_ui`, `project`). The GUI gateway folds them in when `platform` indicates GUI.
-- **`check_fn` answers reachability or opt-in, not surface**: "Is the bridge wired?" is fine; "Was I spawned by Electron?" is not (cached process-wide across sessions).
+### The Footprint Ladder (New Capability Decision Matrix)
+1. **Extend Existing Code** (Zero new surface)
+2. **CLI Command + Skill** (Zero model tool footprint; default for setup, cron, webhooks)
+3. **Service-Gated Tool (`check_fn`)** (Dynamic availability when configured)
+4. **Standalone Plugin** (`~/.hermes/plugins/` or pip package)
+5. **MCP Server** (Catalog tool with zero core schema footprint)
+6. **New Core Tool** (Universal primitive: terminal, file, web, browser)
 
 ---
 
 ## 3. Development Environment & Project Structure
 
+### Python & Workspace Management
 ```bash
-# Prefer .venv; fall back to venv if present
-source .venv/bin/activate   # or: source venv/bin/activate
+source .venv/bin/activate       # Linux/macOS (.venv preferred, fallback to venv)
+.venv\Scripts\Activate.ps1       # Windows PowerShell
+uv sync --all-extras             # Pinned via uv.lock
+bash scripts/run_tests.sh       # Parity test runner
 ```
-`scripts/run_tests.sh` probes `.venv`, `venv`, and `$HOME/.hermes/hermes-agent/venv`.
 
-### Project Layout
+### Repository Layout
 ```
 hermes-agent/
-├── run_agent.py          # AIAgent class — core conversation loop (~12k LOC)
-├── model_tools.py        # Tool orchestration, discover_builtin_tools(), handle_function_call()
-├── toolsets.py           # Toolset definitions, _HERMES_CORE_TOOLS list
-├── cli.py                # HermesCLI class — interactive CLI orchestrator (~11k LOC)
-├── hermes_state.py       # SessionDB — SQLite session store (FTS5 search)
+├── AGENTS.md / GEMINI.md / CLAUDE.md # Master guides & assistant mirrors
+├── run_agent.py          # AIAgent class — conversation loop & execution engine
+├── model_tools.py        # Tool discovery, schema compilation, handle_function_call()
+├── toolsets.py           # Core toolset definitions (_HERMES_CORE_TOOLS, named sets)
+├── cli.py                # HermesCLI — interactive terminal interface
+├── hermes_state.py       # SessionDB — SQLite store (FTS5 search, WAL mode)
 ├── hermes_constants.py   # get_hermes_home(), display_hermes_home() — profile-aware paths
-├── hermes_logging.py     # setup_logging() — agent.log / errors.log / gateway.log (profile-aware)
-├── batch_runner.py       # Parallel batch processing engine
-├── agent/                # Agent internals (adapters, memory, caching, compression, prompt builder)
-├── hermes_cli/           # CLI subcommands, setup wizard, plugins loader, skin engine
-├── tools/                # Tool implementations — auto-discovered via tools/registry.py
-│   └── environments/     # Terminal backends (local, docker, ssh, modal, daytona, singularity)
-├── gateway/              # Messaging gateway — run.py + session.py + platforms/
-│   ├── platforms/        # Adapters: telegram, discord, slack, line, wecom, weixin, feishu, etc.
-│   └── builtin_hooks/    # Extension points for gateway lifecycle hooks
-├── plugins/              # Plugin system (memory/, model-providers/, context_engine/, kanban/, etc.)
-├── optional-skills/      # Heavier/niche skills shipped but NOT active by default
-├── skills/               # Built-in skills bundled with the repo
-├── ui-tui/               # Ink (React) terminal UI — `hermes --tui`
-│   └── src/              # entry.tsx, app.tsx, gatewayClient.ts + components/hooks
-├── tui_gateway/          # Python JSON-RPC backend for the TUI
-├── acp_adapter/          # ACP server (VS Code / Zed / JetBrains integration)
-├── cron/                 # Scheduler — jobs.py, scheduler.py (via croniter)
-├── scripts/              # run_tests.sh, release tooling, windows/ automation
-├── website/              # Docusaurus documentation site
-└── tests/                # Pytest suite (~17k tests across ~900 files)
+├── hermes_logging.py     # Multi-process logging (agent.log, errors.log, gateway.log)
+├── batch_runner.py       # Multi-threaded parallel batch execution engine
+├── agent/                # Conversation loop, prompt builder, memory, compression, adapters
+├── hermes_cli/           # CLI subcommands, setup wizard, plugin manager, skin engine
+├── tools/                # Built-in tools (file, terminal, browser, web, mcp, memory, tts, vision)
+│   └── environments/     # Backends: local, docker, ssh, modal, daytona, singularity
+├── gateway/              # Multi-channel gateway daemon (run.py, session.py, platforms/)
+├── apps/desktop/         # Electron Desktop (React 19 + Tailwind v4 + Nanostores + Vite)
+├── ui-tui/ & tui_gateway/# Ink (React) Terminal UI over stdio JSON-RPC
+├── plugins/              # Extensible plugins (plugin_storage.py, memory/, model-providers/, kanban/)
+├── cron/                 # Background scheduler (jobs.py, scheduler.py via croniter)
+├── scripts/windows/      # Watchdog-Go, start-llama-*.ps1, Restart-*.ps1, footguns linter
+├── fork/ & _docs/        # Fork overlays, harnesses, and MILSPEC implementation records
+└── tests/                # Comprehensive test suite (~17k tests)
 ```
 
-**User config:** `~/.hermes/config.yaml` (settings), `~/.hermes/.env` (API keys only).
-**Logs:** `~/.hermes/logs/` — `agent.log` (INFO+), `errors.log` (WARNING+), `gateway.log`. Profile-aware via `get_hermes_home()`. Browse with `hermes logs [--follow] [--level ...] [--session ...]`.
+**Config & Logs**: `~/.hermes/config.yaml` (settings), `~/.hermes/.env` (secrets only), `~/.hermes/logs/` (`agent.log`, `errors.log`, `gateway.log`). Profile paths resolved via `get_hermes_home()`.
 
 ---
 
-## 4. TypeScript Style Guide
+## 4. TypeScript & Frontend Architecture Style Guide
 
-Applies to TypeScript across Hermes (desktop, TUI, website, shared TS packages):
-- Prefer small nanostores over component state when shared, reused, or read by distant UI.
-- Each feature owns its atoms: Chat state near chat, shell state near shell, shared state in `src/store`.
-- Components rendering from an atom use `useStore`. Non-rendering actions read with `$atom.get()`.
-- Do not prop-drill across 3 components when a leaf can subscribe to an atom.
-- Keep route roots thin (compose routes and shell; never turn into controllers). No monolithic hooks.
-- Colocate action modules over hidden god hooks.
-- Pure side-effect callbacks use terse void form: `onState={st => void setGatewayState(st)}`.
-- Async UI handlers make intent explicit: `onClick={() => void save()}`.
-- Prefer `interface` for public props and shared object shapes. Extend React primitives: `React.ComponentProps<'button'>`, `React.ComponentProps<typeof Dialog>`, `Omit<...>`, `Pick<...>`.
-- Table-driven mapping beats condition ladders when routing views.
-- Architecture: `src/app` (routes/pages), `src/store` (shared atoms), `src/lib` (pure helpers).
+Applies to `apps/desktop/`, `ui-tui/`, `website/`, `tests-js/`:
+- **Nanostores over context**: Use feature-scoped atoms (`src/store/`). Leaf components subscribe via `useStore`; non-rendering actions read via `$atom.get()`. Avoid prop-drilling across >2 layers.
+- **Thin route roots**: Keep route files thin; compose views without turning roots into monolithic controllers.
+- **Explicit callbacks**: Use terse void forms for side-effects: `onStateChange={st => void setGatewayState(st)}`, `onClick={() => void handleSave()}`.
+- **Strict Interfaces**: Prefer `interface` over `type` for public props. Extend React primitives (`React.ComponentProps<'button'>`, `Omit<...>`, `Pick<...>`). No `any`.
+- **Table-Driven Routing**: Replace verbose `switch`/`if-else` ladders with dictionary mappings.
 
 ---
 
-## 5. Core Agent Architecture & Execution Loop
+## 5. Core AIAgent Architecture & Execution Loop
 
-```
-tools/registry.py  (no deps — imported by all tool files)
-       ↑
-tools/*.py  (each calls registry.register() at import time)
-       ↑
-model_tools.py  (imports tools/registry + triggers tool discovery)
-       ↑
-run_agent.py, cli.py, batch_runner.py, environments/
-```
-
-### AIAgent Class (`run_agent.py`)
+### AIAgent Signature (`run_agent.py`)
 ```python
 class AIAgent:
-    def __init__(self,
-        base_url: str = None,
-        api_key: str = None,
-        provider: str = None,
-        api_mode: str = None,              # "chat_completions" | "codex_responses" | ...
-        model: str = "",                   # empty → resolved from config/provider later
-        max_iterations: int = 500,         # tool-calling iterations (shared with subagents)
-        enabled_toolsets: list = None,
-        disabled_toolsets: list = None,
+    def __init__(
+        self,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        provider: str | None = None,
+        api_mode: str | None = None,              # "chat_completions" | "codex_responses" | ...
+        model: str = "",                          # Resolved from config if empty
+        max_iterations: int = 500,                # Iteration budget (shared with subagents)
+        enabled_toolsets: list[str] | None = None,
+        disabled_toolsets: list[str] | None = None,
         quiet_mode: bool = False,
         save_trajectories: bool = False,
-        platform: str = None,              # "cli", "telegram", etc.
-        session_id: str = None,
+        platform: str | None = None,              # "cli", "telegram", "desktop", etc.
+        session_id: str | None = None,
         skip_context_files: bool = False,
         skip_memory: bool = False,
-        credential_pool=None,
-        # ... callbacks, budgets, reasoning_config, service_tier, checkpoints
-    ): ...
+        credential_pool: Any | None = None,
+        reasoning_config: dict[str, Any] | None = None,
+        checkpoints_enabled: bool = True,
+    ) -> None: ...
 
-    def chat(self, message: str) -> str:
-        """Simple interface — returns final response string."""
-
-    def run_conversation(self, user_message: str, system_message: str = None,
-                         conversation_history: list = None, task_id: str = None) -> dict:
-        """Full interface — returns dict with final_response + messages."""
+    def chat(self, message: str) -> str: ...
+    def run_conversation(self, user_message: str, system_message: str | None = None,
+                         conversation_history: list[dict[str, Any]] | None = None,
+                         task_id: str | None = None) -> dict[str, Any]: ...
 ```
 
-### Conversation Loop
-Entirely synchronous within `run_conversation()`, enforcing interrupts, budget tracking, and a one-turn grace call:
-```python
-while (api_call_count < self.max_iterations and self.iteration_budget.remaining > 0) \
-        or self._budget_grace_call:
-    if self._interrupt_requested: break
-    response = client.chat.completions.create(model=model, messages=messages, tools=tool_schemas)
-    if response.tool_calls:
-        for tool_call in response.tool_calls:
-            result = handle_function_call(tool_call.name, tool_call.args, task_id)
-            messages.append(tool_result_message(result))
-        api_call_count += 1
-    else:
-        return response.content
-```
-Messages follow standard OpenAI dictionary format: `{"role": "system/user/assistant/tool", ...}`. Model reasoning thoughts are stored in `assistant_msg["reasoning"]`.
+### Synchronous Loop Invariants
+1. **Interrupt Check**: Polls `self._interrupt_requested` every cycle to abort cleanly.
+2. **Budget Grace Turn**: Single final grace turn granted (`self._budget_grace_call = True`) when iterations expire.
+3. **OpenAI Schema**: `{"role": "system"|"user"|"assistant"|"tool", "content": "...", "tool_call_id": "..."}`.
+4. **Reasoning Storage**: Thoughts and CoT blocks stored in `assistant_msg["reasoning"]`.
+5. **Provider Adapters**: Native handling in `agent/*_adapter.py` for OpenAI, Anthropic, Gemini, Codex, Bedrock, Vertex, and local Llama backends.
 
 ---
 
-## 6. CLI, TUI & Desktop Architecture
-
-### CLI (`cli.py`)
-- Rich panels and banners; `prompt_toolkit` for input with autocomplete.
-- `KawaiiSpinner` (`agent/display.py`) animated status faces; `┊` tool activity feed.
-- `load_cli_config()` merges defaults with user YAML.
-- Data-driven skin engine (`hermes_cli/skin_engine.py`) configured via `display.skin`.
-- Skill slash commands (`agent/skill_commands.py`) scan `~/.hermes/skills/` and inject as **user messages** to preserve prompt cache.
+## 6. CLI, TUI, Desktop & Gateway Architecture
 
 ### Slash Command Registry (`hermes_cli/commands.py`)
-Defined centrally in `COMMAND_REGISTRY` as `CommandDef` objects:
+All commands register centrally as `CommandDef` instances in `COMMAND_REGISTRY`:
 ```python
-CommandDef(
-    name="mycommand",
-    description="Description of command",
-    category="Session",            # Session, Configuration, Tools & Skills, Info, Exit
-    aliases=("mc",),
-    args_hint="[arg]",
-    cli_only=False,
-    gateway_only=False,
-    gateway_config_gate=None,
-)
+@dataclass(frozen=True)
+class CommandDef:
+    name: str                                  # Command name without slash
+    description: str                           # Short explanation
+    category: str                              # Session, Configuration, Tools & Skills, Info, Exit
+    aliases: tuple[str, ...] = ()              # Short aliases (e.g. ("mc",))
+    args_hint: str = ""                        # Parameter hints
+    cli_only: bool = False
+    gateway_only: bool = False
+    gateway_config_gate: str | None = None
 ```
-- **CLI**: `process_command()` resolves aliases via `resolve_command()`.
-- **Gateway**: `GATEWAY_KNOWN_COMMANDS` for hook emission and routing in `gateway/run.py`.
-- **Adding an alias**: Add to `aliases` tuple on `CommandDef`. Help, menus, autocomplete, and dispatch update automatically.
+- Skill slash commands (`agent/skill_commands.py`) inject as **user messages** to preserve prompt cache.
 
 ### TUI Architecture (`ui-tui` + `tui_gateway`)
-Activated via `hermes --tui` or `HERMES_TUI=1`. Node (Ink) manages screen layout and transcript rendering; Python (`tui_gateway`) supervises sessions, tools, and model calls over stdio JSON-RPC.
-
-| Surface | Ink Component | Gateway JSON-RPC Method |
-| :--- | :--- | :--- |
-| **Chat Streaming** | `app.tsx` + `messageLine.tsx` | `prompt.submit` → `message.delta/complete` |
-| **Tool Activity** | `thinking.tsx` | `tool.start/progress/complete` |
-| **Approvals** | `prompts.tsx` | `approval.respond` ← `approval.request` |
-| **Clarify/Secret** | `prompts.tsx`, `maskedPrompt.tsx` | `clarify/sudo/secret.respond` |
-| **Session Picker**| `sessionPicker.tsx` | `session.list/resume` |
-| **Slash Execution**| Local handler + worker | `slash.exec` → `_SlashWorker`, `command.dispatch` |
-
-Embedded in web dashboard (`hermes dashboard` → `/chat`) via WebGL xterm.js PTY bridge (`@app.websocket("/api/pty")`). Never re-implement the chat transcript/composer in React.
+Runs React/Ink in Node.js communicating with Python (`tui_gateway`) over stdio JSON-RPC:
+- `prompt.submit` $\to$ `message.delta`/`complete` (text streaming)
+- `tool.start`/`progress`/`complete` (tool activity)
+- `approval.respond` $\leftarrow$ `approval.request` (action approvals)
+- `secret.respond` $\leftarrow$ `secret.request` (masked inputs)
+- `session.list`/`resume` (session picker)
 
 ### Desktop App (`apps/desktop/`)
-Electron + React + nanostores (`@assistant-ui/react`) talking to a headless `hermes serve` backend over JSON-RPC (`requestGateway(method, params)`).
-- **Curated Slash Commands (`apps/desktop/src/lib/desktop-slash-commands.ts`)**: `isDesktopSlashCommand` gates execution; `isDesktopSlashSuggestion` gates palette completion; `isDesktopSlashExtensionCommand` ensures user skills and quick commands pass through to completion menus.
+Electron main + React renderer talking to headless backend via JSON-RPC. Curated slash commands gated in `apps/desktop/src/lib/desktop-slash-commands.ts` (`isDesktopSlashCommand`, `isDesktopSlashSuggestion`).
 
 ---
 
 ## 7. Tool Registration & Creation Standards
 
-Core tools require 2 files:
+### Two-File Tool Registration Pattern
 
 1. **Create `tools/your_tool.py`**:
 ```python
 import json, os
+from hermes_constants import display_hermes_home, get_hermes_home
 from tools.registry import registry
 
 def check_requirements() -> bool:
     return bool(os.getenv("EXAMPLE_API_KEY"))
 
-def example_tool(param: str, task_id: str = None) -> str:
-    return json.dumps({"success": True, "data": "..."})
+def example_tool(query: str, task_id: str | None = None) -> str:
+    try:
+        res = {"success": True, "data": f"Processed {query}"}
+        return json.dumps(res, ensure_ascii=False)
+    except Exception as exc:
+        return json.dumps({"success": False, "error": str(exc)}, ensure_ascii=False)
 
 registry.register(
     name="example_tool",
     toolset="example",
     schema={
         "name": "example_tool",
-        "description": "Example tool description. State path: display_hermes_home()",
+        "description": f"Example tool description. Root: {display_hermes_home()}",
         "parameters": {
             "type": "object",
-            "properties": {"param": {"type": "string"}},
-            "required": ["param"],
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
         },
     },
-    handler=lambda args, **kw: example_tool(param=args.get("param", ""), task_id=kw.get("task_id")),
+    handler=lambda args, **kw: example_tool(query=args.get("query", ""), task_id=kw.get("task_id")),
     check_fn=check_requirements,
     requires_env=["EXAMPLE_API_KEY"],
 )
 ```
 
-2. **Wire in `toolsets.py`**: Add tool name to `_HERMES_CORE_TOOLS` or a named toolset in `TOOLSETS`.
+2. **Wire in `toolsets.py`**: Add name to `_HERMES_CORE_TOOLS` or a named set in `TOOLSETS`.
 
 ### Invariants for Tools
-- Handlers MUST return a JSON string.
+- Handlers MUST return a JSON string (`json.dumps(...)`).
 - Descriptions referencing paths MUST use `display_hermes_home()`.
-- State storage MUST use `get_hermes_home()` (never hardcode `~/.hermes`).
-- Agent-level tools (`todo`, `memory`) are intercepted by `run_agent.py` before `handle_function_call()`.
-- Never hardcode other tool names in schemas (causes hallucinations when target toolset is disabled); inject dynamically in `model_tools.py:get_tool_definitions()`.
+- State paths MUST use `get_hermes_home()` (never hardcode `~/.hermes`).
+- Builtin meta-tools (`todo`, `memory`) are intercepted by `run_agent.py` before `handle_function_call()`.
+- Tool names are injected dynamically in `model_tools.py:get_tool_definitions()`.
 
 ---
 
-## 8. Dependency Pinning & Configuration Management
+## 8. Dependency Pinning & Configuration Architecture
 
-### Exact Pinning Policy (Supply Chain Hardening)
-- Core dependencies in `pyproject.toml` are pinned to `>=floor,<next_major` or exact pins (`==X.Y.Z`).
-- Git URLs and GitHub Actions MUST use full 40-character commit SHAs.
-- Run `uv lock` to update `uv.lock` with hashes whenever modifying dependencies.
+### Exact Supply Chain Pinning
+- Core dependencies in `pyproject.toml` pinned to `>=floor,<next_major` or exact `==X.Y.Z`.
+- Git URLs and GitHub Actions MUST use 40-character commit SHAs.
+- Run `uv lock` whenever altering dependencies.
 
 ### Configuration Architecture
-- **`config.yaml`**: All non-secret settings. Add defaults to `DEFAULT_CONFIG` in `hermes_cli/config.py`. Bump `_config_version` only for breaking structure migrations.
+- **`config.yaml`**: Non-secret settings. Add defaults to `DEFAULT_CONFIG` in `hermes_cli/config.py`.
 - **`.env`**: Secrets ONLY (API keys, tokens). Register in `OPTIONAL_ENV_VARS` in `hermes_cli/config.py`.
-- **Loaders**:
-  - `load_cli_config()` (`cli.py`): CLI mode (defaults + user YAML).
-  - `load_config()` (`hermes_cli/config.py`): CLI subcommands (`hermes tools`, `hermes setup`).
-  - Direct YAML load (`gateway/run.py`): Gateway runtime.
-- **Working Directory**: CLI uses `os.getcwd()`. Messaging uses `terminal.cwd` from `config.yaml` (bridged to `TERMINAL_CWD`).
+- **Loaders**: `load_cli_config()` (CLI), `load_config()` (CLI subcommands), direct YAML load (`gateway/run.py`).
+- **Working Directory**: CLI uses `os.getcwd()`; Gateway uses `terminal.cwd` from `config.yaml`.
 
 ---
 
-## 9. Plugin System
+## 9. Extensible Plugin Ecosystem & Storage Isolation
 
-Discovered from `~/.hermes/plugins/`, `./.hermes/plugins/`, and pip entry points.
+### Plugin Registration (`plugins/<name>/__init__.py`)
+Discovered from `~/.hermes/plugins/`, `./.hermes/plugins/`, and pip entry points:
+```python
+from plugins.plugin_storage import plugin_data_dir, plugin_db
 
-### General Plugins (`plugins/<name>/`)
-- Entry point `register(ctx)` registers tools (`ctx.register_tool`), CLI subcommands (`ctx.register_cli_command`), and lifecycle hooks (`pre_tool_call`, `post_tool_call`, `pre_llm_call`, `post_llm_call`, `on_session_start`, `on_session_end`).
-- Additive contract: Hook callbacks use signature inspection so narrow callbacks receive only declared args while `**kwargs` receive full payloads. Deprecations require a warning and 2 minor releases notice.
+def register(ctx):
+    data_path = plugin_data_dir("my_plugin")
+    db = plugin_db("my_plugin", "state.db") # WAL-enabled SQLite
+    ctx.register_tool(name="plugin_tool", toolset="my_plugin", schema=..., handler=...)
 
-### Plugin Storage Isolation (`plugins/plugin_storage.py`)
-- Plugins store state in `<hermes_home>/plugin-data/<plugin_name>/`.
-- Use `plugin_data_dir(name)` for isolated paths and `plugin_db(name, filename)` for WAL-enabled SQLite connections.
+    @ctx.hook("pre_tool_call")
+    def on_pre_tool(tool_name, args, **kwargs): ...
+```
+- Hook callbacks use signature inspection: narrow callbacks receive declared args; `**kwargs` receives full payloads.
 
-### Memory-Provider Plugins (`plugins/memory/<name>/`)
-- Implements `MemoryProvider` ABC (`agent/memory_provider.py`), orchestrated by `agent/memory_manager.py`.
-- Discovery is bundled-first (prevents drop-in shadowing). Activated via `memory.provider` in `config.yaml`.
-- Built-ins include `honcho`, `mem0`, `supermemory`, `byterover`, `hindsight`, `lmcache`.
-- *Policy*: In-tree list is closed; new memory backends must ship as standalone external plugins.
-
-### Model-Provider Plugins (`plugins/model-providers/<name>/`)
-- Calls `providers.register_provider(ProviderProfile(...))` at load time. Scanned lazily on first access.
-- User plugins in `$HERMES_HOME/plugins/model-providers/` override bundled ones (last-writer-wins).
+### Memory & Model Plugins
+- **Memory Providers (`plugins/memory/`)**: Implement `MemoryProvider` ABC (`agent/memory_provider.py`). Activated via `memory.provider` in `config.yaml` (Honcho, Mem0, Supermemory, Hindsight, LMCache).
+- **Model Providers (`plugins/model-providers/`)**: Register `ProviderProfile` dynamically. User plugins override bundled ones.
 
 ---
 
 ## 10. Skill Authoring Standards (Hardline)
 
-Every bundled or contributed skill MUST adhere to these rules:
-1. **`description` ≤ 60 characters**: Single sentence, ends with a period, describes capability without marketing fluff ("powerful", "advanced").
-2. **Reference native tools in prose**: Point to Hermes tools in backticks (`` `terminal` ``, `` `read_file` ``, `` `patch` ``, `` `search_files` ``, `` `vision_analyze` ``), never raw shell utilities (`grep`, `cat`, `sed`).
-3. **Platform gating**: Audit imports for POSIX primitives (`fcntl`, `os.kill(0)`, `/tmp`). Use cross-platform fallbacks (`pathlib`, `psutil`) or declare `platforms: [macos]`.
-4. **Author credit**: Real contributor name + handle first; Hermes Agent secondary.
-5. **Modern section structure**: `# <Skill> Skill` → Intro → `## When to Use` → `## Prerequisites` → `## How to Run` → `## Quick Reference` → `## Procedure` → `## Pitfalls` → `## Verification`.
-6. **File separation**: Helpers in `scripts/`, templates in `templates/`, reference docs in `references/`.
-7. **Tests**: `tests/skills/test_<skill>_skill.py` using stdlib + pytest + mocks (no live network calls).
+1. **`description` $\le$ 60 chars**: Single sentence, ends with a period, zero marketing buzzwords.
+2. **Native Tool References in Prose**: Reference Hermes tools in backticks (`` `terminal` ``, `` `read_file` ``, `` `patch` ``, `` `search_files` ``, `` `vision_analyze` ``), never raw shell utilities (`grep`, `sed`).
+3. **Platform Gating**: Audit imports for POSIX primitives (`fcntl`, `os.kill(0)`). Provide cross-platform fallbacks or declare `platforms: [macos]`.
+4. **Standard Section Layout**: `# <Skill> Skill` $\to$ Intro $\to$ `## When to Use` $\to$ `## Prerequisites` $\to$ `## How to Run` $\to$ `## Quick Reference` $\to$ `## Procedure` $\to$ `## Pitfalls` $\to$ `## Verification`.
+5. **File Separation**: Python in `scripts/`, templates in `templates/`, docs in `references/`.
+6. **Automated Mocks**: Unit tests in `tests/skills/test_<skill>_skill.py` using mocks (no live API calls).
 
 ---
 
-## 11. Subsystems: Delegation, Curator, Cron, Kanban
+## 11. Subsystems: Delegation, Curator, Cron, Kanban & MoA
 
-### Delegation (`tools/delegate_tool.py`)
-- Spawns subagents with isolated context and terminal sessions. Accepts `goal` (single) or `tasks: [...]` (batch concurrent).
-- `role="leaf"` (default worker: cannot delegate, use memory, or send messages) vs. `role="orchestrator"` (can spawn workers up to `delegation.max_spawn_depth`).
-- Background delegation (`background=true`) returns a task ID immediately and re-enters via the completion queue.
-
-### Curator (`agent/curator.py`)
-- Background skill lifecycle management for agent-created skills (`created_by: "agent"`). Tracks usage in `~/.hermes/skills/.usage.json` and auto-archives stale skills to `~/.hermes/skills/.archive/` (never deletes). Pinned skills (`hermes curator pin <name>`) are exempt from review.
-
-### Cron (`cron/jobs.py` + `cron/scheduler.py`)
-- Schedules jobs via `cronjob` tool or `hermes cron`. Supports durations (`"30m"`), natural phrases (`"every 2h"`), 5-field cron expressions (`"0 9 * * *"`), or ISO timestamps.
-- Enforces a **3-minute hard interrupt**, file locking (`~/.hermes/cron/.tick.lock`), and delivery in isolated session frames to preserve user role alternation.
-
-### Kanban Work Queue (`plugins/kanban/` + `tools/kanban_tools.py`)
-- Multi-agent collaboration board. Dispatcher runs inside gateway (`kanban.dispatch_in_gateway: true`) to claim ready tasks and spawn worker profiles. Board is a hard boundary (`HERMES_KANBAN_BOARD`). Auto-blocks tasks after consecutive failure limits.
+- **Delegation (`tools/delegate_tool.py`)**: `role="leaf"` (worker cannot delegate/write memory/send messages) vs. `role="orchestrator"` (spawns workers up to `delegation.max_spawn_depth`). `background=True` returns task ID immediately.
+- **Curator (`agent/curator.py`)**: Tracks agent-created skills in `~/.hermes/skills/.usage.json`. Auto-archives unused skills to `~/.hermes/skills/.archive/`. Pinned skills (`hermes curator pin`) are exempt.
+- **Cron (`cron/jobs.py` + `cron/scheduler.py`)**: Schedules natural phrases (`"every 2h"`) or 5-field cron syntax. Enforces a **3-minute hard interrupt**, file locking (`~/.hermes/cron/.tick.lock`), and role alternation frames.
+- **Kanban (`plugins/kanban/` + `tools/kanban_tools.py`)**: Multi-agent collaboration board with SQLite WAL backend. Gateway dispatcher claims ready tasks within `HERMES_KANBAN_BOARD` boundary.
+- **MoA (`agent/moa_loop.py`)**: Multi-model routing and aggregation across heterogeneous model families with consensus synthesis.
 
 ---
 
-## 12. Critical Policies & Known Pitfalls
+## 12. Multi-Platform Messaging Gateway Architecture
 
-### Profile Isolation & Path Rules
-- **Always use `get_hermes_home()`** from `hermes_constants`. Never hardcode `~/.hermes` or `Path.home() / ".hermes"` (breaks profile isolation).
-- **Use `display_hermes_home()`** for user-facing output messages.
-- **Gateway multiplex secret scope**: Read secrets via `_get_scoped_secret()`. A miss under multiplexing MUST return default, NEVER fall through to `os.environ` (leaks other profiles' credentials and authorization allowlists).
-
-### Streaming Delivery Contract (Relay / Slack)
-- **Draft frames must be prefix-stable**: Frame N must be an exact string prefix of frame N+1 (no fence auto-closing or per-tick conversions; prevents stacked copy duplicates).
-- **Consumer declares final**: Augmentations ride `finish(final_text)`.
-- **Interim sends**: Set `metadata["_interim_send"] = True` on commentary sends.
-- **Reconcile by edit**: Edit existing message ID; plain send is fallback only.
-
-### Gateway Message Guards
-Messages pass through (1) base adapter queue and (2) gateway runner interceptor. Control commands (`/stop`, `/new`, `/approve`, `/deny`) MUST bypass both guards inline.
-
-### Curses Pickers & ANSI Codes
-- All interactive CLI pickers MUST use `hermes_cli/curses_ui.py`.
-- Never use `\033[K` in spinner code (leaks under prompt_toolkit). Use space-padding `f"\r{line}{' ' * pad}"`.
+- **Supported Platforms**: 20+ channels (Telegram, Discord, Slack, LINE, WeCom, Weixin, Yuanbao, Signal, WhatsApp, Matrix, Mattermost, BlueBubbles, SMS, Email).
+- **Streaming Contract**: Draft frames must be prefix-stable ($N$ is exact prefix of $N+1$; no auto-closing markdown blocks). Final enhancements ride `finish(final_text)`. Ephemeral status sets `metadata["_interim_send"] = True`. Reconcile by message ID edit.
+- **Fast-Path Message Guards**: Control commands (`/stop`, `/new`, `/approve`, `/deny`, `/status`) bypass queues and debounce buffers for instant execution.
+- **Multiplex Secret Scope**: Secrets loaded via `_get_scoped_secret()`. A cache miss returns default, NEVER falling back to `os.environ` (prevents cross-profile credential leaks).
 
 ---
 
-## 13. Testing Discipline & CI Parity
+## 13. Critical Policies, Windows Footguns & Pitfalls
+
+- **No `os.kill(0)`**: Crashes Windows Python runtimes. Use `psutil.Process().terminate()` or process trees.
+- **Mandatory Explicit UTF-8**: Always open files with `encoding="utf-8"`. Never rely on Windows default ANSI/CP932 codepages.
+- **Path Normalization**: Use `pathlib.Path` or convert paths via `path.as_posix()` before serializing to JSON/web.
+- **ConPTY Windows Bridge**: Use `win_pty_bridge.py` for terminal emulation to prevent blocking stdio pipes.
+- **Profile Isolation**: Always use `get_hermes_home()`. Never hardcode `~/.hermes`.
+- **Curses & ANSI**: Pickers must use `hermes_cli/curses_ui.py`. Avoid `\033[K` in spinners; use space padding `f"\r{line}{' ' * pad}"`.
+
+---
+
+## 14. Testing Discipline, CI Parity & Banned Antipatterns
 
 ### Parity Test Runner (`scripts/run_tests.sh`)
-Always run tests via `scripts/run_tests.sh` (or `python -m pytest` with CI flags). Parity runner enforces:
-- Fresh subprocess per test file (`scripts/run_tests_parallel.py`) to prevent module-level state leaks.
-- Isolated temporary `HERMES_HOME`.
-- UTC timezone, `LANG=C.UTF-8`, and unset provider credentials.
-- Auto-retries flaky test files once (`--file-retries=1`). Any flaky test is treated as a bug to fix.
-
-### Test Placement
-- Tests checking `package.json`, `tsconfig.json`, or `.ts`/`.tsx` files belong in the JS test suite (`vitest`), not `tests/*.py` (prevents CI change-classifier mismatches).
-
-### Operating System Testing
-- Use explicit markers: `@pytest.mark.linux_only`, `@pytest.mark.macos_only`, `@pytest.mark.windows_only`. Never mock `sys.platform` or use bare `skipif(sys.platform != ...)` (causes test selection drops in CI).
+- Fresh subprocess per test file (`scripts/run_tests_parallel.py`) to prevent module state pollution.
+- Isolated temporary `HERMES_HOME` (`tmp_path`).
+- Fixed UTC timezone, `LANG=C.UTF-8`, unset provider credentials.
+- Auto-retries flaky test files once (`--file-retries=1`).
 
 ### Banned Testing Antipatterns
-- **No change-detector tests**: Never assert snapshots of mutable data (`assert len(_PROVIDER_MODELS) == 8` or exact version literals). Test invariants and relationships instead.
-- **Never read source code in tests**: Banned outright. Do not regex `.py` or `.ts` files to test implementation shape; extract small pure functions and test runtime inputs/outputs.
-- **Never write to `~/.hermes/`**: Always monkeypatch `HERMES_HOME` to `tmp_path`.
+- **No Change-Detector Tests**: Never assert snapshots of mutable data (`assert len(MODELS) == 8`). Test invariants and schemas.
+- **Never Regex Source Code in Tests**: Import functions directly and test input/output behavior.
+- **Never Write to `~/.hermes/`**: Always monkeypatch `HERMES_HOME` to `tmp_path`.
+- **Test Placement**: TypeScript tests belong in Vitest (`apps/desktop/`, `tests-js/`), Python in `tests/`.
 
 ---
 
-## 14. Fork Overlay & Local Workspace Policies
+## 15. Fork Overlay, Local Harness & Windows Automation Suite
 
-- **Fork Overlay (`fork/`)**: Fork-specific ops, harness, and extensions live under `fork/` and `scripts/windows/`. Upstream merges reapply verified fork advantages on a clean upstream base via `scripts/merge_tools/` / `scripts/sync_all.py`.
-- **Root Layout**: Packaging and entry modules (`run_agent.py`, `cli.py`, `model_tools.py`), `scripts/`, `docs/`, and `tests/` remain at root.
-- **Local Scratch**: Temporary probes go to `tmp/probes/` (gitignored). Implementation logs go to `_docs/`. Never commit `.env`, credentials, or release build artifacts.
+- **Watchdog Daemon (`scripts/windows/watchdog-go/`)**: Go-based supervisor monitoring Desktop and Backend with auto-restart and crash recovery.
+- **Local Llama Supercharger (`scripts/windows/start-llama-*.ps1`)**: Hot-standby runner for Qwen 3.5B / Qwen 3.8B / HuiHui Gemma with 131,072 context window support.
+- **Remote Gateway Funnel**: Automated Tailscale Serve / Funnel integration for encrypted remote mobile and web access.
+- **Local Scratch Policy**: Temporary probes go to `tmp/probes/` (gitignored). Implementation records go to `_docs/`.
 
 ---
 
-## 15. Learned User Preferences & Workspace Facts
+## 16. Learned User Preferences, Workspace Invariants & MILSPEC Standards
 
-- **Hermes Restart Protocol**: Rebuild desktop (`hermes desktop --build-only --force-build`) + Llama hot-standby (`-StartLlama`). Never launch from `.worktrees/`.
-- **Desktop Launch Target**: Canonical packaged `apps/desktop/release/win-unpacked/Hermes.exe`.
-- **`HERMES_DESKTOP_HERMES_ROOT`**: Points exclusively to the canonical repository root (`c:\Users\downl\Documents\New project\hermes-agent`).
-- **PR & Remote Rules**: Upstream PRs in King's English without `_docs/` or fork features. `origin` = `zapabob/hermes-agent`, `upstream` = `NousResearch/hermes-agent`.
-- **Local Llama Supercharger**: Configured context length up to 131,072 tokens.
-- **Desktop Wallpaper Themes**: Any `background_image` configuration requires high-contrast chat bubble overlays for readability.
-- **MILSPEC Standards**: Print is strictly forbidden (`logging` only). UTF-8 fixed encoding. All changes documented in `_docs/yyyy-mm-dd_<feature>_<agent>.md`.
+1. **Hermes Restart Protocol**: Rebuild desktop via `hermes desktop --build-only --force-build` combined with `-StartLlama`. Never launch from `.worktrees/`.
+2. **Canonical Desktop Target**: Packaged binary at `apps/desktop/release/win-unpacked/Hermes.exe`.
+3. **Canonical Root Anchor**: `HERMES_DESKTOP_HERMES_ROOT` exclusively references `c:\Users\downl\Documents\New project\hermes-agent`.
+4. **Upstream PR Cleanliness**: PRs submitted upstream must be written in King's English without referencing fork features, `_docs/`, or local scripts.
+5. **High-Contrast Theme Invariant**: Desktop themes using `background_image` require high-contrast bubble overlays for readability.
+6. **MILSPEC Quality Standards**:
+   - **Zero `print` calls**: `logging` is mandatory across all Python files; `print` is strictly forbidden.
+   - **Fixed Character Encoding**: UTF-8 without BOM across all files.
+   - **Implementation Audit Logs**: Every substantive change generates a record under `_docs/yyyy-mm-dd_<feature>_<agent>.md`.
