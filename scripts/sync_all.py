@@ -69,7 +69,7 @@ def _write_report(name: str, payload: dict[str, object]) -> Path:
 
 
 def _working_tree_clean() -> bool:
-    proc = _git("status", "--porcelain=v1", "--untracked-files=normal", check=False)
+    proc = _git("status", "--porcelain=v1", "--untracked-files=no", check=False)
     return proc.returncode == 0 and not proc.stdout.strip()
 
 
