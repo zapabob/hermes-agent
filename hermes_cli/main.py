@@ -542,7 +542,6 @@ from hermes_cli.subcommands.status import build_status_parser
 from hermes_cli.subcommands.tools import build_tools_parser
 from hermes_cli.subcommands.uninstall import build_uninstall_parser
 from hermes_cli.subcommands.update import build_update_parser
-from hermes_cli.subcommands.version import build_version_parser
 from hermes_cli.subcommands.webhook import build_webhook_parser
 from hermes_cli.subcommands.whatsapp import build_whatsapp_parser
 
