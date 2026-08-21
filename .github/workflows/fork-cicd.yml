@@ -59,7 +59,7 @@ jobs:
       - name: Vet & Test Watchdog Go
         run: |
           cd scripts/windows/watchdog-go
-          go vet ./...
+          GOOS=windows go vet ./...
       - name: Vet & Test Memory Graph
         run: |
           cd tools/memory-graph-server
@@ -81,6 +81,6 @@ jobs:
       - name: Install Test Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e .[test] || pip install pytest pyyaml pydantic
+          python -m pip install pytest pyyaml pydantic
       - name: Run Core Tests
-        run: pytest tests/test_plugin_storage.py tests/test_fast_safe_load.py tests/test_lmcache_plugin.py -q
+        run: python -m pytest tests/test_plugin_storage.py tests/test_fast_safe_load.py tests/test_lmcache_plugin.py -q
