@@ -2,8 +2,9 @@
 
 LMCache integration plugin providing KV cache management capabilities:
 - Cache status monitoring
-- Cache management operations
+- Cache management operations  
 - Optimization suggestions
+- Model context length tracking across providers
 
 This plugin follows Hermes Agent plugin conventions:
 - Data stored in <hermes_home>/plugin-data/lmcache/
@@ -15,6 +16,8 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -24,13 +27,35 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "lmcache_status",
-    "lmcache_manage", 
-    "lmcache_optimize",
+    "lmcache_set_entry",
+    "lmcache_get_entry",
+    "lmcache_remove_entry",
+    "lmcache_record_optimization",
+    "lmcache_get_optimization_stats",
+    "lmcache_get_model_context_lengths",
+    "lmcache_clear_all",
+    "lmcache_reset_db",
     "LMCachePlugin",
 ]
 
+
 # Plugin data directory: <hermes_home>/plugin-data/lmcache/
 PLUGIN_DATA_ROOT = plugin_data_dir("lmcache")
+
+
+def get_model_context_lengths_for_prompt() -> str:
+    """Generate prompt snippet for model context lengths."""
+    plugin = get_plugin()
+    models = plugin.get_model_context_lengths()
+    if not models:
+        return ""
+    
+    lines = ["【モデルコンテキスト長情報】"]
+    for m in models:
+        provider_str = f" ({m['provider']})" if m.get("provider") else ""
+        lines.append(f"- {m['model_name']}{provider_str}: {m['context_length']} tokens")
+    lines.append("")
+    return "\n".join(lines)
 
 
 class LMCachePlugin:
@@ -74,8 +99,19 @@ class LMCachePlugin:
                 model_name TEXT,
                 context_length INTEGER,
                 ttft_ms REAL,
-                throughput_tokens_per_s REAL,
+                throughput REAL,
+                provider TEXT,
                 timestamp REAL NOT NULL DEFAULT (strftime('%s', 'now'))
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS model_context_lengths (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                model_name TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                context_length INTEGER NOT NULL,
+                last_updated REAL NOT NULL DEFAULT (strftime('%s', 'now')),
+                UNIQUE(model_name, provider)
             )
         """)
         conn.commit()
@@ -145,15 +181,23 @@ class LMCachePlugin:
         context_length: int,
         ttft_ms: float,
         throughput: float,
+        provider: str = "",
     ) -> bool:
         """Record optimization statistics."""
         try:
             conn = self.db
             conn.execute(
                 """INSERT INTO optimization_stats 
-                   (model_name, context_length, ttft_ms, throughput) 
+                   (model_name, context_length, ttft_ms, throughput, provider) 
+                   VALUES (?, ?, ?, ?, ?)""",
+                (model_name, context_length, ttft_ms, throughput, provider),
+            )
+            # Also update model_context_lengths if context_length changed
+            conn.execute(
+                """INSERT OR REPLACE INTO model_context_lengths 
+                   (model_name, provider, context_length, last_updated) 
                    VALUES (?, ?, ?, ?)""",
-                (model_name, context_length, ttft_ms, throughput),
+                (model_name, provider, context_length, int(time.time())),
             )
             conn.commit()
             return True
@@ -167,7 +211,7 @@ class LMCachePlugin:
             conn = self.db
             if model_name:
                 rows = conn.execute(
-                    """SELECT model_name, context_length, ttft_ms, throughput, timestamp 
+                    """SELECT model_name, context_length, ttft_ms, throughput, provider, timestamp 
                        FROM optimization_stats 
                        WHERE model_name = ?
                        ORDER BY timestamp DESC LIMIT 50""",
@@ -175,7 +219,7 @@ class LMCachePlugin:
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    """SELECT model_name, context_length, ttft_ms, throughput, timestamp 
+                    """SELECT model_name, context_length, ttft_ms, throughput, provider, timestamp 
                        FROM optimization_stats 
                        ORDER BY timestamp DESC LIMIT 50""",
                 ).fetchall()
@@ -186,13 +230,72 @@ class LMCachePlugin:
                     "context_length": row[1],
                     "ttft_ms": row[2],
                     "throughput": row[3],
-                    "timestamp": row[4],
+                    "provider": row[4],
+                    "timestamp": row[5],
                 }
                 for row in rows
             ]
         except Exception as e:
             logger.error(f"Failed to get optimization stats: {e}")
             return []
+    
+    def get_model_context_lengths(self) -> List[Dict[str, Any]]:
+        """Get all model context lengths by provider."""
+        try:
+            conn = self.db
+            rows = conn.execute(
+                """SELECT model_name, provider, context_length, last_updated 
+                   FROM model_context_lengths 
+                   ORDER BY last_updated DESC LIMIT 100"""
+            ).fetchall()
+            
+            return [
+                {
+                    "model_name": row[0],
+                    "provider": row[1],
+                    "context_length": row[2],
+                    "last_updated": row[3],
+                }
+                for row in rows
+            ]
+        except Exception as e:
+            logger.error(f"Failed to get model context lengths: {e}")
+            return []
+    
+    def clear_all(self) -> bool:
+        """Clear all cache entries."""
+        try:
+            conn = self.db
+            conn.execute("DELETE FROM cache_status")
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to clear all cache entries: {e}")
+            return False
+    
+    def reset_db(self) -> bool:
+        """Reset the entire database."""
+        try:
+            db_path = PLUGIN_DATA_ROOT / "data.db"
+            
+            if self._db_conn is not None:
+                try:
+                    self._db_conn.close()
+                except Exception:
+                    pass
+                self._db_conn = None
+            
+            if db_path.exists():
+                db_path.unlink()
+                logger.info(f"Removed LMCache database: {db_path}")
+            
+            # Re-initialize schema
+            self._init_schema()
+            
+            return True
+        except Exception as e:
+            logger.error(f"Failed to reset LMCache database: {e}")
+            return False
 
 
 # Singleton instance
@@ -209,7 +312,7 @@ def get_plugin() -> LMCachePlugin:
 
 # Tool handler functions
 
-def lmcache_status(_args: Dict[str, Any] = None) -> str:
+def lmcache_status(_args: Optional[Dict[str, Any]] = None) -> str:
     """Tool: Get LMCache status."""
     plugin = get_plugin()
     status = plugin.get_status()
@@ -273,9 +376,10 @@ def lmcache_record_optimization(args: Dict[str, Any]) -> str:
     context_length = args.get("context_length", 0)
     ttft_ms = args.get("ttft_ms", 0.0)
     throughput = args.get("throughput", 0.0)
+    provider = args.get("provider", "")
     
     plugin = get_plugin()
-    success = plugin.record_optimization(model_name, context_length, ttft_ms, throughput)
+    success = plugin.record_optimization(model_name, context_length, ttft_ms, throughput, provider)
     
     result = {"success": success, "model_name": model_name}
     if success:
@@ -286,9 +390,9 @@ def lmcache_record_optimization(args: Dict[str, Any]) -> str:
     return json.dumps(result)
 
 
-def lmcache_get_optimization_stats(args: Dict[str, Any]) -> str:
+def lmcache_get_optimization_stats(args: Optional[Dict[str, Any]] = None) -> str:
     """Tool: Get optimization statistics."""
-    model_name = args.get("model_name")
+    model_name = args.get("model_name") if args else None
     
     plugin = get_plugin()
     stats = plugin.get_optimization_stats(model_name)
@@ -299,43 +403,40 @@ def lmcache_get_optimization_stats(args: Dict[str, Any]) -> str:
     return json.dumps(result)
 
 
-def lmcache_clear_all(args: Dict[str, Any] = None) -> str:
-    """Tool: Clear all cache entries."""
-    plugin = get_plugin()
-    conn = plugin.db
-    conn.execute("DELETE FROM cache_status")
-    conn.commit()
+def lmcache_get_model_context_lengths(args: Optional[Dict[str, Any]] = None) -> str:
+    """Tool: Get model context lengths by provider.
     
-    result = {"success": True, "message": "All cache entries cleared"}
+    Returns model name, provider, and context length for all tracked models.
+    Useful for tracking context limits across different AI providers (OpenAI, NVIDIA, 
+    Nous, custom local, etc.).
+    """
+    plugin = get_plugin()
+    models = plugin.get_model_context_lengths()
+    
+    result = {"success": True, "models": models}
+    result["message"] = f"Retrieved {len(models)} model context length records"
+    
     return json.dumps(result)
 
 
-def lmcache_reset_db(args: Dict[str, Any] = None) -> str:
+def lmcache_clear_all(args: Optional[Dict[str, Any]] = None) -> str:
+    """Tool: Clear all cache entries."""
+    plugin = get_plugin()
+    success = plugin.clear_all()
+    
+    result = {"success": success, "message": "All cache entries cleared" if success else "Failed to clear cache"}
+    return json.dumps(result)
+
+
+def lmcache_reset_db(args: Optional[Dict[str, Any]] = None) -> str:
     """Tool: Reset the entire database."""
-    import sqlite3
-    from pathlib import Path
+    plugin = get_plugin()
+    success = plugin.reset_db()
     
-    plugin_data = Path(plugin_data_dir("lmcache"))
-    db_path = plugin_data / "data.db"
-    
-    try:
-        if db_path.exists():
-            db_path.unlink()
-            logger.info(f"Removed LMCache database: {db_path}")
-        
-        # Re-initialize
-        plugin = get_plugin()
-        # The __init__ will re-create the schema
-        
-        result = {"success": True, "message": "Database reset successfully"}
-        return json.dumps(result)
-    except Exception as e:
-        logger.error(f"Failed to reset LMCache database: {e}")
-        result = {"success": False, "message": f"Failed to reset database: {e}"}
-        return json.dumps(result)
+    result = {"success": success, "message": "Database reset successfully" if success else "Failed to reset database"}
+    return json.dumps(result)
 
 
-# Plugin entry point for Hermes tool discovery
 def register_tools(ctx: Any) -> None:
     """Register LMCache tools with Hermes context.
     
@@ -431,6 +532,7 @@ def register_tools(ctx: Any) -> None:
                     "context_length": {"type": "integer", "description": "Context length"},
                     "ttft_ms": {"type": "number", "description": "Time to first token in ms"},
                     "throughput": {"type": "number", "description": "Tokens per second"},
+                    "provider": {"type": "string", "description": "AI provider name (optional)"},
                 },
                 "required": ["model_name", "context_length", "ttft_ms", "throughput"],
             },
@@ -455,6 +557,23 @@ def register_tools(ctx: Any) -> None:
             },
         },
         handler=lmcache_get_optimization_stats,
+        check_fn=lambda: True,
+        requires_env=[],
+    )
+    
+    registry.register(
+        name="lmcache_get_model_context_lengths",
+        toolset="lmcache",
+        schema={
+            "name": "lmcache_get_model_context_lengths",
+            "description": "Get model context lengths by provider across all models",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+        handler=lmcache_get_model_context_lengths,
         check_fn=lambda: True,
         requires_env=[],
     )

@@ -45,7 +45,7 @@ jobs:
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
       - name: Typecheck Desktop App
-        run: pnpm --filter @hermes/desktop typecheck
+        run: pnpm --filter hermes typecheck
 
   go-checks:
     name: Go Modules Vet & Test
@@ -83,4 +83,4 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .[test] || pip install pytest pyyaml pydantic
       - name: Run Core Tests
-        run: pytest tests/test_plugin_storage.py tests/test_fast_safe_load.py -q
+        run: pytest tests/test_plugin_storage.py tests/test_fast_safe_load.py tests/test_lmcache_plugin.py -q

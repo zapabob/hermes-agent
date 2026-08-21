@@ -469,7 +469,7 @@ markers = [
     "windows_only: exercises native-Windows behaviour; skipped on other hosts",
 ]
 # integration tests take way too long to run in the normal CI environments
-addopts = "-m 'not integration'"
+addopts = "-m 'not integration' -p no:randomly"
 
 [tool.ty.environment]
 python-version = "3.13"
