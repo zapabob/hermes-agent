@@ -92,9 +92,9 @@ export function handleDesktopBridgeEvent(ctx: GatewayEventContext): boolean {
     // hijack).
     const requestId = typeof payload?.request_id === 'string' ? payload.request_id : ''
 
-    if (requestId) {
+    if (requestId && sourceScope) {
       const answer = (result: unknown) =>
-        $gateway.get()?.request('preview.act.respond', {
+        gatewayForScope(sourceScope)?.request('preview.act.respond', {
           request_id: requestId,
           text: result ? JSON.stringify(result) : ''
         })

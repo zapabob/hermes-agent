@@ -36,7 +36,7 @@ import { stopBackendChild as stopBackendChildImpl, stopBackendTreesForUpdate } f
 import { dashboardFallbackArgs, sourceDeclaresServe } from './backend-command'
 import { createBackendConnectionState } from './backend-connection-state'
 import { buildDesktopBackendEnv, hermesManagedNodePathEntries, normalizeHermesHomeRoot } from './backend-env'
-import { isReauthRequiredError, makeNousCloudBackendDownError, waitForHermesReady } from './backend-health'
+import { isReauthRequiredError, waitForHermesReady } from './backend-health'
 import { backendCommandMatches, createBackendOwnership, createBackendShutdownCoordinator } from './backend-ownership'
 import {
   canImportHermesCli,
@@ -191,7 +191,7 @@ import { registerHudIpc } from './hud-ipc'
 import { snapHudBounds } from './hud-snap'
 import { createHudSnapShortcut } from './hud-snap-shortcut'
 import { buildHudWindowUrl } from './hud-url'
-import { createBoundedLinkTitleQueue, fetchPinnedLinkTitle } from './link-title-fetch'
+import { createBoundedLinkTitleQueue, fetchPinnedLinkTitle, TITLE_BYTE_BUDGET } from './link-title-fetch'
 import { ensureMainWindow } from './main-window-lifecycle'
 import { createMediaProtocolHandler, MEDIA_PROTOCOL } from './media-protocol'
 import {
@@ -1401,13 +1401,11 @@ let nativeThemeListenerInstalled = false
 let bootProgressState = {
   error: null,
   fakeMode: BOOT_FAKE_MODE,
-  isCloudBackendDown: false,
   message: 'Waiting to start Hermes backend',
   phase: 'idle',
   progress: 0,
   retryable: false,
   running: false,
-  statusCode: null,
   timestamp: Date.now()
 }
 
@@ -3204,9 +3202,9 @@ async function processStartMarker(pid) {
         '-Command',
         `$p = Get-Process -Id ${pid} -ErrorAction Stop; $p.StartTime.ToUniversalTime().Ticks`
       ],
-      // PowerShell 5.1 cold starts routinely exceed the default 3s execText
-      // budget (2.4-8s observed in #87169); give the marker probe headroom.
-      { timeout: 30_000 }
+      // PowerShell 5.1 cold starts can take a few seconds; give 8s headroom
+      // so we don't stall the UI boot for 30s when PowerShell is sluggish.
+      { timeout: 8_000 }
     )
 
     if (!/^\d+$/.test(ticks)) {
@@ -3368,13 +3366,25 @@ const desktopParentStartMarker = createParentStartMarkerResolver({
 })
 
 async function claimBackendChild(child, command, profile, nonce) {
+  let startMarker = null
+
+  try {
+    startMarker = await processStartMarker(child.pid)
+  } catch (markerError) {
+    const detail = markerError instanceof Error ? markerError.message : String(markerError)
+    rememberLog(
+      `Could not resolve process start marker for backend PID ${child.pid}; using fallback start marker: ${detail}`
+    )
+    startMarker = IS_WINDOWS ? `winms:${Date.now()}` : `fallback:${Date.now()}`
+  }
+
   try {
     const identity = await backendOwnership.claim({
       command,
       nonce,
       pid: child.pid,
       profile,
-      startMarker: await processStartMarker(child.pid),
+      startMarker,
       // Record the spawning Electron so reapOrphans can tell an orphaned
       // backend (parent gone) from one owned by a live instance — a live
       // parent's backend is never reaped (#87295).
@@ -4459,7 +4469,14 @@ function createPythonBackend(root, label, backendArgs, options: any = {}) {
     return null
   }
 
-  const venvRoot = path.join(root, 'venv')
+  let venvRoot = path.join(root, 'venv')
+  for (const candidate of ['.venv', 'venv']) {
+    const candidatePath = path.join(root, candidate)
+    if (directoryExists(candidatePath)) {
+      venvRoot = candidatePath
+      break
+    }
+  }
   const venvPython = getVenvPython(venvRoot)
   const command = IS_WINDOWS && fileExists(venvPython) ? venvPython : python
 
@@ -5425,7 +5442,13 @@ function resolveFaviconCached(rawUrl: string): Promise<string> {
   return pending
 }
 
-async function resourceBufferFromUrl(rawUrl) {
+function assertImageBufferLimit(buffer: Buffer) {
+  if (buffer.length > IMAGE_URL_MAX_BYTES) {
+    throw new Error('Image exceeds the size limit')
+  }
+}
+
+async function resourceBufferFromUrl(rawUrl: string, redirectsLeft = IMAGE_URL_MAX_REDIRECTS) {
   if (!rawUrl) {
     throw new Error('Missing URL')
   }
@@ -8968,19 +8991,6 @@ async function buildRemoteConnection(
     try {
       ticket = await mintGatewayWsTicket(baseUrl, remoteHeaders)
     } catch (error) {
-      // For a Nous-managed Cloud agent, a 502/503/504 from the WS-ticket mint
-      // means the backend server itself is down — the actionable Cloud-down
-      // error. This boundary runs BEFORE the readiness loop, so without this
-      // the ticket wrapper below would swallow the server-fault classification
-      // and the renderer would never see isCloudBackendDown. Preserve the
-      // existing 401/403 reauth and generic transport behavior for everything
-      // else (#85335).
-      const cloudError = makeNousCloudBackendDownError(baseUrl, error)
-
-      if (cloudError !== null) {
-        throw cloudError
-      }
-
       throw gatewayTicketFailure(
         error,
         'Your remote gateway session has expired. Open Settings → Gateway and click "Sign in" again.',
@@ -10367,10 +10377,9 @@ async function spawnPoolBackend(profile, entry, opts: { forceLocal?: boolean; po
 
   entry.process = child
   entry.token = token
-  await claimBackendChild(child, `${backend.command} ${backend.args.join(' ')}`, profile, backendNonce)
-
   child.stdout.on('data', rememberLog)
   child.stderr.on('data', rememberLog)
+  await claimBackendChild(child, `${backend.command} ${backend.args.join(' ')}`, profile, backendNonce)
 
   let ready = false
   let rejectStart = null
@@ -10729,6 +10738,10 @@ async function startHermes() {
       return setup.connection
     }
 
+    if (setup.kind === 'prewarmed-local') {
+      return setup.connection
+    }
+
     // Local WSL backend — paths are bridgeable.
     setWslBridgeProfileState(primaryProfile, true)
 
@@ -10781,6 +10794,8 @@ async function startHermes() {
       })
     )
 
+    hermesProcess.stdout.on('data', rememberLog)
+    hermesProcess.stderr.on('data', rememberLog)
     await claimBackendChild(hermesProcess, `${backend.command} ${backend.args.join(' ')}`, profile, backendNonce)
     const processOwner = backendConnectionState.attachProcess(connectionAttempt, hermesProcess)
 
@@ -10790,9 +10805,6 @@ async function startHermes() {
       releaseBackendChild(hermesProcess)
       throw new Error('Hermes backend start was superseded by a newer connection attempt.')
     }
-
-    hermesProcess.stdout.on('data', rememberLog)
-    hermesProcess.stderr.on('data', rememberLog)
     let backendReady = false
     let rejectBackendStart = null
 
@@ -10932,18 +10944,6 @@ async function startHermes() {
     const message = error instanceof Error ? error.message : String(error)
     const hostKeyChanged = isHostKeyChangedBootFailure(error)
 
-    // Carry structured Cloud-down metadata through the boot-progress / IPC
-    // boundary when present, so the renderer overlay can key on it rather than
-    // re-classifying the message string. main owns classification; the renderer
-    // only consumes the structured result (#85335).
-    const isCloudBackendDown = Boolean(error && typeof error === 'object' && (error as any).isCloudBackendDown === true)
-
-    const statusCode = Number(
-      error && typeof error === 'object' && Number.isInteger((error as any).statusCode)
-        ? (error as any).statusCode
-        : NaN
-    )
-
     // Only latch LOCAL boot failures. A remote failure (lapsed session / mint
     // timeout / host briefly unreachable across sleep) is transient and has no
     // child 'exit' handler to clear the cache — latching it would wedge the app
@@ -10972,7 +10972,6 @@ async function startHermes() {
     updateBootProgress(
       {
         error: message,
-        isCloudBackendDown: isCloudBackendDown || undefined,
         message: `Desktop boot failed: ${message}`,
         phase: 'backend.error',
         // Renderer contract for the self-heal loop (#82679): a transient
@@ -10986,8 +10985,7 @@ async function startHermes() {
           isReauth: isReauthRequiredError(error),
           isHostKeyChanged: hostKeyChanged
         }),
-        running: false,
-        statusCode: Number.isInteger(statusCode) ? statusCode : undefined
+        running: false
       },
       { allowDecrease: true }
     )
