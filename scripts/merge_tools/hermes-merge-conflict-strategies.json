@@ -259,6 +259,11 @@
       "note": "Fork-only Ebbinghaus plugin tests."
     },
     {
+      "pattern": "apps/desktop/src/plugins/hermes-bots/tests/mention-handoff-quoting.test.mjs",
+      "action": "upstream",
+      "note": "Official Bot Mode now resolves mentions to message_agent without shell handoff; retire the stale fork shell-command regression test."
+    },
+    {
       "pattern": "fork/**",
       "action": "preserve_custom",
       "note": "Fork layout docs (README/AGENTS.md) for official vs custom navigation; not upstream."
