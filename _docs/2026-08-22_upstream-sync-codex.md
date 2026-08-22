@@ -9,7 +9,7 @@ stashed, cleaned, or modified.
 
 Source repository: `https://github.com/NousResearch/hermes-agent.git`
 Source ref: `upstream/main`
-Source SHA: `fc7523ca31eeb6eff9114afe384c2cf6380359df`
+Source SHA: `0012dd1e0c7efc7e86fa75b89567a492057f0c02`
 Fork base SHA: `89351922196e2c698ef7fac73d55317e9ed94da0`
 Candidate branch: `codex/upstream-sync-20260822-final`
 
@@ -23,19 +23,30 @@ because official Bot Mode now resolves mentions through `message_agent` and
 does not generate a shell command. No wallpaper files were part of the sync
 diff; the existing wallpaper implementation remains unchanged.
 
-The final sync report classified 195 upstream paths and 2,375 custom baseline
-paths: 2,258 preserve-custom, 217 upstream, 9 official-with-overlay, and 39
-manual-api-followup paths. The merge completed with no unresolved conflicts;
-the 39 manual paths remain recorded in the generated sync report for future
-API-specific review.
+The candidate was re-fetched and refreshed after upstream advanced. The latest
+sync report classified 38 upstream paths and 2,376 custom baseline paths:
+2,296 preserve-custom, 93 upstream, 2 official-with-overlay, and 10
+manual-api-followup paths. The refreshed merge completed with no unresolved
+conflicts; the 10 manual paths remain recorded in the generated sync report
+for future API-specific review.
+
+The refreshed overlay exposed a malformed subprocess-lifecycle splice in
+`scripts/run_tests_parallel.py`; the candidate restores the official
+`try`/communication/cleanup structure before promotion. Windows `pywinpty`
+cannot represent surrogateescape code points, so `tools/process_registry.py`
+now rejects those values before the native call and the regression test checks
+that boundary while preserving the POSIX byte round-trip.
 
 ## Verification
 
-Passed: staged `git diff --check`; `ruff check` on 91 changed Python files;
+Passed: staged `git diff --check`; `ruff check` on all staged Python files;
 Python `compileall`; model metadata tests (93); state durability and live
 writer guard tests (6); browser extension router tests (17); router wiring
 tests (3); browser-control broker hardening tests (20); and the selected
-Bot Mode Node tests (36).
+Bot Mode Node tests (36). The refreshed update/diagnostics test group reached
+66 passes before the Windows PTY boundary was repaired; the focused PTY
+regression passes after that repair. Compile emitted only the existing
+`update_cmd.py` invalid-escape warning.
 
 The Codex auxiliary total-timeout boundary test remains an environment/base
 failure: it reproduced on the pre-sync `main` checkout with the same assertion
@@ -51,4 +62,7 @@ dependency manifest was changed by that attempt.
 
 ## Handoff boundary
 
-This candidate has not been pushed. Promotion into canonical `main` is
+The refreshed candidate is ready for the explicitly requested commit and push. The
+canonical `main` worktree still contains unrelated user changes and generated
+`.omo/evidence` files; those paths remain outside this commit and will be
+restored unchanged when the local checkout is promoted.

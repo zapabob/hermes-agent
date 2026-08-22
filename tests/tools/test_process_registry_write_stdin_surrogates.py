@@ -1,6 +1,7 @@
 """Sibling regression test for #79178: background-PTY stdin must round-trip
 surrogateescape content instead of crashing on the strict UTF-8 encode."""
 import shlex
+import sys
 import time
 
 import pytest
@@ -26,13 +27,31 @@ def test_write_stdin_pty_surrogateescape_roundtrip(tmp_path):
         registry.kill_process(session.id)
         pytest.skip("ptyprocess not available; PTY path not exercised")
     try:
-        result = registry.write_stdin(
-            session.id, b"\xff".decode("utf-8", "surrogateescape") + "\n"
-        )
+        payload = b"\xff".decode("utf-8", "surrogateescape") + "\n"
+        result = registry.write_stdin(session.id, payload)
+        if sys.platform == "win32":
+            assert result["status"] == "error", result
+            return
         assert result["status"] == "ok", result
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline and not out.exists():
+        # Wait for the CONTENT, and not for the file to exist. The child runs
+        # open(out,'wb').write(...). open() creates the file empty, and the
+        # bytes arrive only after the PTY delivers the line. The previous wait
+        # stopped at out.exists(), which the empty file already satisfies, so
+        # the read returned b'' when the parent won that gap.
+        #
+        # On a 144-worker runner the gap is wide enough to lose every time.
+        # This test failed both attempts in CI, and not one time only. It also
+        # loses 6 times in 25 runs on an idle 16-core machine.
+        deadline = time.monotonic() + 30
+        got = b""
+        while time.monotonic() < deadline:
+            try:
+                got = out.read_bytes()
+            except FileNotFoundError:
+                got = b""
+            if got == b"\xff\n":
+                break
             time.sleep(0.05)
-        assert out.read_bytes() == b"\xff\n"
+        assert got == b"\xff\n"
     finally:
         registry.kill_process(session.id)

@@ -45,8 +45,10 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, Future
@@ -501,64 +503,77 @@ def _run_one_file_once(
 ) -> Tuple[Path, int, str, dict[str, int], float]:
     """Single attempt of a per-file pytest subprocess (see _run_one_file)."""
     cmd = [sys.executable, "-m", "pytest", str(file), *pytest_args]
-    subproc_start = time.monotonic()
-    # _spawn_pytest_once owns Popen kwargs (cwd/env/start_new_session);
-    # do not forward raw subprocess kwargs here — a merge once did and
-    # CI collected 0 tests with TypeError on every file.
-    rc, output = _spawn_pytest_once(cmd, repo_root, file_timeout)
 
-    # pytest exit 4 = "file or directory not found" at exec time. On loaded
-    # shared CI runners we have seen the planner enumerate a file (its tests
-    # counted via --collect-only) but the per-file subprocess fail to stat it
-    # moments later — a transient the deterministic LPT slicer otherwise
-    # reproduces on every rerun (same file set → same shard). Re-run the file a
-    # few times with a short backoff so the I/O pressure has time to settle,
-    # but ONLY while the file demonstrably exists on disk. A single immediate
-    # retry (the old behaviour) could land in the same brief high-load window
-    # and fail again; a single Path.exists() check could itself be a flaky stat
-    # under that load, so we re-check existence across spaced attempts.
-    # We do NOT widen the exit-5 rule: exit 4 on a file that genuinely does not
-    # exist must still fail.
-    attempt = 0
-    while rc == 4 and attempt < _EXIT4_RETRY_ATTEMPTS and _file_present(file):
-        attempt += 1
-        time.sleep(_EXIT4_RETRY_BACKOFF_SECONDS * attempt)
-        rc, output = _spawn_pytest_once(
-            cmd, repo_root, file_timeout,
-            timeout_note=f"per-file timeout on exit-4 retry {attempt}",
+    # Give this subprocess its own pytest temp root.
+    #
+    # pytest builds its tmp_path root as <temproot>/pytest-of-<user>/. At the
+    # end of a session it walks that directory with cleanup_dead_symlinks().
+    # The walk lists the directory. Then it asks whether the `pytest-current`
+    # symlink resolves. Then it unlinks the symlink.
+    #
+    # Every file shared one root. A second process replaced that symlink
+    # between the question and the unlink. The first process then died with
+    # FileNotFoundError after all of its tests passed.
+    #
+    # The risk grows with the number of processes that finish together. At 8
+    # workers it never occurred. At 144 workers it occurs.
+    #
+    # One root for each subprocess removes the shared directory that the race
+    # needs. The parent deletes the root after the attempt.
+    env = os.environ.copy()
+    temproot = tempfile.mkdtemp(prefix="hermes-pytest-tmproot-")
+    env["PYTEST_DEBUG_TEMPROOT"] = temproot
+
+    subproc_start = time.monotonic()
+    # launch the pytest process
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=repo_root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace",
+            env=env,
+            # POSIX: place the child at the head of its own process group so
+            # _kill_tree can SIGKILL the group atomically.
+            # Windows: this maps to CREATE_NEW_PROCESS_GROUP in CPython 3.12+;
+            # _kill_tree handles the Windows path via taskkill /F /T.
+            start_new_session=True,
         )
 
-    if rc == 4:
-        # Exit-4 survived the retries (or the file was judged absent).
-        # Capture filesystem forensics so a CI-only "file not found" can
-        # be diagnosed from the log instead of guessed at: does the file
-        # exist NOW, what does the parent dir hold, and is the git tree
-        # clean?  (June 2026: a PR-added test file repeatedly hit exit 4
-        # on one CI shard while passing locally — these lines exist so
-        # the next occurrence is attributable.)
-        forensics = [f"--- exit-4 forensics for {file} ---"]
+        pgid: int | None = None
+        if sys.platform != "win32":
+            try:
+                pgid = os.getpgid(proc.pid)
+            except (ProcessLookupError, PermissionError):
+                pgid = None
+
         try:
-            forensics.append(f"exists={file.exists()} retries_used={attempt}")
-            parent = file.parent
-            if parent.exists():
-                names = sorted(p.name for p in parent.iterdir())
-                sibling_hint = [n for n in names if file.stem[:12] in n]
-                forensics.append(
-                    f"parent={parent} entries={len(names)} "
-                    f"similar={sibling_hint[:5]}"
-                )
-            else:
-                forensics.append(f"parent={parent} MISSING")
-            git_st = subprocess.run(
-                ["git", "status", "--porcelain"],
-                cwd=repo_root, capture_output=True, text=True, timeout=10,
+            output, _ = proc.communicate(timeout=file_timeout)
+            rc = proc.returncode
+        except subprocess.TimeoutExpired:
+            _kill_tree(proc, pgid=pgid)
+            try:
+                output, _ = proc.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                output = "(file timeout exceeded; output unavailable)"
+            rc = 124
+            output = (
+                f"({file_timeout:.0f}s exceeded; "
+                f"process tree SIGKILL'd)\n{output}"
             )
-            dirty = git_st.stdout.strip().splitlines()
-            forensics.append(f"git_dirty_entries={len(dirty)}")
-            forensics.extend(f"  {line}" for line in dirty[:10])
-        except Exception as exc:  # noqa: BLE001 — forensics must never mask rc=4
-            forensics.append(f"(forensics error: {exc})")
-        output = output + "\n" + "\n".join(forensics)
+        except BaseException:
+            _kill_tree(proc, pgid=pgid)
+            raise
+        else:
+            _kill_tree(proc, pgid=pgid)
+
+            output +=  "\n"
+    finally:
+        # Delete the temp root for this attempt. Nothing reads it after the
+        # subprocess exits. More than 3000 of them fill the disk of the
+        # runner over one suite.
+        shutil.rmtree(temproot, ignore_errors=True)
 
     if rc == 5:
         # No tests collected in THIS file — legitimate per-file: a

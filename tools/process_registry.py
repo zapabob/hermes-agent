@@ -2204,6 +2204,11 @@ class ProcessRegistry:
                 # pywinpty expects str on Windows; ptyprocess expects bytes on POSIX.
                 if _IS_WINDOWS:
                     pty_data = data.decode("utf-8") if isinstance(data, bytes) else str(data)
+                    if any(0xD800 <= ord(char) <= 0xDFFF for char in pty_data):
+                        return {
+                            "status": "error",
+                            "error": "Windows PTYs cannot represent surrogate code points",
+                        }
                 else:
                     # surrogateescape: a PTY is a byte stream — round-trip the
                     # original bytes instead of crashing on surrogate content.
