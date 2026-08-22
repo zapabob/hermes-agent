@@ -10,6 +10,7 @@
  * private host, and that lookup would leak the hostname off-box.
  */
 import {
+  type IconType,
   SiAirtable,
   SiAsana,
   SiAtlassian,
@@ -32,8 +33,7 @@ import {
   SiUnrealengine,
   SiVercel,
   SiWebflow,
-  SiZapier,
-  type IconType
+  SiZapier
 } from '@icons-pack/react-simple-icons'
 
 export interface McpBrand {

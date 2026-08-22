@@ -1,4 +1,5 @@
 import {
+  type IconType,
   SiAnthropic,
   SiArchlinux,
   SiArxiv,
@@ -165,8 +166,7 @@ import {
   SiYoutube,
   SiZedindustries,
   SiZoom,
-  SiZotero,
-  type IconType
+  SiZotero
 } from '@icons-pack/react-simple-icons'
 
 // Simple Icons components accept a `title` prop on top of the usual SVG props.
