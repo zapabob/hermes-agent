@@ -3989,15 +3989,9 @@ def nous_free_model_ids(*, force_refresh: bool = False) -> list[str]:
         pricing,
         force_refresh=force_refresh,
     )
-    selectable, _unavailable = partition_nous_models_by_tier(
-        augmented_ids,
-        augmented_pricing,
-        free_tier=True,
-    )
     suffix_free = [mid for mid in augmented_ids if is_nous_free_model_id(mid)]
-    combined = _dedupe_model_ids(list(selectable) + suffix_free)
-    if combined:
-        return combined
+    if suffix_free:
+        return _dedupe_model_ids(suffix_free)
     return list(_NOUS_STATIC_FREE_MODELS)
 
 

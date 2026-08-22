@@ -240,16 +240,14 @@ class TestProviderKeylessSearch:
         captured = {}
         import plugins.web.keyless_mcp as km
 
-        def _fake(query, limit):
-            captured.update(query=query, limit=limit)
+        def _fake(name, query, limit):
+            captured.update(name=name, query=query, limit=limit)
             return {"success": True, "data": {"web": []}}
 
-        # The provider delegates keyless transport to the shared MCP module;
-        # patch that seam rather than an old provider-local helper.
-        monkeypatch.setattr(km, "parallel_search_keyless", _fake)
+        monkeypatch.setattr(km, "search_with_failover", _fake)
         out = pp.ParallelWebSearchProvider().search("kittens", limit=4)
         assert out["success"] is True
-        assert captured == {"query": "kittens", "limit": 4}
+        assert captured == {"name": "parallel", "query": "kittens", "limit": 4}
 
     def test_is_available_reflects_key(self, monkeypatch):
         # is_available() gates the registry's active-provider walk + picker, so
@@ -321,15 +319,15 @@ class TestMcpWebFetch:
         captured = {}
         import plugins.web.keyless_mcp as km
 
-        def _fake(urls):
-            captured.update(urls=list(urls))
+        def _fake(name, urls):
+            captured.update(name=name, urls=list(urls))
             return [{"url": urls[0], "title": "", "content": "x",
                      "raw_content": "x", "metadata": {}}]
 
-        monkeypatch.setattr(km, "parallel_extract_keyless", _fake)
+        monkeypatch.setattr(km, "extract_with_failover", _fake)
         out = asyncio.run(pp.ParallelWebSearchProvider().extract(["https://x.test"]))
         assert out[0]["content"] == "x"
-        assert captured == {"urls": ["https://x.test"]}
+        assert captured == {"name": "parallel", "urls": ["https://x.test"]}
 
 
 # ─── keyed v1 REST search ────────────────────────────────────────────────────

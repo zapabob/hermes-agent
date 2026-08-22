@@ -556,12 +556,26 @@ def get_provider(name: str, *, allow_network: bool = True) -> Optional[ProviderD
         if _prof is not None and (_prof.base_url or "").strip():
             _api_mode_to_transport = {v: k for k, v in TRANSPORT_TO_API_MODE.items()}
             _transport = _api_mode_to_transport.get(_prof.api_mode, "openai_chat")
+            profile_env_vars = tuple(_prof.env_vars or ())
+            profile_base_url_var = next(
+                (
+                    env_var
+                    for env_var in profile_env_vars
+                    if env_var.endswith("_BASE_URL") or env_var.endswith("_URL")
+                ),
+                "",
+            )
             return ProviderDef(
                 id=canonical,
                 name=_prof.display_name or _prof.name or canonical,
                 transport=_transport,
-                api_key_env_vars=tuple(_prof.env_vars or ()),
+                api_key_env_vars=tuple(
+                    env_var
+                    for env_var in profile_env_vars
+                    if env_var != profile_base_url_var
+                ),
                 base_url=_prof.base_url or "",
+                base_url_env_var=profile_base_url_var,
                 auth_type=_prof.auth_type or "api_key",
                 source="plugin-profile",
             )

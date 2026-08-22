@@ -52,7 +52,7 @@ hypura = HypuraProfile(
     default_aux_model="hypura",
     display_name="Hypura (Local)",
     description="Hypura local inference server — Ollama-compatible API",
-    env_vars=(),  # No auth required
+    env_vars=("HYPURA_BASE_URL",),
     base_url="http://localhost:8080",
     fallback_models=(
         "Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive",

@@ -1,6 +1,6 @@
 ---
 name: hermes-plugin-integration
-description: "Integrate external tools as Hermes plugins following repo conventions."
+description: "Integrate external tools as Hermes plugins."
 version: 0.1.0
 author: zapabob, Hermes Agent
 license: MIT
@@ -8,7 +8,7 @@ platforms: [linux, macos, windows]
 metadata:
   hermes:
     tags: [plugin, integration, conventions]
-    related_skills: [hermes-agent-skill-authoring, software-development/test-driven-development]
+    related_skills: [hermes-agent-skill-authoring, test-driven-development]
 ---
 
 # Hermes Plugin Integration

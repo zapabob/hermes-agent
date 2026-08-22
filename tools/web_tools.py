@@ -299,6 +299,7 @@ def _get_backend(capability: str = "search") -> str:
         ("firecrawl", _is_tool_gateway_ready()),
         ("searxng", _has_env("SEARXNG_URL")),
         ("brave-free", _has_env("BRAVE_SEARCH_API_KEY")),
+        ("ddgs", _ddgs_package_importable()),
     )
     for backend, available in backend_candidates:
         if not available:
