@@ -19,4 +19,6 @@ The fork CI run `32587946310` for source `bcde661fd77e306d530a1d21f27331ec0e140a
 
 Before repair, the focused local suite reproduced `1301 passed, 9 failed`. After repair, the same focused suite passed with `1310 passed, 1 warning` in 59.49 seconds. The exact pushed SHA and cloud CI result are recorded in the final handoff after the push completes.
 
+The first repair push `e055d9a6f31e052f2326bf4120b7401a6de37018` passed all changed contracts locally, but CI run `32590703502` found one stale integration expectation in `tests/tools/test_web_providers_ddgs.py`: the test still expected keyless Parallel after `ddgs` became an earlier available backend. The follow-up updates that expectation to the official backend order.
+
 No credentials, personal data, generated binaries, or runtime state are included.
