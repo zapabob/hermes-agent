@@ -6,7 +6,7 @@ import { getGlobalModelInfo } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { isBusySessionModelSwitch } from '@/lib/gateway-rpc'
 import { manualPickRemoved, modelOptionsQueryKey } from '@/lib/model-options'
-import { notifyError } from '@/store/notifications'
+import { dismissNotification, notify, notifyError } from '@/store/notifications'
 import { $activeGatewayProfile } from '@/store/profile'
 import {
   $activeSessionId,
@@ -243,6 +243,26 @@ export function useModelControls({
         return true
       }
 
+      const commitAcknowledged = (result: ModelSwitchGatewayResponse | undefined) => {
+        const acknowledgedSelection: ModelSelection = {
+          ...selection,
+          model: result?.value || selection.model,
+          provider: result?.provider || selection.provider
+        }
+
+        if (!commitSelection(acknowledgedSelection)) {
+          return false
+        }
+
+        if (cacheOwnerConnectionId && !result?.deferred) {
+          void queryClient.invalidateQueries({
+            queryKey: modelOptionsQueryKey(liveGatewayProfile, liveSessionId, cacheOwnerConnectionId)
+          })
+        }
+
+        return true
+      }
+
       // No live session yet: the pick is pure UI state. session.create reads
       // $currentModel/$currentProvider and applies it as that session's override.
       if (!liveSessionId) {
@@ -264,41 +284,42 @@ export function useModelControls({
         const result = await requestGateway<ModelSwitchGatewayResponse>('config.set', params)
 
         if (result?.confirm_required) {
-          // A guard response is not an acknowledgement. The renderer must not
-          // paint the requested model unless a caller explicitly confirms and
-          // resubmits it, because the backend has not activated it yet.
-          throw new Error(result.confirm_message || result.warning || copy.modelSwitchFailed)
-        }
+          // A guard response is not an acknowledgement. Keep the visible
+          // selection unchanged and require an explicit confirmation before
+          // resubmitting the same request. The epoch check prevents a stale
+          // warning from clobbering a later picker choice.
+          let notificationId = ''
+          const confirm = () => {
+            dismissNotification(notificationId)
+            if (!selectionIsCurrent()) return
 
-        // Commit only after the gateway either switched the live runtime or
-        // accepted a guarded, turn-boundary-safe deferred switch. Before this
-        // acknowledgement the visible model remains the one that can actually
-        // serve a prompt, so the UI cannot get ahead of execution.
-        const acknowledgedSelection: ModelSelection = {
-          ...selection,
-          model: result?.value || selection.model,
-          provider: result?.provider || selection.provider
-        }
+            void requestGateway<ModelSwitchGatewayResponse>('config.set', {
+              ...params,
+              confirm_expensive_model: true
+            })
+              .then(confirmed => {
+                if (confirmed?.confirm_required) {
+                  throw new Error(confirmed.confirm_message || confirmed.warning || copy.modelSwitchFailed)
+                }
+                commitAcknowledged(confirmed)
+              })
+              .catch(error => {
+                if (selectionIsCurrent()) notifyError(error, copy.modelSwitchFailed)
+              })
+          }
 
-        if (!commitSelection(acknowledgedSelection)) {
+          notificationId = notify({
+            action: { label: t.common.confirm, onClick: confirm },
+            kind: 'warning',
+            message: result.confirm_message || result.warning || copy.modelSwitchFailed,
+            title: t.common.confirm
+          })
           return false
         }
 
-        // A routed owner has an isolated catalogue cache that must be refreshed
-        // after acknowledgement. The ambient cache keeps the downstream
-        // no-refetch contract because the response already supplied the
-        // authoritative runtime identity.
-        if (cacheOwnerConnectionId && !result?.deferred) {
-          void queryClient.invalidateQueries({
-            queryKey: modelOptionsQueryKey(
-              liveGatewayProfile,
-              liveSessionId,
-              cacheOwnerConnectionId
-            )
-          })
-        }
-
-        return true
+        // Commit only after the gateway either switched the live runtime or
+        // accepted a guarded, turn-boundary-safe deferred switch.
+        return commitAcknowledged(result)
       } catch (err) {
         // An OLDER gateway refuses a mid-turn switch outright (4009) instead of
         // deferring it. Don't punish the user for a backend they haven't
@@ -322,6 +343,7 @@ export function useModelControls({
       copy.modelSwitchFailed,
       queryClient,
       requestGateway,
+      t.common.confirm,
       updateModelOptionsCache
     ]
   )
