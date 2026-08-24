@@ -335,6 +335,7 @@ import {
 } from './venv-blocker-scan'
 import { fetchMarketplaceThemes, searchMarketplaceThemes } from './vscode-marketplace'
 import { createWakeIndicatorWindowController } from './wake-indicator-window'
+import { resolveWatchdogPrewarmedBackend } from './watchdog-backend'
 import { enumerateWindowsFrontToBack, readWindowBelow } from './window-below'
 import { installWindowRendererLifecycle } from './window-renderer-lifecycle'
 import { createWindowRevealController } from './window-reveal'
