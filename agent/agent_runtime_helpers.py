@@ -2306,29 +2306,93 @@ def anthropic_prompt_cache_policy(
         and (eff_provider == "anthropic" or base_url_hostname(eff_base_url) == "api.anthropic.com")
     )
 
-    # A custom Anthropic-compatible route may use a bare model alias that is
-    # canonicalized only after Hermes sends the request. In that case model
-    # spelling cannot prove cache support. Honor an exact route+model
-    # capability declaration instead; explicit false is authoritative too.
-    # This preserves the runtime model id (and therefore request/cache keys)
-    # while avoiding unsafe alias-name guesses.
+    # A configured route may use an arbitrary provider name and model alias
+    # that are canonicalized only after Hermes sends the request. Honor its
+    # existing per-model ``prompt_caching`` capability instead of guessing
+    # support from either spelling. Explicit false is authoritative too.
     #
-    # Also consulted for a LiteLLM route on the OpenAI wire: that grant is
-    # inferred from the provider/host name, so an operator who explicitly
-    # declares prompt_caching for the route+model must still win over the
-    # inference — in either direction. Narrowed to the routes the LiteLLM
-    # branch below can actually grant (chat_completions + Claude): the lookup
-    # calls get_compatible_custom_providers, which rebuilds its normalized
-    # view on every call (~1.5ms uncached), and this function runs per
-    # request destination. Widening it unconditionally regressed the
-    # non-declaring common case ~200x (7.5us -> 1528us).
+    # The declaration only controls the two transports handled by this marker
+    # planner. Responses and Bedrock use separate caching protocols and must
+    # not receive Anthropic-style cache_control fields.
     custom_prompt_caching = None
+    _supports_anthropic_cache_markers = eff_api_mode in {
+        "anthropic_messages",
+        "chat_completions",
+    }
     _litellm_openai_wire = (
         eff_api_mode == "chat_completions"
         and is_claude
         and _is_litellm_route(provider_lower, eff_base_url)
     )
-    if is_anthropic_wire or _litellm_openai_wire:
+    _custom_providers = getattr(agent, "_custom_providers", None)
+    _route_may_be_custom = False
+    if not _supports_anthropic_cache_markers:
+        # Responses/Bedrock never consume the declaration — skip the
+        # identity probe entirely for those transports.
+        pass
+    elif _custom_providers:
+        # The normalized list is already attached after agent initialization.
+        # Use cheap runtime identity signals before calling the capability
+        # helper so an unrelated configured provider does not put every
+        # built-in chat-completions request on the route-normalization path.
+        #
+        # Identity must match the authoritative helper's semantics:
+        # get_custom_provider_model_capability compares base URLs via
+        # normalize_route_base_url, and runtime provider ids go through
+        # custom_provider_aliases (space→hyphen, custom: prefix variants).
+        # A raw-string gate here would silently drop declarations whose
+        # config spelling differs only in host case / trailing slash.
+        from hermes_cli.providers import custom_provider_aliases
+        from hermes_cli.route_identity import normalize_route_base_url
+
+        _provider_ids = {provider_lower}
+        if provider_lower.startswith("custom:"):
+            _provider_ids.add(provider_lower.removeprefix("custom:"))
+        _eff_url_normalized = normalize_route_base_url(eff_base_url)
+        for _entry in _custom_providers:
+            if not isinstance(_entry, dict):
+                continue
+            _entry_ids = custom_provider_aliases(
+                str(_entry.get("name") or ""),
+                str(_entry.get("provider_key") or ""),
+            )
+            if _provider_ids & _entry_ids or (
+                _eff_url_normalized
+                and normalize_route_base_url(_entry.get("base_url"))
+                == _eff_url_normalized
+            ):
+                _route_may_be_custom = True
+                break
+    elif _custom_providers is None:
+        # None = the list is not attached yet (early agent initialization or
+        # a blank_cache_policy_stub destination); an attached empty list means
+        # the agent initialized with no custom providers and correctly never
+        # matches. Avoid rebuilding the list for ordinary built-in routes,
+        # while still recognizing arbitrary config keys and built-in-name
+        # overrides that point at a different endpoint.
+        try:
+            from hermes_cli.providers import get_provider
+
+            # allow_network=False: this runs per request destination; a cold
+            # models.dev cache must not trigger a foreground registry fetch
+            # from the send path. A catalog miss (None) degrades to the
+            # conservative side (route may be custom → capability lookup).
+            _provider_def = get_provider(eff_provider, allow_network=False)
+            _route_may_be_custom = _provider_def is None or (
+                bool(_provider_def.base_url)
+                and base_url_hostname(_provider_def.base_url)
+                != base_url_hostname(eff_base_url)
+            )
+        except Exception as _pd_exc:
+            logger.debug(
+                "provider lookup failed during cache-policy pre-gate: %s",
+                _pd_exc,
+            )
+            _route_may_be_custom = provider_lower.startswith("custom:")
+
+    if _supports_anthropic_cache_markers and (
+        is_anthropic_wire or _litellm_openai_wire or _route_may_be_custom
+    ):
         try:
             from hermes_cli.config import get_custom_provider_model_capability
 
@@ -2336,7 +2400,7 @@ def anthropic_prompt_cache_policy(
                 model=eff_model,
                 base_url=eff_base_url,
                 capability="prompt_caching",
-                custom_providers=getattr(agent, "_custom_providers", None),
+                custom_providers=_custom_providers,
             )
         except Exception as _cap_exc:
             logger.debug(
@@ -2344,10 +2408,9 @@ def anthropic_prompt_cache_policy(
                 _cap_exc,
             )
     if custom_prompt_caching is not None:
-        # Layout follows the transport, not the declaration: the native
-        # inner-block form is only honored on the Anthropic Messages wire
-        # (see the LiteLLM OpenAI-wire branch below for why a top-level
-        # marker is dropped or 400s on chat_completions).
+        # Layout follows the transport, not the declaration: native Messages
+        # uses inner-block markers; OpenAI-compatible chat uses the envelope
+        # layout already emitted for OpenRouter and LiteLLM.
         return custom_prompt_caching, custom_prompt_caching and is_anthropic_wire
 
     # MiniMax-M3 rides MiniMax's server-side automatic prefix cache on the
