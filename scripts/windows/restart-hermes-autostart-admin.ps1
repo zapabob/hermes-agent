@@ -324,14 +324,14 @@ try {
 
     Write-Step "Starting Hermes tasks in order..."
     Start-HermesTask -TaskName "HermesGoWatchdogBootAutoStart" -WaitSeconds 4
-    Start-HermesTask -TaskName "HermesGatewayAutoStart" -WaitSeconds 12
-    Start-HermesTask -TaskName "HermesHypuraHarnessAutoStart" -WaitSeconds 6
-    Start-HermesTask -TaskName "HermesLineNgrokAutoStart" -WaitSeconds 4
+    Start-HermesTask -TaskName "HermesGatewayBootAutoStart" -WaitSeconds 12
+    Start-HermesTask -TaskName "HermesHypuraHarnessBootAutoStart" -WaitSeconds 6
+    Start-HermesTask -TaskName "HermesLineNgrokBootAutoStart" -WaitSeconds 4
     Start-HermesTask -TaskName "HermesMemoryGraphAutoStart" -WaitSeconds 3
-    Start-HermesTask -TaskName "HermesWebUINativeAutoStart" -WaitSeconds 12
+    Start-HermesTask -TaskName "HermesWebUIBootAutoStart" -WaitSeconds 12
     Start-HermesTask -TaskName "HermesDashboardAutoStart" -WaitSeconds 8
     Start-HermesTask -TaskName "HermesDesktopAutoStart" -WaitSeconds 8
-    Start-HermesTask -TaskName "HermesTailscaleServeUpdate" -WaitSeconds 4
+    Start-HermesTask -TaskName "HermesTailscaleServeBootUpdate" -WaitSeconds 4
 
     Write-Step "Verification: gateway status"
     & $PythonExe -m hermes_cli.main gateway status
