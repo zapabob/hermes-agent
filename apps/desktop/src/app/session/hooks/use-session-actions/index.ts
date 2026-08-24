@@ -36,13 +36,13 @@ import {
   $activeGatewayProfile,
   $gatewaySwapTarget,
   $newChatProfile,
-  $newChatRoute,
   $profiles,
   $showAllProfiles,
   type AgentProfileRoute,
   ensureGatewayAgent,
   ensureGatewayProfile,
-  normalizeProfileKey
+  normalizeProfileKey,
+  resolveNewChatOwnerRoute
 } from '@/store/profile'
 import {
   $projectScope,
@@ -233,7 +233,7 @@ function reconcileAuthoritativeMessages(
 // never the profile default (that lives in Settings → Model).
 async function desktopSessionCreateParams(
   cwd: string,
-  capturedRoute = $newChatRoute.get()
+  capturedRoute = resolveNewChatOwnerRoute()
 ): Promise<Record<string, unknown>> {
   // Treat Send as the linearization point for the visible selector state. The
   // profile handshake below can yield long enough for background config/model
@@ -490,7 +490,14 @@ export function useSessionActions({
               ? workspaceTarget.trim()
               : $currentCwd.get().trim() || resolveNewSessionCwd()
 
-        const capturedRoute = $newChatRoute.get()
+        // The EXACT owner for this create: an explicit agent route, else the
+        // (registry source, profile) pair the draft was made on. Read ONCE at
+        // the send linearization point and threaded through the create RPC,
+        // the owner hint, the optimistic row and the failure cleanup, so the
+        // profile-rail path (selectProfile clears $newChatRoute) can no longer
+        // reduce the owner to a bare profile name that later RPCs dial on a
+        // different socket than the one that minted the runtime.
+        const capturedRoute = resolveNewChatOwnerRoute()
         const params = await desktopSessionCreateParams(cwd, capturedRoute)
 
         const created = capturedRoute
@@ -653,7 +660,7 @@ export function useSessionActions({
         // `options?.cwd || resolve…` is wrong for Home: null is falsy and used
         // to fall through into the last project folder while main chat was
         // occupied (openTab path for "New session in Home").
-        const capturedRoute = options?.route === undefined ? $newChatRoute.get() : options.route
+        const capturedRoute = options?.route === undefined ? resolveNewChatOwnerRoute() : options.route
         const workspaceScope = options?.workspaceScope ?? { workspaceMode: 'sessions' }
 
         const cwd =
