@@ -71,10 +71,16 @@ function bridge() {
   return desktop
 }
 
-function remoteFsApi<T>(path: string, body?: Record<string, unknown>): Promise<T> {
-  return hermesApi<T>(
-    body ? { body, method: 'POST', path, profile: desktopFsProfile() } : { path, profile: desktopFsProfile() }
-  )
+function remoteFsApi<T>(path: string, body?: Record<string, unknown>, scope?: DesktopFsSourceScope): Promise<T> {
+  const request = body
+    ? { body, method: 'POST', path, profile: scope?.profile.trim() || desktopFsProfile() }
+    : { path, profile: scope?.profile.trim() || desktopFsProfile() }
+
+  if (scope) {
+    return bridge().api<T>({ ...request, connectionId: scope.connectionId })
+  }
+
+  return hermesApi<T>(request)
 }
 
 export async function readDesktopDir(path: string): Promise<HermesReadDirResult> {

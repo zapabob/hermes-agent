@@ -165,6 +165,22 @@ describe('desktop filesystem facade', () => {
     })
   })
 
+  it('pins an inactive wallpaper read to its immutable source scope', async () => {
+    $connection.set({ connectionId: null, mode: 'local', profile: 'default' } as never)
+
+    await readDesktopFileDataUrl('/srv/wallpapers/mono.png', {
+      connectionId: 'studio-ssh',
+      profile: 'wallpaper-profile'
+    })
+
+    expect(api).toHaveBeenCalledWith({
+      connectionId: 'studio-ssh',
+      path: '/api/fs/read-data-url?path=%2Fsrv%2Fwallpapers%2Fmono.png',
+      profile: 'wallpaper-profile'
+    })
+    expect(readFileDataUrl).not.toHaveBeenCalled()
+  })
+
   it('keys SSH filesystem caches by stable host identity instead of the forwarded port', () => {
     $connection.set({
       mode: 'remote',
