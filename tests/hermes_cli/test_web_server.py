@@ -1786,13 +1786,13 @@ class TestWebServerEndpoints:
         # actually received the write.
         env_var = custom_endpoint_key_env("worker-proxy")
 
-        worker_cfg = (worker_home / "config.yaml").read_text()
+        worker_cfg = (worker_home / "config.yaml").read_text(encoding="utf-8")
         assert "worker-proxy" in worker_cfg
         assert env_var in worker_cfg
-        assert "sk-worker-secret" in (worker_home / ".env").read_text()
+        assert "sk-worker-secret" in (worker_home / ".env").read_text(encoding="utf-8")
 
         for leaked in (default_home / "config.yaml", default_home / ".env"):
-            text = leaked.read_text() if leaked.exists() else ""
+            text = leaked.read_text(encoding="utf-8") if leaked.exists() else ""
             assert "worker-proxy" not in text, f"endpoint leaked into default profile ({leaked.name})"
             assert "sk-worker-secret" not in text, f"credential leaked into default profile ({leaked.name})"
 
@@ -2117,6 +2117,71 @@ class TestWebServerEndpoints:
         assert resp.status_code == 200
         contents = [m["content"] for m in resp.json()["messages"]]
         assert contents == ["old q", "old a", "summary", "live q", "live a"]
+
+    def test_get_session_messages_projects_and_dedupes_composite_carrier(self):
+        from agent.context_compressor import (
+            HISTORICAL_TASK_HEADING,
+            SUMMARY_PREFIX,
+            _MERGED_PRIOR_CONTEXT_HEADER,
+            _MERGED_SUMMARY_DELIMITER,
+            _SUMMARY_END_MARKER,
+        )
+        from hermes_state import SessionDB
+
+        handoff = (
+            f"{SUMMARY_PREFIX}\n{HISTORICAL_TASK_HEADING}\nold task\n\n"
+            f"{_SUMMARY_END_MARKER}"
+        )
+        carrier = f"{handoff}\n\nREAL ASK"
+        assistant_carrier = (
+            f"{_MERGED_PRIOR_CONTEXT_HEADER}\n"
+            "real completed answer\n\n"
+            f"{_MERGED_SUMMARY_DELIMITER}\n\n{handoff}"
+        )
+        db = SessionDB()
+        try:
+            db.create_session(session_id="compacted-carrier-display", source="desktop")
+            db.append_message(
+                "compacted-carrier-display",
+                "user",
+                "REAL ASK",
+                timestamp=123.0,
+            )
+            db.archive_and_compact(
+                "compacted-carrier-display",
+                [{"role": "user", "content": carrier, "timestamp": 123.0}],
+            )
+            db.append_message(
+                "compacted-carrier-display",
+                "user",
+                handoff,
+                timestamp=124.0,
+            )
+            db.append_message(
+                "compacted-carrier-display",
+                "assistant",
+                assistant_carrier,
+                timestamp=125.0,
+            )
+            active_id = db.get_messages("compacted-carrier-display")[0]["id"]
+        finally:
+            db.close()
+
+        resp = self.client.get(
+            "/api/sessions/compacted-carrier-display/messages"
+            "?include_compacted=true"
+        )
+        assert resp.status_code == 200
+        messages = resp.json()["messages"]
+        assert len(messages) == 3
+        assert messages[0]["id"] == active_id
+        assert messages[0]["content"] == carrier
+        assert messages[0]["display_content"] == "REAL ASK"
+        assert not messages[0].get("display_kind")
+        assert messages[1]["content"] == handoff
+        assert messages[1]["display_kind"] == "hidden"
+        assert messages[2]["content"] == assistant_carrier
+        assert messages[2]["display_content"] == "real completed answer"
 
     def test_get_session_messages_latest_page_with_compacted_rows(self):
         """The desktop's real read path (getLatestSessionMessages: limit +

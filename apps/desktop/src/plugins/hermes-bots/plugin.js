@@ -1066,6 +1066,125 @@ function persistGroupChatRooms(all = $groupChats.get()) {
   }
 }
 
+// ── deleted-connection roster hygiene (#93492 root cause) ───────────────────
+// Deleting a cloud/remote connection used to leave every persisted group-chat
+// member descriptor that referenced it behind untouched. Those orphaned rows
+// (remoteSource: true, connection gone) are exactly the shape that made
+// render-path route lookups throw "Bot X has no connection owner" on every
+// group open, permanently — the poisoned row lives in plugin storage. The
+// sweep below runs on the registry's 'removed' push (and its annotate helper
+// again at hydrate for rows orphaned before this build). It never hard-deletes
+// user data: the member row is kept and marked, so panes render the existing
+// degraded 'Gateway removed' botSourceStatus state instead of crashing.
+
+/** Keep the member's identity; mark it so botSourceStatus reads
+ *  'Gateway removed' and no render-path route lookup can throw on it. */
+function markOrphanedGroupMemberDescriptor(member) {
+  return {
+    ...member,
+    sourceMissing: true,
+    sourceReachable: false
+  }
+}
+
+function groupMemberReferencesConnection(member, connectionId) {
+  const id = String(connectionId || '').trim()
+
+  if (!id) {
+    return false
+  }
+
+  return (
+    String(member?.connectionId || '').trim() === id ||
+    String(member?.route?.connectionId || '').trim() === id
+  )
+}
+
+/** Register-removed sweep: annotate (not delete) every persisted group-chat
+ *  member owned by the deleted connection, in the atom AND plugin storage.
+ *  Writes ride updateGroupChat so the durable record keeps its full shape
+ *  (sessionOwners, holds — durableGroupChatRooms would drop them).
+ *  Returns whether anything changed. */
+function sweepGroupChatMembersForRemovedConnection(connectionId) {
+  const id = String(connectionId || '').trim()
+
+  if (!id) {
+    return false
+  }
+
+  let changed = false
+
+  for (const [name, room] of Object.entries($groupChats.get())) {
+    const members = Array.isArray(room?.members) ? room.members : []
+
+    if (!members.some(member => groupMemberReferencesConnection(member, id) && !member?.sourceMissing)) {
+      continue
+    }
+
+    changed = true
+    updateGroupChat(name, current => ({
+      ...current,
+      members: (Array.isArray(current.members) ? current.members : []).map(member =>
+        groupMemberReferencesConnection(member, id) ? markOrphanedGroupMemberDescriptor(member) : member
+      )
+    }))
+  }
+
+  return changed
+}
+
+/** Hydrate-time pass for rows orphaned BEFORE this build (the poisoned rows
+ *  that made #93492 survive app restarts). Two shapes are annotated, never
+ *  deleted:
+ *  - a descriptor that already lost its connectionId (route unresolvable —
+ *    exactly what a stale row looks like once its connection was deleted);
+ *  - a descriptor whose connectionId is absent from the live registry, when
+ *    the caller could obtain one (liveConnectionIds === null means "registry
+ *    unavailable", which must NOT read as "everything is orphaned").
+ *  Pure on the rooms map; returns { rooms, changed }. */
+function annotateOrphanedGroupChatMembers(rooms, liveConnectionIds = null) {
+  // Duck-typed, not instanceof: callers (and vm-based tests) may hand a Set
+  // constructed in another realm.
+  const live = liveConnectionIds && typeof liveConnectionIds.has === 'function' ? liveConnectionIds : null
+  const next = {}
+  let changed = false
+
+  for (const [name, room] of Object.entries(rooms || {})) {
+    const members = Array.isArray(room?.members) ? room.members : []
+    const orphaned = member => {
+      if (!member || member.sourceMissing) {
+        return false
+      }
+
+      if (!member.sourceScoped && !member.remoteSource) {
+        return false
+      }
+
+      const id = String(member.route?.connectionId || member.connectionId || '').trim()
+
+      if (!id) {
+        // Route unresolvable: this is the row shape that threw on render.
+        return true
+      }
+
+      return live ? !live.has(id) : false
+    }
+
+    if (!members.some(orphaned)) {
+      next[name] = room
+      continue
+    }
+
+    changed = true
+    next[name] = {
+      ...room,
+      members: members.map(member => (orphaned(member) ? markOrphanedGroupMemberDescriptor(member) : member))
+    }
+  }
+
+  return { rooms: next, changed }
+}
+
 function groupChatSyncConnectionId() {
   return String(host.state.connectionId?.get?.() || host.activeConnectionId?.() || '')
 }
@@ -1381,7 +1500,12 @@ function handleSessionsGatewayTransition() {
 // Older backends without the RPCs fail per-call and are skipped — the
 // relay degrades to whatever subset of connections supports it.
 const RELAY_ROSTER_INTERVAL_MS = 60_000
-const RELAY_DRAIN_INTERVAL_MS = 4_000
+// Backstop cadence only (#93594): the push path below carries envelope latency,
+// so the interval poll exists for older backends and missed events — 30s
+// matches LIVE_SESSION_STATUS_BACKSTOP_INTERVAL_MS. It was 4s back when the
+// poll WAS the delivery path, which (before route retention) also meant a
+// fresh WebSocket dial + teardown per registered connection every 4s.
+const RELAY_DRAIN_INTERVAL_MS = 30_000
 // Push path (#93091): the gateway broadcasts `bot_relay.outbox.pending` when
 // an envelope lands on disk; a burst of signals inside this window collapses
 // to ONE drain. The interval poll above stays as the backstop for older
@@ -1398,6 +1522,58 @@ let relayPushDebounceTimer = null
 // the gateway signature is monotone (one event per new envelope, never
 // re-broadcast) — so remember it and re-schedule after the drain finishes.
 let relayDrainRerun = false
+// Relay-route socket retention (#93594): connection id → release fn. While
+// the relay is active each registered connection's pooled socket is pinned
+// open (host.retainProfileSocket) so drain RPCs reuse ONE persistent
+// WebSocket instead of dialing and tearing down a fresh one per tick.
+// Feature-detected — older shells lack the door and fall back to per-call
+// leases. Local routes get a no-op release inside the host (idle-reaper
+// exemption). stopBotRelay releases everything.
+const relayRouteRetentions = new Map()
+
+/** Reconcile retention with the CURRENT connection set: pin new connections,
+ *  release removed ones. Runs on every drain/roster connection fetch. */
+function syncRelayRetention(connections) {
+  if (typeof host.retainProfileSocket !== 'function') {
+    return
+  }
+
+  const live = new Set(connections.map(connection => connection.id))
+
+  for (const [id, release] of [...relayRouteRetentions]) {
+    if (!live.has(id)) {
+      relayRouteRetentions.delete(id)
+      try {
+        release()
+      } catch {
+        // Never let a release failure break the relay loop.
+      }
+    }
+  }
+
+  if (relayDisposed) {
+    return
+  }
+
+  for (const connection of connections) {
+    if (!relayRouteRetentions.has(connection.id)) {
+      relayRouteRetentions.set(connection.id, host.retainProfileSocket(connection.route))
+    }
+  }
+}
+
+/** Drop every relay pin — stop/dispose path. */
+function releaseRelayRetention() {
+  for (const release of relayRouteRetentions.values()) {
+    try {
+      release()
+    } catch {
+      // Disposer from an older shell shape — never break teardown.
+    }
+  }
+
+  relayRouteRetentions.clear()
+}
 
 /** One representative route per reachable connection id. */
 async function relayConnections() {
@@ -1542,6 +1718,10 @@ async function drainRelayOutboxes() {
   try {
     const connections = await relayConnections()
 
+    // Retention follows the relay-eligible set: with fewer than two
+    // connections there is nothing to relay, so nothing stays pinned.
+    syncRelayRetention(connections.length >= 2 ? connections : [])
+
     if (connections.length < 2) {
       return
     }
@@ -1669,6 +1849,9 @@ function stopBotRelay() {
   // A rerun remembered mid-drain must not leak into the next start —
   // it would fire one stale drain after restart.
   relayDrainRerun = false
+  // Unpin every relay-retained socket (#93594): with the relay stopped the
+  // pooled entries return to dispose-at-refcount-0 semantics.
+  releaseRelayRetention()
 
   if (relayRosterTimer !== null) {
     clearInterval(relayRosterTimer)
@@ -5018,11 +5201,13 @@ function botSourceStatus(bot) {
 // active-gateway door. Feature-detected: older desktops without
 // requestProfile simply have no remote routes (callers fall back / disable).
 
-/** Immutable owner descriptor for every source-scoped row. The active
- *  gateway is presentation state and is never consulted here. */
-function botConnectionRoute(bot) {
+/** Non-throwing resolver behind botConnectionRoute(). Returns a typed status
+ *  instead of throwing, so passive callers (display/meta lookups) can branch
+ *  on `resolved | owner_removed | not_scoped` rather than catching whatever
+ *  exception the strict wrapper below happens to throw. */
+function resolveBotConnectionRoute(bot) {
   if (!bot?.sourceScoped && !bot?.remoteSource) {
-    return null
+    return { status: 'not_scoped', route: null }
   }
 
   const candidate = bot.route || {
@@ -5036,21 +5221,42 @@ function botConnectionRoute(bot) {
   const targetProfile = String(candidate?.targetProfile || profile).trim() || profile
 
   if (!connectionId) {
-    throw new Error(`Bot ${profile} has no connection owner`)
+    return { status: 'owner_removed', route: null, profile }
   }
 
-  return Object.freeze({
-    connectionId,
-    mode: candidate.mode === 'local' || connectionId === 'local' ? 'local' : 'remote',
-    profile,
-    targetProfile
-  })
+  return {
+    status: 'resolved',
+    route: Object.freeze({
+      connectionId,
+      mode: candidate.mode === 'local' || connectionId === 'local' ? 'local' : 'remote',
+      profile,
+      targetProfile
+    })
+  }
+}
+
+/** Immutable owner descriptor for every source-scoped row. The active
+ *  gateway is presentation state and is never consulted here. Strict: throws
+ *  when the owning connection is gone -- correct for real dispatch
+ *  (requestForBot, session creation, etc.), covered by
+ *  remote-routing-races.test.mjs. Passive lookups (rendering, meta) must call
+ *  resolveBotConnectionRoute() directly instead of catching this throw. */
+function botConnectionRoute(bot) {
+  const resolved = resolveBotConnectionRoute(bot)
+
+  if (resolved.status === 'owner_removed') {
+    throw new Error(`Bot ${resolved.profile} has no connection owner`)
+  }
+
+  return resolved.route
 }
 
 const BOTS_HOME_OWNER_KEY = 'bots:home'
 
 function botWorkspaceOwnerKey(bot) {
-  const route = botConnectionRoute(bot)
+  // Render-reachable (sidebar sync, Bots home open, context menus): an
+  // orphaned row must yield a stable degraded key, never the dispatch throw.
+  const route = resolveBotConnectionRoute(bot).route
 
   return `bot:${route ? botRouteKey(route) : String(bot?.name || 'default')}`
 }
@@ -5060,7 +5266,9 @@ function groupWorkspaceOwnerKey(group) {
 }
 
 function setBotsWorkspaceOwner(ownerKey, bot = null, blockedMessage = 'Select a Bot or group first.') {
-  const route = bot ? botConnectionRoute(bot) : null
+  // Render-reachable (sidebar listener fires on visibility flips). An
+  // orphaned row degrades to the blocked target instead of throwing.
+  const route = bot ? resolveBotConnectionRoute(bot).route : null
   const target = route ? { kind: 'route', route } : { kind: 'blocked', message: blockedMessage }
 
   host.setWorkspaceScope?.('bots', ownerKey || BOTS_HOME_OWNER_KEY, target)
@@ -5250,7 +5458,13 @@ function aliasIdentityFor(bot) {
 // aliasRouteIndex above — which is connection-exact, never name-based.
 function botRosterMeta(bot, metaByName) {
   if (bot?.sourceScoped || bot?.remoteSource) {
-    const route = botConnectionRoute(bot)
+    // Passive meta lookup: branch on the typed status instead of catching
+    // botConnectionRoute's throw, so an owner_removed row (e.g. a stale
+    // persisted group roster after its connection was deleted) reads as "no
+    // route" without masking an unrelated failure under the same catch.
+    const resolved = resolveBotConnectionRoute(bot)
+    const route = resolved.status === 'resolved' ? resolved.route : null
+
     const direct = route ? metaByName?.[botRouteKey(route)] : null
 
     if (direct) {
@@ -6123,7 +6337,11 @@ function groupChatMemberBots(group, roster, metaByName) {
  *  here is what keeps the same room intact across machines. */
 function durableGroupChatMembers(bots) {
   return (bots || []).map(bot => {
-    const route = botConnectionRoute(bot)
+    // Persistence pass over the whole seated roster: an orphaned member
+    // (connection deleted) keeps its identity and simply persists with no
+    // route — the same degraded shape the hydrate annotate produces. The
+    // strict throw here would lose the entire room update over one row.
+    const route = resolveBotConnectionRoute(bot).route
     // Keep the friendly identity on the stored descriptor: after a
     // connection switch the live roster row may be gone, and renamed-tag
     // mentions must still resolve against the persisted member.
@@ -6138,6 +6356,9 @@ function durableGroupChatMembers(bots) {
       connectionKind: bot.connectionKind,
       connectionLabel: bot.connectionLabel,
       ...(route ? { route, targetProfile: route.targetProfile } : {}),
+      // A swept/annotated member keeps its degraded mark across the rebuild —
+      // otherwise the next room send would silently un-mark an orphaned row.
+      ...(bot.sourceMissing ? { sourceMissing: true, sourceReachable: false } : {}),
       remoteSource: true,
       sourceScoped: Boolean(route)
     }
@@ -6856,6 +7077,94 @@ async function ensureGroupChatSession(group, member) {
 
 const GROUP_TURN_TIMEOUT_MS = 180000
 const GROUP_TURN_POLL_MS = 2000
+
+// --- group-turn session-lease helpers (#93602) ------------------------------
+// A member turn is a session-scoped RPC SEQUENCE (resume → attach → submit →
+// poll) issued with the runtime id its first RPC minted. requestForBot routes
+// each RPC through a per-request socket lease (retained:false secondaries in
+// store/gateway), so between two RPCs the refcount can hit 0, the leased
+// socket closes, the gateway detaches the runtime session on WS disconnect,
+// and the orphan reaper frees it — the next RPC then fails 4001 "not in
+// memory" and the bot goes silent in the room.
+
+/** 4001-class "the runtime session was reaped" failure. Distinct from 4007
+ *  ("genuinely never existed"), which must keep flowing to session.create. */
+function isSessionGoneError(error) {
+  if (!error || error.code === 4007) {
+    return false
+  }
+
+  if (error.code === 4001) {
+    return true
+  }
+
+  // Duck-typed (not instanceof): gateway errors can cross realm boundaries.
+  const message = typeof error?.message === 'string' ? error.message : typeof error === 'string' ? error : ''
+
+  return message.includes('not in memory') || /session not found/i.test(message)
+}
+// --- end group-turn session-lease helpers ---
+
+/** Hold the member's pooled socket open for the WHOLE turn. Feature-detected:
+ *  hosts without retainProfile (or members on the active gateway, which never
+ *  closes mid-turn) get a no-op release. A failed acquire must not kill the
+ *  turn — the catch-retry on submit still covers the race. */
+async function retainGroupTurnRoute(member) {
+  const noop = () => undefined
+
+  let route = null
+
+  try {
+    route = botConnectionRoute(member)
+  } catch {
+    return noop
+  }
+
+  if (!route || typeof host.retainProfile !== 'function') {
+    return noop
+  }
+
+  try {
+    const release = await host.retainProfile(route)
+
+    return typeof release === 'function' ? release : noop
+  } catch {
+    return noop
+  }
+}
+
+/** prompt.submit with one belt-and-braces retry: when the runtime session was
+ *  reaped between minting and submitting (4001 class), re-resume via the
+ *  STORED id — the durable identity — to mint a fresh runtime id, and submit
+ *  exactly once more. Returns the runtime id the submit actually landed on so
+ *  the poll loop keeps a live fallback target. */
+async function submitGroupTurnPrompt(member, runtime, stored, text) {
+  try {
+    await requestForBot(member, 'prompt.submit', { session_id: runtime, text })
+
+    return runtime
+  } catch (error) {
+    if (!isSessionGoneError(error) || !stored) {
+      throw error
+    }
+
+    const res = await requestForBot(member, 'session.resume', {
+      session_id: stored,
+      profile: member.name,
+      omit_messages: true
+    })
+    const fresh = res?.session_id
+
+    if (!fresh) {
+      throw error
+    }
+
+    await requestForBot(member, 'prompt.submit', { session_id: fresh, text })
+
+    return fresh
+  }
+}
+
 // A member turn that is VISIBLY still working (session reports
 // inflight/running) keeps its slot alive up to this hard cap. The base
 // timeout alone silently dropped long real turns: a 7-minute research run
@@ -7010,6 +7319,20 @@ async function answerGroupClarify(entry, member, answers) {
  *  records a stranded marker so the finished reply can be harvested into
  *  the room at the member's next turn instead of being lost. */
 async function runGroupChatMemberTurn(group, member, prompt, thread, images) {
+  // #93602: hold the member's route socket for the whole turn. Without the
+  // lease, every RPC below rides its own request-scoped socket lease; the
+  // socket that minted `runtime` can close between RPCs, the gateway reaps
+  // the runtime session, and prompt.submit dies 4001 — the bot goes silent.
+  const releaseTurnLease = await retainGroupTurnRoute(member)
+
+  try {
+    return await runGroupChatMemberTurnLeased(group, member, prompt, thread, images)
+  } finally {
+    releaseTurnLease()
+  }
+}
+
+async function runGroupChatMemberTurnLeased(group, member, prompt, thread, images) {
   const { runtime, stored } = await ensureGroupChatSession(group, member)
 
   if (!runtime) {
@@ -7080,7 +7403,10 @@ async function runGroupChatMemberTurn(group, member, prompt, thread, images) {
     ? `${prompt}\n\nAttached files staged in your session workspace:\n${fileRefs.join('\n')}`
     : prompt
 
-  await requestForBot(member, 'prompt.submit', { session_id: runtime, text: turnText })
+  // #93602: one-shot recovery when the runtime session was reaped between
+  // minting and submitting. Tracks the runtime id the submit landed on so
+  // the poll fallback below targets a live session.
+  const liveRuntime = await submitGroupTurnPrompt(member, runtime, stored, turnText)
 
   const started = Date.now()
   let deadline = started + GROUP_TURN_TIMEOUT_MS
@@ -7092,7 +7418,7 @@ async function runGroupChatMemberTurn(group, member, prompt, thread, images) {
 
     try {
       state = await requestForBot(member, 'session.resume', {
-        session_id: stored || runtime,
+        session_id: stored || liveRuntime,
         profile: member.name
       })
     } catch {
@@ -8299,7 +8625,11 @@ function BotRow({ bot, onDelete, onEdit, onGroup, showHandle }) {
 // ── model picker (provider/model dropdowns via model.options) ───────────────
 
 function useModelOptions(bot = null) {
-  const route = botConnectionRoute(bot)
+  // Hook body runs during render: an orphaned row must paint the picker
+  // disabled/erroring, not throw into the pane's error boundary.
+  const resolved = bot ? resolveBotConnectionRoute(bot) : null
+  const route = resolved?.status === 'resolved' ? resolved.route : null
+  const orphaned = resolved?.status === 'owner_removed'
 
   return useQuery({
     queryKey: [ID, 'model-options', route ? botRouteKey(route) : 'active'],
@@ -8308,6 +8638,7 @@ function useModelOptions(bot = null) {
       explicit_only: false,
       refresh: true
     }),
+    enabled: !orphaned,
     staleTime: 120000,
     retry: false
   })
@@ -8511,7 +8842,9 @@ function AdvancedProfileConfig({ bot, state, setState }) {
   const [loaded, setLoaded] = useState(false)
   const [unsupported, setUnsupported] = useState(false)
   const [skillFilter, setSkillFilter] = useState('')
-  const botRoute = botConnectionRoute(bot)
+  // Component body = render path: degrade an orphaned row to the bot's own
+  // name scope instead of throwing into the dialog's error boundary.
+  const botRoute = resolveBotConnectionRoute(bot).route
   const backendProfile = botRoute?.targetProfile || botRoute?.profile || bot.name
   const backendScope = botBackendProfileScope(botRoute, bot.name)
 
@@ -14698,6 +15031,35 @@ export default {
             }
 
             $groupChats.set({ ...rooms, ...$groupChats.get() })
+
+            // #93492: annotate rows orphaned before this build (their
+            // connection was deleted while an older Desktop ran, so no
+            // 'removed' push ever swept them). Registry read is
+            // feature-detected; when unavailable only the unresolvable-route
+            // shape (lost connectionId) is annotated.
+            try {
+              const registry =
+                typeof window !== 'undefined'
+                  ? await Promise.resolve(window.hermesDesktop?.connections?.list?.()).catch(() => null)
+                  : null
+              const liveIds = Array.isArray(registry?.connections)
+                ? new Set(registry.connections.map(connection => String(connection?.id || '').trim()).filter(Boolean))
+                : null
+              const annotated = annotateOrphanedGroupChatMembers($groupChats.get(), liveIds)
+
+              if (annotated.changed) {
+                // Per-room updateGroupChat keeps the durable record's full
+                // shape (sessionOwners, holds) in storage; sync:false —
+                // the scheduleGroupChatServerSync below publishes once.
+                for (const [roomName, room] of Object.entries(annotated.rooms)) {
+                  if (room !== $groupChats.get()[roomName]) {
+                    updateGroupChat(roomName, () => room, { sync: false })
+                  }
+                }
+              }
+            } catch {
+              /* registry unavailable — the lost-connectionId shape is still safe to render */
+            }
           }
 
           // Receive before publish. A fresh Desktop with no local room cache
@@ -14722,6 +15084,28 @@ export default {
     const unbindProfileListener = bindProfileSync($focusedBotOwner)
     const unbindGatewayListener = host.state.gateway.listen(handleSessionsGatewayTransition)
 
+    // #93492 root fix: the registry pushes a lifecycle event when a
+    // connection is removed. The gateway store already disposes the dead
+    // sockets; the persisted group-chat rosters referencing that connection
+    // were never touched, which is what left panes throwing "Bot X has no
+    // connection owner" forever. Annotate (never silently delete) those
+    // member rows the moment the connection goes away. Feature-detected:
+    // older Electron mains don't emit it, and bare vm test harnesses have
+    // no window global.
+    let unbindConnectionsChanged = null
+    try {
+      if (typeof window !== 'undefined') {
+        unbindConnectionsChanged =
+          window.hermesDesktop?.connections?.onChanged?.(payload => {
+            if (payload?.reason === 'removed') {
+              sweepGroupChatMembersForRemovedConnection(payload.connectionId)
+            }
+          }) || null
+      }
+    } catch {
+      /* registry lifecycle push unavailable — hydrate-time annotate still covers it */
+    }
+
     if (typeof ctx.onDispose === 'function') {
       ctx.onDispose(() => {
         stopGroupChatServerSync()
@@ -14730,6 +15114,9 @@ export default {
         }
         if (typeof unbindGatewayListener === 'function') {
           unbindGatewayListener()
+        }
+        if (typeof unbindConnectionsChanged === 'function') {
+          unbindConnectionsChanged()
         }
       })
     }

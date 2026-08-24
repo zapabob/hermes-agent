@@ -165,20 +165,66 @@ describe('desktop filesystem facade', () => {
     })
   })
 
-  it('pins an inactive wallpaper read to its immutable source scope', async () => {
-    $connection.set({ connectionId: null, mode: 'local', profile: 'default' } as never)
+  it('pins remote filesystem requests to the active registry connection', async () => {
+    $connection.set({ connectionId: 'mr-small', mode: 'remote', profile: 'default' } as never)
+    setApiRequestConnection('mr-small')
 
-    await readDesktopFileDataUrl('/srv/wallpapers/mono.png', {
-      connectionId: 'studio-ssh',
-      profile: 'wallpaper-profile'
-    })
+    await readDesktopDir('/home/doug/default-profile-workspace')
+    await readDesktopFileText('/home/doug/default-profile-workspace/IDEA.md')
+    await readDesktopFileDataUrl('/home/doug/default-profile-workspace/IDEA.md')
+    await desktopGitRoot('/home/doug/default-profile-workspace')
+    await desktopDefaultCwd()
+    await desktopFileDiff('/home/doug/default-profile-workspace', 'IDEA.md')
 
-    expect(api).toHaveBeenCalledWith({
-      connectionId: 'studio-ssh',
-      path: '/api/fs/read-data-url?path=%2Fsrv%2Fwallpapers%2Fmono.png',
-      profile: 'wallpaper-profile'
-    })
-    expect(readFileDataUrl).not.toHaveBeenCalled()
+    expect(api).toHaveBeenCalledTimes(6)
+
+    for (const [request] of api.mock.calls) {
+      expect(request).toMatchObject({ connectionId: 'mr-small', profile: 'default' })
+    }
+  })
+
+  it('separates filesystem cache keys for registered connections sharing a profile', () => {
+    $connection.set({
+      baseUrl: 'https://gateway.example',
+      connectionId: 'mr-small',
+      mode: 'remote',
+      profile: 'default'
+    } as never)
+    const mrSmallKey = desktopFsCacheKey()
+
+    $connection.set({
+      baseUrl: 'https://gateway.example',
+      connectionId: 'other-default',
+      mode: 'remote',
+      profile: 'default'
+    } as never)
+
+    expect(desktopFsCacheKey()).not.toBe(mrSmallKey)
+  })
+
+  it('prefers registry connection identity over SSH host identity', () => {
+    $connection.set({
+      baseUrl: 'http://127.0.0.1:41001',
+      connectionId: 'connection-a',
+      mode: 'remote',
+      remoteHost: 'operator@remote-box',
+      remoteKind: 'ssh',
+      remoteIdentity: 'operator@remote-box',
+      profile: 'default'
+    } as never)
+    const first = desktopFsCacheKey()
+
+    $connection.set({
+      baseUrl: 'http://127.0.0.1:52002',
+      connectionId: 'connection-b',
+      mode: 'remote',
+      remoteHost: 'operator@remote-box',
+      remoteKind: 'ssh',
+      remoteIdentity: 'operator@remote-box',
+      profile: 'default'
+    } as never)
+
+    expect(desktopFsCacheKey()).not.toBe(first)
   })
 
   it('keys SSH filesystem caches by stable host identity instead of the forwarded port', () => {

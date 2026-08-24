@@ -509,6 +509,39 @@ def _coerce_job_text(value: Any, fallback: str = "") -> str:
     return str(value)
 
 
+# Fields whose presence in an update can turn a runnable job into an empty one.
+_PAYLOAD_FIELDS = frozenset({"prompt", "script", "skill", "skills", "no_agent"})
+
+EMPTY_PAYLOAD_ERROR = (
+    "Cron job has nothing to run: the prompt is blank and no script or "
+    "skill(s) are set. Provide a prompt, a script, or at least one skill."
+)
+
+NO_AGENT_WITHOUT_SCRIPT_ERROR = (
+    "no_agent=True requires a script — with no agent and no script "
+    "there is nothing for the job to run."
+)
+
+
+def job_payload_is_empty(job: Dict[str, Any]) -> bool:
+    """True when a job record has nothing runnable at all.
+
+    A blank/whitespace prompt with no script and no skills would hand the
+    agent an empty instruction on every fire (incident a5e29e688dc0).
+    ``no_agent`` needs no special case here — it already requires a script.
+    """
+    if _coerce_job_text(job.get("prompt")).strip():
+        return False
+    if _coerce_job_text(job.get("script")).strip():
+        return False
+    if _normalize_skill_list(job.get("skill"), job.get("skills")):
+        return False
+    # Only flag if at least one payload field is explicitly present in the record
+    if "prompt" in job or "script" in job or "skill" in job or "skills" in job:
+        return True
+    return False
+
+
 def _schedule_display_for_job(job: Dict[str, Any]) -> str:
     display = _coerce_job_text(job.get("schedule_display")).strip()
     if display:
@@ -1895,10 +1928,7 @@ def _validate_job_mode_invariants(
             "based on source changes. Use a plain no_agent script job instead."
         )
     if no_agent and not script:
-        raise ValueError(
-            "no_agent=True requires a script — with no agent and no script "
-            "there is nothing for the job to run."
-        )
+        raise ValueError(NO_AGENT_WITHOUT_SCRIPT_ERROR)
 
 
 def create_job(
@@ -2048,7 +2078,10 @@ def create_job(
     else:
         context_from = None
 
-    prompt_text = _coerce_job_text(prompt)
+    prompt_text = _coerce_job_text(prompt).strip()
+
+    if not prompt_text and not normalized_script and not normalized_skills:
+        raise ValueError(EMPTY_PAYLOAD_ERROR)
 
     # Reject cron jobs that schedule gateway-lifecycle commands. Prevents
     # agent-driven SIGTERM-respawn loops under launchd/systemd KeepAlive
@@ -2279,6 +2312,10 @@ def update_job(job_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]
                     bool(updated.get("no_agent")),
                     _upd_script or None,
                 )
+
+            if any(k in updates for k in _PAYLOAD_FIELDS):
+                if job_payload_is_empty(updated):
+                    raise ValueError(EMPTY_PAYLOAD_ERROR)
             schedule_changed = "schedule" in updates
             inference_fields_changed = bool(
                 {"provider", "model", "base_url", "no_agent"}.intersection(updates)
@@ -3763,13 +3800,39 @@ def _get_due_jobs_locked() -> List[Dict[str, Any]]:
                                     times,
                                 )
                                 continue
-                            logger.info(
-                                "Job '%s': one-shot dispatch limit reached (%d/%d) "
-                                "— removing stale due entry",
-                                job.get("name", job.get("id", "?")),
-                                completed,
-                                times,
-                            )
+                            if job.get("last_run_at") is not None:
+                                # A record with last_run_at completed a real
+                                # run and was later re-armed without a budget
+                                # reset (e.g. a schedule edit before the
+                                # #93524 fix, or a hand-edited store). This is
+                                # NOT the dead-tick recovery case this guard
+                                # was built for, and the wedged-oneshot
+                                # diagnostic below will (correctly) not fire
+                                # — so removing it silently at INFO would
+                                # vanish the user's rescheduled run without a
+                                # trace. Make it operator-visible.
+                                logger.warning(
+                                    "Job '%s': one-shot dispatch limit reached "
+                                    "(%d/%d) on a record that already completed "
+                                    "a run (last_run_at=%s) — removing it "
+                                    "WITHOUT firing. This record was re-armed "
+                                    "without a budget reset (pre-#93615 store "
+                                    "or hand edit); re-run it with "
+                                    "'hermes cron resume <job> --run-now' "
+                                    "(#93524).",
+                                    job.get("name", job.get("id", "?")),
+                                    completed,
+                                    times,
+                                    job.get("last_run_at"),
+                                )
+                            else:
+                                logger.info(
+                                    "Job '%s': one-shot dispatch limit reached (%d/%d) "
+                                    "— removing stale due entry",
+                                    job.get("name", job.get("id", "?")),
+                                    completed,
+                                    times,
+                                )
                             for rj in raw_jobs:
                                 if rj["id"] == job["id"]:
                                     raw_jobs.remove(rj)

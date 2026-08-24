@@ -1155,12 +1155,61 @@ def _extract_first_int(payload: Dict[str, Any], keys: tuple[str, ...]) -> Option
     return None
 
 
+def _extract_flat_context_length(payload: Dict[str, Any]) -> Optional[int]:
+    """Read a context WINDOW from the top level of a model-describe payload.
+
+    Same key vocabulary as :func:`_extract_context_length` (the module's single
+    source of truth for what counts as a context window), but WITHOUT the
+    nested-dict walk — for callers that hold a specific model object and must
+    not pick up a same-named key from an unrelated nested section.
+
+    Critically, ``max_tokens`` is NOT in ``_CONTEXT_LENGTH_KEYS``: it lives in
+    ``_MAX_COMPLETION_KEYS`` because on an OpenAI-compatible ``/v1/models``
+    passthrough it is the max *output* tokens, not the context window.
+    """
+    for key in _CONTEXT_LENGTH_KEYS:
+        coerced = _coerce_reasonable_int(payload.get(key))
+        if coerced is not None:
+            return coerced
+    return None
+
+
 def _extract_context_length(payload: Dict[str, Any]) -> Optional[int]:
     return _extract_first_int(payload, _CONTEXT_LENGTH_KEYS)
 
 
 def _extract_max_completion_tokens(payload: Dict[str, Any]) -> Optional[int]:
     return _extract_first_int(payload, _MAX_COMPLETION_KEYS)
+
+
+def _context_length_from_model_payload(payload: Dict[str, Any]) -> Optional[int]:
+    """Extract a context *window* from a ``/v1/models`` model object.
+
+    Prefers input-window keys (``max_model_len``, ``max_input_tokens``,
+    ``context_length``, …) via :func:`_extract_flat_context_length`. Falls back to
+    ``max_tokens`` only when no input-window field is present.
+
+    Anthropic (and Anthropic-compatible proxies such as local reverse
+    proxies) expose both ``max_input_tokens`` (context window, e.g. 1M) and
+    ``max_tokens`` (max *output* length, e.g. 128k). Using ``max_tokens`` as
+    the context window under-reports the real limit, persists a stale value
+    into ``context_length_cache.yaml``, and makes the compressor fire far too
+    early (e.g. at 75% of 128k instead of 75% of 1M).
+    """
+    if not isinstance(payload, dict):
+        return None
+    ctx = _extract_flat_context_length(payload)
+    if ctx is not None:
+        return ctx
+    # Last resort for OpenAI-compat servers that only report max_tokens as
+    # the window. Safe for Anthropic shapes because max_input_tokens is
+    # present and already handled above.
+    raw = payload.get("max_tokens")
+    if isinstance(raw, (int, float)):
+        ivalue = int(raw)
+        if ivalue > 0:
+            return ivalue
+    return None
 
 
 def _extract_pricing(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -2308,14 +2357,24 @@ def _query_local_context_length_uncached(model: str, base_url: str, api_key: str
                                     return int(ctx)
                             break
 
-            # LM Studio / vLLM / llama.cpp: try /v1/models/{model}
+            # LM Studio / vLLM / llama.cpp / Anthropic-compat proxies:
+            # try /v1/models/{model}
             resp = client.get(f"{server_url}/v1/models/{model}")
             if resp.status_code == 200:
                 data = resp.json()
-                # vLLM returns max_model_len
-                ctx = data.get("max_model_len") or data.get("context_length") or data.get("max_tokens")
-                if ctx and isinstance(ctx, (int, float)):
-                    return int(ctx)
+                if isinstance(data, dict):
+                    # Context-WINDOW keys only (canonical _CONTEXT_LENGTH_KEYS
+                    # vocabulary). `max_tokens` is the max *output* tokens on
+                    # OpenAI-compatible passthroughs (LiteLLM, Anthropic-compat
+                    # shims, cloud proxies) — e.g. 393216 for a 1M-context
+                    # model — so reading it ahead of real window keys collapses
+                    # the window to the output cap and poisons the context
+                    # cache. It is consulted only as an explicit last resort
+                    # inside _context_length_from_model_payload, for servers
+                    # that report nothing else.
+                    ctx = _context_length_from_model_payload(data)
+                    if ctx is not None:
+                        return ctx
 
             # Try /v1/models and find the model in the list.
             # Use _model_id_matches to handle "publisher/slug" vs bare "slug".
@@ -2328,6 +2387,8 @@ def _query_local_context_length_uncached(model: str, base_url: str, api_key: str
                 # so fall back to the sole model when nothing matches.
                 matched = None
                 for m in models_list:
+                    if not isinstance(m, dict):
+                        continue
                     if _model_id_matches(m.get("id", ""), model):
                         matched = m
                         break
@@ -2338,21 +2399,25 @@ def _query_local_context_length_uncached(model: str, base_url: str, api_key: str
                     # vLLM/OpenAI keys are also checked. Runtime n_ctx is
                     # preferred over n_ctx_train (the training maximum, which
                     # can be larger than what the server actually allocates).
-                    for source in (matched, matched.get("meta") or {}):
-                        if not isinstance(source, dict):
-                            continue
-                        for key in (
-                            "n_ctx",
-                            "context_length",
-                            "context_window",
-                            "max_model_len",
-                            "max_context_length",
-                            "max_tokens",
-                            "n_ctx_train",
-                        ):
-                            val = source.get(key)
-                            if isinstance(val, (int, float)) and val:
-                                return int(val)
+                    sources = [
+                        s
+                        for s in (matched, matched.get("meta") or {})
+                        if isinstance(s, dict)
+                    ]
+                    for source in sources:
+                        val = source.get("n_ctx")
+                        if isinstance(val, (int, float)) and val:
+                            return int(val)
+                    # Canonical context-WINDOW keys (via _CONTEXT_LENGTH_KEYS)
+                    # with max_tokens demoted to an explicit last resort —
+                    # sibling of the /v1/models/{id} path above; see that
+                    # comment for why max_tokens must never win over a real
+                    # window key (it is the max OUTPUT cap on
+                    # Anthropic/OpenAI-compatible passthroughs).
+                    for source in sources:
+                        ctx = _context_length_from_model_payload(source)
+                        if ctx is not None:
+                            return ctx
     except Exception as exc:
         if _is_connect_timeout(exc):
             _note_endpoint_blackholed(server_url)

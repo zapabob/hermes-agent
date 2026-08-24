@@ -715,64 +715,40 @@ def has_usable_secret(value: Any, *, min_length: int = 4) -> bool:
     return True
 
 
-def _openclaw_state_dir() -> Path:
-    """Return the active OpenClaw state directory (default: ~/.openclaw)."""
-    raw = os.getenv("OPENCLAW_STATE_DIR", "").strip()
-    if raw:
-        return Path(raw).expanduser()
-    return Path.home() / ".openclaw"
+# Known API-key prefixes per provider.  Only providers listed here get
+# prefix validation; everyone else is fail-open (unknown formats pass).
+# This exists so an obviously malformed key in .env (truncated paste, wrong
+# provider's key in the wrong var, etc.) doesn't silently shadow a valid
+# credential-pool entry and produce opaque 401s (#93593).
+KNOWN_PROVIDER_KEY_PREFIXES: Dict[str, tuple] = {
+    # All OpenRouter keys are issued as sk-or-... (currently sk-or-v1-).
+    "openrouter": ("sk-or-",),
+}
 
 
-def _parse_dotenv_keys(path: Path) -> dict[str, str]:
-    """Parse a .env file into a key/value dict (best-effort, no expansion)."""
-    if not path.is_file():
-        return {}
-    out: dict[str, str] = {}
-    try:
-        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            key = key.strip().lstrip("\ufeff")
-            value = value.strip().strip('"').strip("'")
-            if key:
-                out[key] = value
-    except OSError:
-        return {}
-    return out
+def _secret_matches_declared_prefix(provider_id: str, value: str) -> bool:
+    """Return False only when the provider declares key prefixes and none match.
+
+    Providers without a declared prefix always pass (fail-open): we never
+    hard-reject unknown key formats, only skip values that provably don't
+    belong to a provider whose key format we know.
+    """
+    prefixes = KNOWN_PROVIDER_KEY_PREFIXES.get(provider_id)
+    if not prefixes:
+        return True
+    return any(value.startswith(p) for p in prefixes)
 
 
-def _resolve_openclaw_opencode_api_key() -> tuple[str, str]:
-    """Read the shared OpenCode key from an OpenClaw install, if present."""
-    state_dir = _openclaw_state_dir()
-    auth_profiles_path = state_dir / "agents" / "main" / "agent" / "auth-profiles.json"
-    if auth_profiles_path.is_file():
-        try:
-            payload = json.loads(auth_profiles_path.read_text(encoding="utf-8"))
-            profile_entries = payload.get("profiles", payload)
-            if isinstance(profile_entries, dict):
-                for profile_name, profile_data in profile_entries.items():
-                    if not isinstance(profile_data, dict):
-                        continue
-                    provider = str(profile_data.get("provider", "")).lower()
-                    name_lower = str(profile_name).lower()
-                    if (
-                        provider not in {"opencode", "opencode-zen", "opencode-go"}
-                        and "opencode" not in name_lower
-                    ):
-                        continue
-                    api_key = profile_data.get("key") or profile_data.get("apiKey")
-                    if isinstance(api_key, str) and has_usable_secret(api_key.strip()):
-                        return api_key.strip(), f"openclaw:auth-profiles:{profile_name}"
-        except (OSError, json.JSONDecodeError):
-            pass
-
-    openclaw_env = _parse_dotenv_keys(state_dir / ".env")
-    env_key = openclaw_env.get("OPENCODE_API_KEY", "").strip()
-    if has_usable_secret(env_key):
-        return env_key, "openclaw:.env:OPENCODE_API_KEY"
-    return "", ""
+def _warn_malformed_secret(provider_id: str, source: str) -> None:
+    prefixes = KNOWN_PROVIDER_KEY_PREFIXES.get(provider_id, ())
+    logger.warning(
+        "Ignoring %s for provider %r: value does not match the expected key "
+        "prefix (%s). Falling back to the next credential source. Fix or "
+        "remove the malformed key to silence this warning.",
+        source,
+        provider_id,
+        " or ".join(prefixes),
+    )
 
 
 def _resolve_api_key_provider_secret(
@@ -814,8 +790,15 @@ def _resolve_api_key_provider_secret(
         # in the user's .env file isn't shadowed by a stale shell export
         # inherited from a parent process (Codex CLI, test runners, etc.).
         val = (get_env_value_prefer_dotenv(env_var) or "").strip()
-        if has_usable_secret(val):
-            return val, env_var
+        if not has_usable_secret(val):
+            continue
+        if not _secret_matches_declared_prefix(provider_id, val):
+            # A provably malformed key (declared prefix mismatch) must not
+            # shadow a valid credential-pool entry (#93593). Warn and keep
+            # looking instead of returning it.
+            _warn_malformed_secret(provider_id, env_var)
+            continue
+        return val, env_var
 
     # Fallback: try credential pool (e.g. zai key stored via auth.json)
     try:
@@ -823,14 +806,27 @@ def _resolve_api_key_provider_secret(
 
         pool = load_pool(provider_id)
         if pool and pool.has_credentials():
+            # Prefer the pool's own selection (peek), but iterate the rest of
+            # the entries too so one malformed entry doesn't block a valid one.
+            candidates = []
             entry = pool.peek()
-            if entry:
-                key = getattr(entry, "access_token", "") or getattr(
-                    entry, "runtime_api_key", ""
-                )
+            if entry is not None:
+                candidates.append(entry)
+            try:
+                for extra in pool.entries():
+                    if extra is not None and all(extra is not c for c in candidates):
+                        candidates.append(extra)
+            except Exception:
+                pass
+            for entry in candidates:
+                key = getattr(entry, "access_token", "") or getattr(entry, "runtime_api_key", "")
                 key = str(key).strip()
-                if has_usable_secret(key):
-                    return key, f"credential_pool:{provider_id}"
+                if not has_usable_secret(key):
+                    continue
+                if not _secret_matches_declared_prefix(provider_id, key):
+                    _warn_malformed_secret(provider_id, f"credential_pool:{provider_id}")
+                    continue
+                return key, f"credential_pool:{provider_id}"
     except Exception:
         pass
 

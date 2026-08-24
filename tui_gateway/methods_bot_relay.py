@@ -125,6 +125,8 @@ def _(rid, params: dict) -> dict:
                     local_delivery_command(resolved, tmp),
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=600,
                 )
                 if proc.returncode != 0:
@@ -147,9 +149,19 @@ def _(rid, params: dict) -> dict:
                             local_delivery_command(resolved, tmp),
                             capture_output=True,
                             text=True,
+                            encoding="utf-8",
+                            errors="replace",
                             timeout=600,
                         )
         finally:
+            # ``os.fdopen`` normally owns and closes ``fd``, but a write/open
+            # failure can leave the raw descriptor alive. On Windows an open
+            # descriptor prevents unlinking the tempfile, so close it
+            # defensively before removal; EBADF means the context already did.
+            try:
+                os.close(fd)
+            except OSError:
+                pass
             try:
                 os.unlink(tmp)
             except OSError:

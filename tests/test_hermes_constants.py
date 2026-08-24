@@ -33,8 +33,8 @@ from hermes_constants import (
 class TestGetDefaultHermesRoot:
     """Tests for get_default_hermes_root() — Docker/custom deployment awareness."""
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX default is ~/.hermes")
     def test_no_hermes_home_returns_native(self, tmp_path, monkeypatch):
-        """When HERMES_HOME is not set, returns ~/.hermes."""
         monkeypatch.delenv("HERMES_HOME", raising=False)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
@@ -560,8 +560,29 @@ class TestSecureParentDir:
         secure_parent_dir(Path("/foo"))
         assert called_with == []
 
+    def test_install_tree_skipped(self, monkeypatch):
+        """Parent dir equal to (or inside) the install tree must NOT be chmod'd.
 
+        Regression test for #93050: secure_parent_dir() chmod'd /opt/hermes to
+        0700 because it has 3 path parts and passed the ``< 3`` guard, locking
+        out UID 10000 (hermes user) from traversing the install dir.
+        """
+        install_root = Path(hermes_constants.__file__).resolve().parent
 
+        # Directly under the install root (e.g. /opt/hermes/auth.json)
+        target = install_root / "auth.json"
+        called_with = []
+        monkeypatch.setattr(os, "chmod", lambda p, m: called_with.append((str(p), m)))
+        secure_parent_dir(target)
+        assert called_with == [], "must not chmod the install root"
+
+        # Inside a subdirectory of the install root
+        sub = install_root / "subdir"
+        target2 = sub / "auth.json"
+        called_with2 = []
+        monkeypatch.setattr(os, "chmod", lambda p, m: called_with2.append((str(p), m)))
+        secure_parent_dir(target2)
+        assert called_with2 == [], "must not chmod dirs inside the install tree"
 
     @pytest.mark.require_symlinks
     def test_symlink_resolved(self, tmp_path, monkeypatch):
@@ -672,6 +693,7 @@ class TestGetHermesDir:
 
 
 
+    @pytest.mark.require_symlinks
     def test_dangling_legacy_symlink_returns_new(self, tmp_path, monkeypatch):
         """A dangling legacy symlink must NOT shadow populated new-layout data.
 
@@ -690,6 +712,7 @@ class TestGetHermesDir:
         result = get_hermes_dir("platforms/pairing", "pairing")
         assert result == new
 
+    @pytest.mark.require_symlinks
     def test_symlink_to_populated_dir_returns_legacy(self, tmp_path, monkeypatch):
         """A legacy symlink pointing at a populated directory is honoured."""
         self._set_home(tmp_path, monkeypatch)

@@ -1,4 +1,4 @@
-import { isGatewayReauthRequired, resolveGatewayWsUrl } from '@hermes/shared'
+import { isGatewayReauthRequired, JsonRpcGatewayError, resolveGatewayWsUrl } from '@hermes/shared'
 import { useEffect, useRef } from 'react'
 
 import { shouldApplyPostBootProgressError } from '@/components/boot-failure-reauth'
@@ -76,6 +76,13 @@ import { stashGatewaySurvivor, survivorIsStale, takeGatewaySurvivor } from './ga
 // toast. Chat stays readable/draftable the whole time either way.
 const RECONNECT_ESCALATE_AFTER_MS = 300_000
 
+// Bound for the sleep/wake liveness probe (see reconnectNow): long enough to
+// ride out a busy-but-healthy backend's scheduling jitter, short enough that a
+// half-open socket fails fast instead of hanging the wake path. Independent of
+// PROMPT_SUBMIT_REQUEST_TIMEOUT_MS (30 min) — that long timeout is correct for
+// an in-flight turn, but must never be what a dead connection burns.
+const GATEWAY_LIVENESS_PROBE_TIMEOUT_MS = 5_000
+
 // Bounded self-heal for a failed REMOTE boot (#82679): when the primary boot
 // fails on a transient remote fault (dropped SSH/HTTP registered connection,
 // mint timeout — main tags those `retryable` on the boot progress), the
@@ -89,6 +96,36 @@ const BOOT_RETRY_MAX_ATTEMPTS = 5
 // Base delay for boot retries. Deliberately slower than the socket reconnect
 // loop's 300ms: each attempt may rebuild an SSH master + remote dashboard.
 const BOOT_RETRY_BASE_DELAY_MS = 2_000
+
+// desktop.revalidateConnection() / getConnection() / resolveGatewayWsUrl() are
+// IPC round-trips into the main process with no timeout of their own (#93454).
+// A remote backend that looks alive to a fresh probe but leaves the
+// main-process reconnect path stuck (e.g. a wedged revalidation after a
+// liveness-probe trip) hangs these awaits forever. While any is pending,
+// `reconnecting` never clears, so scheduleReconnect()/attemptReconnect()
+// early-return permanently and the backoff loop is latched — the UI stays
+// "reconnecting" until the app is restarted even though the gateway is
+// reachable again. Bound all three so a stall rejects instead, letting the
+// existing catch/finally clear the guard and resume backoff. gateway.connect()
+// already has its own connect timeout.
+const RECONNECT_ATTEMPT_TIMEOUT_MS = 20_000
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms)
+
+    promise.then(
+      value => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      err => {
+        clearTimeout(timer)
+        reject(err)
+      }
+    )
+  })
+}
 
 /** Registry identity whose runtimes died with the primary connection. */
 export function primaryRuntimeConnectionId(connection: Pick<HermesConnection, 'connectionId' | 'mode'>): null | string {
@@ -228,13 +265,23 @@ export function useGatewayBoot({
         // whose 'exit' would clear the main process's cached descriptor — without
         // this the renderer re-dials the same dead endpoint forever and stays on
         // "Starting Hermes…". The probe is a no-op for a healthy or local backend.
-        await desktop.revalidateConnection?.().catch(() => undefined)
+        // Bounded like the two awaits below: a wedged revalidation (#93454) is
+        // the specific hang this loop must survive, not just a rejection.
+        await withTimeout(
+          desktop.revalidateConnection?.() ?? Promise.resolve(),
+          RECONNECT_ATTEMPT_TIMEOUT_MS,
+          'Timed out revalidating the gateway connection'
+        ).catch(() => undefined)
 
         // Primary sleep/wake reconnect must dial the WINDOW-owned primary backend
         // (same as boot/softSwitch). Passing $activeGatewayProfile would retarget
         // this primary socket at a secondary profile's backend after a live swap.
         // Secondaries reconnect via reconnectSecondaryGateways().
-        const conn = await desktop.getConnection()
+        const conn = await withTimeout(
+          desktop.getConnection(),
+          RECONNECT_ATTEMPT_TIMEOUT_MS,
+          'Timed out reconnecting to Hermes backend'
+        )
 
         if (cancelled) {
           return
@@ -255,7 +302,12 @@ export function useGatewayBoot({
         // explicit auth rejection asks for sign-in; transport failures stay in
         // this reconnect loop. For local/token gateways the URL carries a
         // long-lived token and the re-mint is a cheap no-op.
-        const wsUrl = await resolveGatewayWsUrl(desktop, conn)
+        const wsUrl = await withTimeout(
+          resolveGatewayWsUrl(desktop, conn),
+          RECONNECT_ATTEMPT_TIMEOUT_MS,
+          'Timed out re-minting the gateway WebSocket URL'
+        )
+
         await gateway.connect(wsUrl)
 
         if (cancelled) {
@@ -349,17 +401,37 @@ export function useGatewayBoot({
       reconnectSecondaryGateways({ forceOpenSockets: forceOpenSocket })
 
       // Browser WebSocket state can remain OPEN after sleep even though the OS
-      // discarded the underlying TCP connection. Strong recovery signals must
-      // retire that half-open socket before the normal reconnect path can run.
-      if (forceOpenSocket && gatewayOpen()) {
-        gateway.close()
-        // close() publishes `closed`, which schedules the regular backoff.
-        // This path reconnects immediately, so remove that redundant timer.
-        clearReconnectTimer()
-      }
+      // discarded the underlying TCP connection. Strong recovery signals used
+      // to blind-close here, but that churned perfectly healthy connections on
+      // every wake/online blip — the liveness probe below now decides, closing
+      // only a socket that is provably dead.
 
       if (!gatewayOpen()) {
         await attemptReconnect()
+        return
+      }
+
+      // The socket reports open, but sleep/wake (or a silent network drop)
+      // can leave a half-open TCP connection: no close event fires, so
+      // connectionState stays 'open' while every RPC hangs until its per-call
+      // timeout — prompt.submit's is 30 minutes, which reads as "enter does
+      // nothing until I restart the app". Probe liveness with a short-bounded
+      // ping; on failure force the socket down so the onState handler above
+      // schedules a reconnect (and resetTileRuntimeBindings re-resumes tiles),
+      // instead of letting the user's next submit hang against a dead socket.
+      try {
+        await gateway.request('ping', {}, GATEWAY_LIVENESS_PROBE_TIMEOUT_MS)
+      } catch (probeErr) {
+        // A version-skewed backend that predates the ping method answers
+        // -32601 (method not found) — a HEALTHY response, not a dead socket.
+        // Force-closing on it would spin the reconnect loop forever. Every
+        // other failure (timeout on a swallowed ping, transport error) means
+        // the socket is not actually alive and must be rebuilt.
+        if (probeErr instanceof JsonRpcGatewayError && probeErr.code === -32601) {
+          return
+        }
+
+        gateway.close()
       }
     }
 
@@ -431,12 +503,13 @@ export function useGatewayBoot({
         }
 
         publish(conn)
-        setPrimaryGateway(
-          gateway,
-          conn.profile ?? normalizeProfileKey($activeGatewayProfile.get()),
-          conn.connectionId ?? null
+        // Bounded for the same reason as attemptReconnect() (#93454): a wedged
+        // ticket mint would otherwise hang the gateway switch forever.
+        const wsUrl = await withTimeout(
+          resolveGatewayWsUrl(desktop, conn),
+          RECONNECT_ATTEMPT_TIMEOUT_MS,
+          'Timed out re-minting the gateway WebSocket URL'
         )
-        const wsUrl = await resolveGatewayWsUrl(desktop, conn)
         await gateway.connect(wsUrl)
 
         if (cancelled) {
@@ -735,8 +808,14 @@ export function useGatewayBoot({
         // ticket is single-use with a short TTL, so the ticket baked into
         // conn.wsUrl is stale; resolveGatewayWsUrl() re-mints it rather than
         // connecting with a dead ticket. Auth rejection asks for sign-in;
-        // connectivity failures remain retryable.
-        const wsUrl = await resolveGatewayWsUrl(desktop, conn)
+        // connectivity failures remain retryable. Bounded like the reconnect
+        // path (#93454) so a wedged mint fails into boot retry instead of
+        // hanging "Starting Hermes…" forever.
+        const wsUrl = await withTimeout(
+          resolveGatewayWsUrl(desktop, conn),
+          RECONNECT_ATTEMPT_TIMEOUT_MS,
+          'Timed out minting the gateway WebSocket URL'
+        )
         await gateway.connect(wsUrl)
 
         if (cancelled) {
