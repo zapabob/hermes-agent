@@ -52,7 +52,7 @@ class TestUnifiedDashboardRouting:
 
             monkeypatch.setattr(main_mod.subprocess, "Popen", fake_popen)
         else:
-        monkeypatch.setattr(main_mod.os, "execvpe", fake_exec)
+            monkeypatch.setattr(main_mod.os, "execvpe", fake_exec)
 
         with pytest.raises(SystemExit):
             main_mod.cmd_dashboard(_args())
@@ -122,5 +122,4 @@ class TestInteractiveDashboardAuthSetup:
         assert exc.value.code == 1
         output = capsys.readouterr().out
         assert "configured external dashboard.public_url" in output
-
 
