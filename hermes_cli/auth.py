@@ -715,6 +715,58 @@ def has_usable_secret(value: Any, *, min_length: int = 4) -> bool:
     return True
 
 
+def _openclaw_state_dir() -> Path:
+    configured = os.getenv("OPENCLAW_STATE_DIR", "").strip()
+    return Path(configured).expanduser() if configured else Path.home() / ".openclaw"
+
+
+def _parse_dotenv_keys(path: Path) -> dict[str, str]:
+    if not path.is_file():
+        return {}
+    values: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return values
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip().lstrip("\ufeff")
+        if key:
+            values[key] = value.strip().strip('"').strip("'")
+    return values
+
+
+def _resolve_openclaw_opencode_api_key() -> tuple[str, str]:
+    state_dir = _openclaw_state_dir()
+    auth_profiles_path = state_dir / "agents" / "main" / "agent" / "auth-profiles.json"
+    if auth_profiles_path.is_file():
+        try:
+            payload = json.loads(auth_profiles_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            payload = {}
+        if isinstance(payload, dict):
+            profile_entries = payload.get("profiles", payload)
+            if isinstance(profile_entries, dict):
+                for profile_name, profile_data in profile_entries.items():
+                    if not isinstance(profile_data, dict):
+                        continue
+                    provider = str(profile_data.get("provider", "")).lower()
+                    name_lower = str(profile_name).lower()
+                    if provider not in {"opencode", "opencode-zen", "opencode-go"} and "opencode" not in name_lower:
+                        continue
+                    api_key = profile_data.get("key") or profile_data.get("apiKey")
+                    if isinstance(api_key, str) and has_usable_secret(api_key.strip()):
+                        return api_key.strip(), f"openclaw:auth-profiles:{profile_name}"
+
+    env_key = _parse_dotenv_keys(state_dir / ".env").get("OPENCODE_API_KEY", "").strip()
+    if has_usable_secret(env_key):
+        return env_key, "openclaw:.env:OPENCODE_API_KEY"
+    return "", ""
+
+
 # Known API-key prefixes per provider.  Only providers listed here get
 # prefix validation; everyone else is fail-open (unknown formats pass).
 # This exists so an obviously malformed key in .env (truncated paste, wrong
