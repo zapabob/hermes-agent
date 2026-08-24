@@ -13,8 +13,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/yusufpapurcu/wmi"
+	"golang.org/x/sys/windows"
 )
 
 type win32Process struct {
@@ -24,22 +26,31 @@ type win32Process struct {
 }
 
 func getDesktopProcesses() ([]win32Process, error) {
-	type result struct {
-		procs []win32Process
-		err   error
+	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return nil, fmt.Errorf("create process snapshot: %w", err)
 	}
-	ch := make(chan result, 1)
-	go func() {
-		var procs []win32Process
-		err := wmi.Query("SELECT ProcessId, Name, CommandLine FROM Win32_Process WHERE Name = 'Hermes.exe'", &procs)
-		ch <- result{procs, err}
-	}()
-	select {
-	case r := <-ch:
-		return r.procs, r.err
-	case <-time.After(8 * time.Second):
-		return nil, fmt.Errorf("WMI Hermes.exe scan timed out after 8s")
+	defer windows.CloseHandle(snapshot)
+
+	entry := windows.ProcessEntry32{Size: uint32(unsafe.Sizeof(windows.ProcessEntry32{}))}
+	if err := windows.Process32First(snapshot, &entry); err != nil {
+		return nil, fmt.Errorf("read process snapshot: %w", err)
 	}
+
+	var procs []win32Process
+	for {
+		name := windows.UTF16ToString(entry.ExeFile[:])
+		if strings.EqualFold(name, "Hermes.exe") {
+			procs = append(procs, win32Process{ProcessID: entry.ProcessID, Name: name})
+		}
+		if err := windows.Process32Next(snapshot, &entry); err != nil {
+			if err == syscall.ERROR_NO_MORE_FILES {
+				break
+			}
+			return nil, fmt.Errorf("advance process snapshot: %w", err)
+		}
+	}
+	return procs, nil
 }
 
 // reservedOpsPorts are stack-owned listeners — never treat as Desktop's ephemeral hermes serve.

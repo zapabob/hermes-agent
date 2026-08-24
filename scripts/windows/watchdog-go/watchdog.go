@@ -2,12 +2,11 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
-	"os/exec"
-	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 type cycleResult struct {
@@ -270,9 +269,18 @@ func acquireLock(lockPath, repoRoot string, logger *Logger) (func(), bool) {
 }
 
 func processAlive(pid int) bool {
-	out, err := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/NH").Output()
+	if pid <= 0 {
+		return false
+	}
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
 	if err != nil {
 		return false
 	}
-	return strings.Contains(string(out), fmt.Sprintf("%d", pid))
+	defer windows.CloseHandle(handle)
+	var exitCode uint32
+	if err := windows.GetExitCodeProcess(handle, &exitCode); err != nil {
+		return false
+	}
+	const stillActiveExitCode = 259
+	return exitCode == stillActiveExitCode
 }

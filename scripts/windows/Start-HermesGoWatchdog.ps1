@@ -122,7 +122,7 @@ function Stop-PsDesktopBackendWatchdog {
         } catch {}
         Remove-Item -LiteralPath $psLock -Force -ErrorAction SilentlyContinue
     }
-    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+    Get-CimInstance Win32_Process -Property ProcessId, CommandLine -OperationTimeoutSec 8 -ErrorAction SilentlyContinue | Where-Object {
         $_.CommandLine -and $_.CommandLine -match 'Start-HermesDesktopBackendWatchdog\.ps1'
     } | ForEach-Object {
         Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
