@@ -41,6 +41,17 @@ class TestUnifiedDashboardRouting:
             execs.append((exe, argv, env))
             raise SystemExit(0)  # execvpe never returns
 
+        if sys.platform == "win32":
+            class FakeProcess:
+                def wait(self):
+                    return 0
+
+            def fake_popen(argv, env):
+                execs.append((argv[0], argv, env))
+                return FakeProcess()
+
+            monkeypatch.setattr(main_mod.subprocess, "Popen", fake_popen)
+        else:
         monkeypatch.setattr(main_mod.os, "execvpe", fake_exec)
 
         with pytest.raises(SystemExit):
@@ -77,6 +88,9 @@ class TestUnifiedDashboardRouting:
         )
         execs = []
         monkeypatch.setattr(main_mod.os, "execvpe", lambda *a, **k: execs.append(a))
+        monkeypatch.setattr(
+            main_mod.subprocess, "Popen", lambda *a, **k: execs.append(a)
+        )
         monkeypatch.setitem(sys.modules, "fastapi", None)
 
         with pytest.raises((SystemExit, AttributeError, ImportError, TypeError)):
@@ -108,7 +122,5 @@ class TestInteractiveDashboardAuthSetup:
         assert exc.value.code == 1
         output = capsys.readouterr().out
         assert "configured external dashboard.public_url" in output
-
-
 
 

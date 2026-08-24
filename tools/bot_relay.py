@@ -489,7 +489,7 @@ def waiter_command(root: Path | str, envelope: dict) -> str:
     notification local DMs use. Stdlib-only; runs under the sender gateway's
     interpreter.
     """
-    reply_path = str(relay_root(root) / REPLIES_DIR / f"{envelope['id']}.json")
+    reply_path = (relay_root(root) / REPLIES_DIR / f"{envelope['id']}.json").as_posix()
     label = (
         f"@{envelope.get('target_handle', '')} "
         f"on {envelope.get('target_connection', '')}"
@@ -520,7 +520,12 @@ def waiter_command(root: Path | str, envelope: dict) -> str:
         "still be delivered when the Desktop reconnects; do not resend blindly.')\n"
         "sys.exit(1)\n"
     )
-    return f"{shlex.quote(sys.executable or 'python3')} -c {shlex.quote(code)}"
+    executable = sys.executable or "python3"
+    if os.name == "nt":
+        from tools.environments.local import _bash_safe_path
+
+        executable = _bash_safe_path(executable)
+    return f"{shlex.quote(executable)} -c {shlex.quote(code)}"
 
 
 # ── delivery command (used by the deliver RPC on the TARGET gateway) ────────

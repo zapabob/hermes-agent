@@ -183,6 +183,7 @@ class TestRuntimeFtsRebuild:
             (222, f"{db_path}-wal (deleted)")
         ]
 
+    @pytest.mark.skipif(os.name == "nt", reason="requires Linux /proc semantics")
     def test_foreign_holder_detection_proc_readlink_deleted_wal(
         self, db, tmp_path, monkeypatch
     ):
@@ -227,6 +228,7 @@ class TestRuntimeFtsRebuild:
         holders = db._foreign_state_db_holders()
         assert holders == [(222, db_path_wal + " (deleted)")]
 
+    @pytest.mark.skipif(os.name == "nt", reason="requires Linux /proc semantics")
     def test_foreign_holder_uninspectable_process_cmdline_fallback(
         self, db, tmp_path, monkeypatch
     ):
