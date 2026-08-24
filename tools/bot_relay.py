@@ -549,12 +549,11 @@ def local_delivery_command(profile: str, query_file: str) -> list[str]:
 # Two deliveries into the SAME target profile must never run their Bot Chat
 # turns concurrently: deliveries spawn separate ``hermes`` subprocesses, so
 # an in-memory mutex is useless — the lock is a per-profile lockfile under
-# ``<root>/bot_relay/locks/`` held with ``fcntl.flock`` for exactly the turn
-# execution window. flock is released by the kernel when the holder's fd
-# closes (including process death), so a crashed turn can never wedge the
-# profile. A queued delivery waits up to ``bot_mode.turn_wait_seconds`` and
-# then fails with a structured 'target_busy' refusal instead of blocking
-# forever.
+# ``<root>/bot_relay/locks/`` held with a native file lock for exactly the
+# turn execution window. The OS releases the lock when the holder's fd closes
+# (including process death), so a crashed turn can never wedge the profile. A
+# queued delivery waits up to ``bot_mode.turn_wait_seconds`` and then fails
+# with a structured 'target_busy' refusal instead of blocking forever.
 
 
 class TurnBusyError(RuntimeError):
@@ -596,27 +595,53 @@ def turn_lock_path(root: Path | str, profile: str) -> Path:
     return relay_root(root) / LOCKS_DIR / f"{safe}.lock"
 
 
+def _try_turn_lock_fd(fd: int) -> bool:
+    if os.name == "nt":
+        import msvcrt
+
+        if os.fstat(fd).st_size == 0:
+            os.write(fd, b"\0")
+        os.lseek(fd, 0, os.SEEK_SET)
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            return False
+
+    import fcntl
+
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
+def _unlock_turn_lock_fd(fd: int) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(fd, fcntl.LOCK_UN)
+
+
 @contextlib.contextmanager
 def acquire_turn_lock(
     root: Path | str, profile: str, timeout_seconds: float | None = None
 ) -> Iterator[Path]:
     """Hold ``profile``'s cross-process turn lock for the ``with`` body.
 
-    Non-blocking flock probe + short-sleep retry loop up to the budget
+    Non-blocking native lock probe + short-sleep retry loop up to the budget
     (``bot_mode.turn_wait_seconds`` unless ``timeout_seconds`` is given).
     No ordering guarantee among waiters — whichever probe lands first after
     release wins — but every waiter is bounded by the budget, so no
     deadlock. Raises :class:`TurnBusyError` when the budget is exhausted.
-    On platforms without ``fcntl`` (Windows) the lock degrades to a no-op —
-    those installs never had this race path in production.
     """
-    try:
-        import fcntl
-    except ImportError:  # pragma: no cover — Windows
-        logger.debug("bot turn lock disabled: fcntl unavailable on this platform")
-        yield turn_lock_path(root, profile)
-        return
-
     budget = turn_wait_seconds() if timeout_seconds is None else max(0.0, float(timeout_seconds))
     path = turn_lock_path(root, profile)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -625,20 +650,18 @@ def acquire_turn_lock(
         start = time.monotonic()
         deadline = start + budget
         while True:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if _try_turn_lock_fd(fd):
                 break
-            except OSError:
-                now = time.monotonic()
-                if now >= deadline:
-                    raise TurnBusyError(profile, now - start)
-                time.sleep(min(0.1, max(0.005, deadline - now)))
+            now = time.monotonic()
+            if now >= deadline:
+                raise TurnBusyError(profile, now - start)
+            time.sleep(min(0.1, max(0.005, deadline - now)))
         try:
             yield path
         finally:
             try:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-            except OSError:  # pragma: no cover — kernel releases on close anyway
+                _unlock_turn_lock_fd(fd)
+            except OSError:  # pragma: no cover — the OS releases on close anyway
                 pass
     finally:
         os.close(fd)

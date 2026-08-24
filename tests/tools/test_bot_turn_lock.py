@@ -1,15 +1,14 @@
 """Tests: per-profile bot turn lock (#93091 — tools/bot_relay.py).
 
-Two deliveries into the same target profile must serialize on a
-cross-process flock; the queued one waits a bounded budget and then fails
-with a structured 'target_busy' refusal. Real flock on real (short)
-tmp_path lockfiles — flock contends between separate fds even within one
-process, so threads exercise the true kernel-lock semantics.
+Two deliveries into the same target profile must serialize on a cross-process
+native file lock; the queued one waits a bounded budget and then fails with a
+structured 'target_busy' refusal. Real locks on real (short) tmp_path lockfiles
+contend between separate fds even within one process, so threads exercise the
+true OS-lock semantics.
 """
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import re
@@ -34,10 +33,10 @@ def _hold_flock(path, hold_event, release_event):
     """Grab the profile lock on a separate fd, signal, hold until told."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
-    fcntl.flock(fd, fcntl.LOCK_EX)
+    assert bot_relay._try_turn_lock_fd(fd)
     hold_event.set()
     release_event.wait(timeout=10)
-    os.close(fd)  # close releases the flock — process-death semantics
+    os.close(fd)  # close releases the native lock — process-death semantics
 
 
 def test_second_delivery_waits_then_succeeds(root):
@@ -102,11 +101,11 @@ def test_different_profiles_do_not_contend(root):
 
 
 def test_lock_released_when_holder_fd_closes(root):
-    """flock dies with the holder's fd — a crashed turn can't wedge the profile."""
+    """The lock dies with the holder's fd — a crashed turn can't wedge the profile."""
     path = turn_lock_path(root, "ops")
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
-    fcntl.flock(fd, fcntl.LOCK_EX)
+    assert bot_relay._try_turn_lock_fd(fd)
     os.close(fd)  # simulate holder process death (kernel releases the lock)
     with acquire_turn_lock(root, "ops", timeout_seconds=0.5):
         pass  # acquires immediately — no TurnBusyError
