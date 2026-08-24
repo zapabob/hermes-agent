@@ -1472,9 +1472,50 @@ def _flush_one_shot_session_store(cli) -> None:
         logger.debug("one-shot end_session failed", exc_info=True)
 
 
+def _wait_for_oneshot_background_completions(cli) -> None:
+    """Bounded linger for notify_on_complete background processes (#90879).
+
+    A one-shot run (``-q`` / ``-Q``) that spawned bounded background work —
+    most importantly a Bot Mode handoff reply via ``message_agent`` /
+    ``bot_relay``, spawned as ``terminal(background=true,
+    notify_on_complete=true)`` — must not exit while that work is still
+    running: the children write to pipes owned by this process and are
+    destroyed shortly after it dies. Delegates the actual wait (and its
+    ``terminal.oneshot_completion_wait_seconds`` bound) to the process
+    registry. Cheap no-op when nothing is pending.
+    """
+    from tools.process_registry import process_registry
+
+    agent = getattr(cli, "agent", None)
+    task_id = getattr(agent, "session_id", None) or getattr(cli, "session_id", None)
+    # Wait on the whole registry, not just this task's processes: a one-shot
+    # CLI process hosts exactly one agent, so every tracked process in this
+    # interpreter was spawned by this run (task_id filtering would silently
+    # skip processes registered before the session id settled).
+    result = process_registry.wait_for_pending_completions(None)
+    if result.get("waited"):
+        logger.info(
+            "One-shot exit linger for session %s: completed=%s timed_out=%s",
+            task_id or "<unknown>",
+            result.get("completed"),
+            result.get("timed_out"),
+        )
+
+
 def _finalize_single_query(cli) -> None:
     """Close one-shot CLI resources before releasing the active session lease."""
     try:
+        # Linger (bounded) for background processes the turn spawned with
+        # notify_on_complete=true BEFORE any teardown. The one-shot parent
+        # owns those children's stdout pipes; exiting now kills the delivery
+        # a few seconds later. Bot Mode handoff replies dispatched from a
+        # short-lived `hermes -p <bot> chat -Q` recipient (message_agent /
+        # bot_relay spawns) are exactly this shape and were silently
+        # destroyed on parent exit (#90879).
+        try:
+            _wait_for_oneshot_background_completions(cli)
+        except Exception:
+            logger.debug("one-shot background completion wait failed", exc_info=True)
         # Durable flush FIRST: memory-provider shutdown inside _run_cleanup
         # can issue aux-LLM calls, and nothing after it may fail in a way
         # that loses the turn (#88583).
@@ -12858,6 +12899,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             self._handle_heartbeat_command(cmd_original)
         elif canonical == "refine":
             self._handle_refine_command(cmd_original)
+        elif canonical == "review":
+            self._handle_review_command(cmd_original)
         elif canonical == "loop":
             self._handle_loop_command(cmd_original)
         elif canonical == "moa":
@@ -16381,14 +16424,16 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
     def _approval_callback(self, command: str, description: str,
                            *, allow_permanent: bool = True,
+                           allow_session: bool = True,
                            smart_denied: bool = False) -> str:
         """
         Prompt for dangerous command approval through the prompt_toolkit UI.
 
         Called from the agent thread. Shows a selection UI similar to clarify
         with choices: once / session / always / deny. Smart DENY owner
-        overrides show only once / deny. When allow_permanent is False for
-        another reason (for example tirith), only 'always' is hidden.
+        overrides show only once / deny, as do gates that re-ask every time
+        (allow_session=False). When allow_permanent is False for another
+        reason (for example tirith), only 'always' is hidden.
         Long commands also get a 'view' option so the full command can be
         expanded before deciding.
 
@@ -16408,6 +16453,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 "choices": self._approval_choices(
                     command,
                     allow_permanent=allow_permanent,
+                    allow_session=allow_session,
                     smart_denied=smart_denied,
                 ),
                 "selected": 0,
@@ -16459,9 +16505,10 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             return "timeout"
 
     def _approval_choices(self, command: str, *, allow_permanent: bool = True,
+                          allow_session: bool = True,
                           smart_denied: bool = False) -> list[str]:
         """Return approval choices for a dangerous command prompt."""
-        if smart_denied:
+        if smart_denied or not allow_session:
             choices = ["once", "deny"]
         else:
             choices = ["once", "session", "always", "deny"] if allow_permanent else ["once", "session", "deny"]
@@ -22469,9 +22516,25 @@ def main(
                         cli.agent.suppress_status_output = True
                         # Suppress streaming display callbacks so stdout stays
                         # machine-readable (no styled "Hermes" box, no tool-gen
-                        # status lines).  The response is printed once below.
+                        # status lines, no reasoning box).  The response is
+                        # printed once below.
                         cli.agent.stream_delta_callback = None
                         cli.agent.tool_gen_callback = None
+                        cli.agent.reasoning_callback = None
+                        # Inline-diff and progress callbacks print directly to
+                        # stdout and are gated by NEITHER quiet_mode nor
+                        # tool_progress_mode: _on_tool_complete renders full
+                        # file diffs via render_edit_diff_with_delta, and
+                        # _on_tool_progress prints MoA reference blocks before
+                        # its mode check. Neutralize them too so -Q stdout
+                        # carries only the final response (#93220).
+                        cli.agent.tool_progress_callback = None
+                        cli.agent.tool_start_callback = None
+                        cli.agent.tool_complete_callback = None
+                        # Belt-and-braces for the executor's direct prints
+                        # (they check agent.tool_progress_mode, initialized
+                        # from display.tool_progress at construction).
+                        cli.agent.tool_progress_mode = "off"
                         try:
                             result = cli.agent.run_conversation(
                                 user_message=effective_query,

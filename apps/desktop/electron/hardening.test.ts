@@ -1088,7 +1088,7 @@ test('connection-config save and apply IPC handlers route payloads through coerc
     const handlerBody = source.slice(handlerStart, handlerStart + 400)
     assert.match(
       handlerBody,
-      /coerceDesktopConnectionConfig\(payload\)/,
+      /coerceDesktopConnectionConfig\(payload(?:, previousConfig)?\)/,
       `${channel} must coerce its payload (the propagation seam) before persisting`
     )
   }

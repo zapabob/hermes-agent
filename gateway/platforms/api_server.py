@@ -66,6 +66,23 @@ from typing import Any, Dict, List, Optional
 # (no prefix / multiplexing off → handle as the default profile).
 _PROFILE_REJECTED = object()
 
+
+def _prefix_names_served_profile(profile: str) -> bool:
+    """True when a /p/<profile>/ prefix names the profile this gateway serves.
+
+    Single-profile (non-multiplex) gateways historically ignored the prefix
+    and answered every /p/<x>/ request from their own profile's config —
+    which silently served the gateway owner's toolsets/capabilities under
+    another profile's URL (#91583 defect 2). Only a self-referential prefix
+    may fall through; anything else must be rejected. Fail closed.
+    """
+    try:
+        from hermes_cli.profiles import profile_matches_home
+
+        return profile_matches_home(profile)
+    except Exception:
+        return False
+
 # Profile selected by the /p/<profile>/ URL prefix for the current request.
 # Set by the profile-prefix middleware; read by handlers / _run_agent.
 _api_request_profile: ContextVar[Optional[str]] = ContextVar(
@@ -100,10 +117,17 @@ _BROWSER_CONTROL_PROTOCOL_VERSION = 1
 _BROWSER_CONTROL_WS_PROTOCOL = "hermes-browser-control-v1"
 _BROWSER_CONTROL_TICKET_PROTOCOL_PREFIX = "hermes-browser-control-ticket."
 
-def _approval_event_choices(*, smart_denied: bool, allow_permanent: bool) -> list[str]:
-    if smart_denied:
+
+def _approval_event_choices(
+    *, smart_denied: bool, allow_session: bool, allow_permanent: bool
+) -> list[str]:
+    if smart_denied or not allow_session:
         return ["once", "deny"]
-    return ["once", "session", "always", "deny"] if allow_permanent else ["once", "session", "deny"]
+    return (
+        ["once", "session", "always", "deny"]
+        if allow_permanent
+        else ["once", "session", "deny"]
+    )
 
 
 try:
@@ -2159,12 +2183,14 @@ class APIServerAdapter(BasePlatformAdapter):
         """Resolve + validate the /p/<profile>/ URL prefix on an API request.
 
         Returns:
-          - ``None`` when no profile prefix is present, or multiplexing is off
-            (the prefix is ignored; request handled as the default profile).
+          - ``None`` when no profile prefix is present, or when multiplexing
+            is off and the prefix names this gateway's own profile (the
+            request is handled as the serving profile).
           - the profile name (str) when present, multiplexing is on, and the
             profile is one this gateway serves.
           - ``_PROFILE_REJECTED`` when a prefix is present but the profile is
-            unknown/unconfigured (handler/middleware returns 404).
+            unknown/unconfigured, or names a profile this single-profile
+            gateway does not serve (handler/middleware returns 404).
         """
         profile = (request.match_info.get("profile") or "").strip()
         if not profile:
@@ -2172,9 +2198,19 @@ class APIServerAdapter(BasePlatformAdapter):
         runner = getattr(self, "gateway_runner", None)
         cfg = getattr(runner, "config", None)
         if not getattr(cfg, "multiplex_profiles", False):
-            # Prefix supplied but multiplexing is off — ignore it, behave as
-            # the single-profile gateway (don't 404 a would-be valid route).
-            return None
+            # Prefix supplied but multiplexing is off. Only a self-referential
+            # prefix (naming the profile this gateway already serves) may fall
+            # through to the bare route. Silently ignoring ANY prefix served
+            # the gateway owner's config/toolsets/capabilities under another
+            # profile's URL — cross-profile capability leakage (#91583
+            # defect 2) and silently misdelivered peer DMs (observed live:
+            # `hermes peer dm mini/researcher` answered by the mini's default
+            # agent) — so anything else fails closed as unknown.
+            return (
+                None
+                if _prefix_names_served_profile(profile)
+                else _PROFILE_REJECTED
+            )
         try:
             from hermes_cli.profiles import profiles_to_serve
 
@@ -4314,6 +4350,15 @@ class APIServerAdapter(BasePlatformAdapter):
         )
         source = request.query.get("source") or None
         include_children = _coerce_request_bool(request.query.get("include_children"), default=False)
+        # Exact-title lookup, used by `hermes peer dm` to resolve a peer's
+        # canonical "Bot Chat" session. ``include_hidden`` is honored ONLY
+        # alongside a title filter: Bot Mode hides canonical chats, so a
+        # title-scoped lookup must see them (issue #91583), but a blanket
+        # hidden listing stays off this client surface.
+        title_filter = (request.query.get("title") or "").strip() or None
+        include_hidden = bool(title_filter) and _coerce_request_bool(
+            request.query.get("include_hidden"), default=False
+        )
         sessions = await asyncio.to_thread(db.list_sessions_rich,
             source=source,
             limit=limit,
@@ -4323,7 +4368,39 @@ class APIServerAdapter(BasePlatformAdapter):
             # A pin means "always reachable", so a pinned conversation that has
             # aged past the recency window is back-filled rather than dropped.
             include_pinned=True,
+            # Push the title needle into SQL so a hidden/old canonical row is
+            # found even when it falls outside the recency window, then apply
+            # the exact-match contract below (search_query is substring-based).
+            search_query=title_filter,
+            include_hidden=include_hidden,
         )
+        if title_filter:
+            sessions = [s for s in sessions if (s.get("title") or "").strip() == title_filter]
+            if not sessions:
+                # Recoverable-archive resurrection (#92687): a canonical Bot
+                # Chat archived by the ws-orphan reaper / older agent cleanup
+                # is invisible to list_sessions_rich (include_archived=False),
+                # which would fail `hermes peer dm` resolution and mint
+                # transient sessions — same accident the tui_gateway lookups
+                # heal. Resurrect and re-list; deliberate archives stay put.
+                try:
+                    from tools.bot_mode_probe import BOT_CHAT_TITLE
+
+                    stale = db.get_session_by_title(title_filter) if title_filter == BOT_CHAT_TITLE else None
+                    if stale and stale.get("archived") and db.unarchive_recoverable_session(stale["id"]):
+                        sessions = await asyncio.to_thread(db.list_sessions_rich,
+                            source=source,
+                            limit=limit,
+                            offset=offset,
+                            include_children=include_children,
+                            order_by_last_active=True,
+                            include_pinned=True,
+                            search_query=title_filter,
+                            include_hidden=include_hidden,
+                        )
+                        sessions = [s for s in sessions if (s.get("title") or "").strip() == title_filter]
+                except Exception:
+                    pass  # resolution degrades to today's no-row behavior
         # Back-filled pins arrive PAST the limit, so counting them would report
         # another page that doesn't exist. Only the recency window decides.
         windowed = sum(1 for s in sessions if not s.get("pinned"))
@@ -8103,6 +8180,7 @@ class APIServerAdapter(BasePlatformAdapter):
                         "timestamp": time.time(),
                         "choices": _approval_event_choices(
                             smart_denied=bool(event.get("smart_denied")),
+                            allow_session=event.get("allow_session") is not False,
                             allow_permanent=event.get("allow_permanent") is not False,
                         ),
                     })

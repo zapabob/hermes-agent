@@ -15,6 +15,7 @@ import functools
 import hashlib
 import logging
 import os
+import posixpath
 import re
 import shlex
 import sys
@@ -976,7 +977,22 @@ DANGEROUS_PATTERNS = [
     # the `hermes gateway stop|restart` pattern above by driving launchd
     # directly against the service label (commonly `ai.hermes.gateway`).
     # Catch the operations that stop, restart, or unload it.
-    (r'\blaunchctl\s+(stop|kickstart|bootout|unload|kill|disable|remove)\b.*\b(hermes|ai\.hermes)\b', "stop/restart hermes launchd service (kills running agents)"),
+    #
+    # Order-independent (2026-08-02 incident): the previous version required
+    # "hermes"/"ai.hermes" to appear AFTER the launchctl verb in the same
+    # string (`.*` only scans forward). A shell for-loop that builds the
+    # label from a list defined earlier in the command — e.g. `for item in
+    # 'ai.hermes.gateway-apollo:...' ...; do label=${item%%:*}; launchctl
+    # bootout "$label"; done` — never has the literal text "hermes" appear
+    # after "bootout" (only the expanded variable does), so it slipped past
+    # undetected and restarted 4 gateways with zero approval. Two
+    # independent lookaheads instead of one sequential match: both
+    # substrings must appear SOMEWHERE in the command, in either order.
+    # This is intentionally broader (a launchctl-verb command anywhere near
+    # an unrelated "hermes" mention now also matches) — for an approval gate
+    # that's the correct direction to err: an extra approval prompt is
+    # cheap, a missed one took down the whole gateway fleet.
+    (r'(?=[\s\S]*\blaunchctl\s+(?:stop|kickstart|bootout|unload|kill|disable|remove)\b)(?=[\s\S]*\b(?:hermes|ai\.hermes)\b)', "stop/restart hermes launchd service (kills running agents)"),
     # File copy/move/edit into sensitive system paths (/etc/ and macOS
     # /private/etc/ mirror).
     (rf'\b(cp|mv|install)\b.*\s{_SYSTEM_CONFIG_PATH}', "copy/move file into system config path"),
@@ -2302,23 +2318,65 @@ def _command_detection_variants(command: str):
 
 def _is_verification_artifact_cleanup(command: str) -> bool:
     """Return whether *command* only removes one Hermes ad-hoc temp script."""
+    parser_modes = (True, False) if os.name == "nt" else (True,)
+    for posix in parser_modes:
+        try:
+            argv = shlex.split(command, posix=posix)
+        except ValueError:
+            continue
+        if len(argv) != 3 or argv[0] != "rm" or argv[1] != "-f":
+            continue
+
+        operand = argv[2].strip("\"'")
+        raw_temp_dir = tempfile.gettempdir()
+        path_api = (
+            posixpath
+            if operand.startswith("/") and str(raw_temp_dir).startswith("/")
+            else os.path
+        )
+        temp_dir = path_api.realpath(raw_temp_dir)
+        basename = path_api.basename(operand)
+        if operand != path_api.join(temp_dir, basename):
+            continue
+
+        target = path_api.realpath(operand)
+        if path_api.dirname(target) != temp_dir:
+            continue
+        if re.fullmatch(r"hermes-(?:verify|ad-hoc)-[A-Za-z0-9_.-]+", basename):
+            return True
+    return False
+
+
+_GATEWAY_LIFECYCLE_SPLICE_DESCRIPTION = (
+    "stop/restart hermes gateway via shell-spliced verb (kills running agents)"
+)
+
+
+def _is_shell_token_spliced_gateway_lifecycle(command: str) -> bool:
+    """Catch gateway-lifecycle verbs spelled with quote/backslash splicing.
+
+    ``_normalize_command_for_detection`` strips backslash escapes, so
+    ``kick\\start`` already reaches the launchctl pattern above. Quote
+    splicing does not: ``_deobfuscate_shell_word_for_detection`` is
+    deliberately scoped to command-position words (widening it would let
+    quoted prose like ``git commit -m "rm -rf /"`` match the destructive
+    patterns), and the spliced verb sits in an ARGUMENT position. So
+    ``launchctl kick"start" -k gui/501/ai.hermes.gateway`` auto-approved
+    while executing exactly as the gated ``kickstart`` form (#80269).
+
+    Delegate to ``cron.lifecycle_guard``, which tokenizes with shlex and is
+    anchored on a hermes-gateway identifier — reusing its prose
+    false-positive coverage instead of loosening the generic pattern
+    engine. This runs last, so an ordinary pattern match still wins and
+    keeps its more specific reason string. Unlike the guard's use inside
+    ``terminal_tool``, this layer only raises an approval prompt; the
+    non-bypassable block still lives in ``cron.lifecycle_guard``.
+    """
     try:
-        argv = shlex.split(command, posix=True)
-    except ValueError:
+        from cron.lifecycle_guard import contains_gateway_lifecycle_command
+    except Exception:
         return False
-    if len(argv) != 3 or argv[0] != "rm" or argv[1] != "-f":
-        return False
-
-    operand = argv[2]
-    temp_dir = os.path.realpath(tempfile.gettempdir())
-    basename = os.path.basename(operand)
-    if operand != os.path.join(temp_dir, basename):
-        return False
-
-    target = os.path.realpath(operand)
-    if os.path.dirname(target) != temp_dir:
-        return False
-    return re.fullmatch(r"hermes-(?:verify|ad-hoc)-[A-Za-z0-9_.-]+", basename) is not None
+    return contains_gateway_lifecycle_command(command)
 
 
 def detect_dangerous_command(command: str) -> tuple:
@@ -2341,6 +2399,12 @@ def detect_dangerous_command(command: str) -> tuple:
     normalized = _normalize_command_for_detection(command)
     for description, _ in _execution_flag_findings(normalized):
         return (True, description, description)
+    if _is_shell_token_spliced_gateway_lifecycle(command):
+        return (
+            True,
+            _GATEWAY_LIFECYCLE_SPLICE_DESCRIPTION,
+            _GATEWAY_LIFECYCLE_SPLICE_DESCRIPTION,
+        )
     return (False, None, None)
 
 
@@ -2968,20 +3032,27 @@ def prompt_dangerous_approval(command: str, description: str,
                               timeout_seconds: int | None = None,
                               allow_permanent: bool = True,
                               approval_callback=None,
-                              *, smart_denied: bool = False) -> str:
+                              *, allow_session: bool = True,
+                              smart_denied: bool = False) -> str:
     """Prompt the user to approve a dangerous command (CLI only).
 
     Args:
         allow_permanent: When False, hide the [a]lways option (used when
             tirith warnings are present, since broad permanent allowlisting
             is inappropriate for content-level security findings).
+        allow_session: When False, hide the [s]ession option too — the
+            caller grants one operation and re-asks next time (the
+            protected agent-instruction gate in ``tools/file_tools.py``).
+            Offering a scope the caller discards makes every subsequent
+            write re-prompt and reads as a broken gate (#81887).
         smart_denied: When True, this is an owner override of a Smart DENY.
             Offer only one-operation approval or denial.
         approval_callback: Optional callback registered by the CLI for
             prompt_toolkit integration. Signature:
             (command, description, *, allow_permanent=True,
-            smart_denied=False) -> str. Legacy callback signatures remain
-            supported when ``smart_denied`` is false.
+            allow_session=True, smart_denied=False) -> str. Legacy callback
+            signatures remain supported while both keywords hold their
+            defaults.
 
     Returns: 'once', 'session', 'always', 'deny', or 'timeout'.
         'timeout' means the prompt expired without a user response — the
@@ -3002,6 +3073,7 @@ def prompt_dangerous_approval(command: str, description: str,
             timeout_seconds,
             allow_permanent,
             approval_callback,
+            allow_session=allow_session,
             smart_denied=smart_denied,
         )
 
@@ -3010,7 +3082,8 @@ def _prompt_dangerous_approval_inner(command: str, description: str,
                                      timeout_seconds: int,
                                      allow_permanent: bool = True,
                                      approval_callback=None,
-                                     *, smart_denied: bool = False) -> str:
+                                     *, allow_session: bool = True,
+                                     smart_denied: bool = False) -> str:
     # Redact secrets before any user-visible rendering. The original
     # `command` is still what executes after approval; only the displayed
     # copy is scrubbed. Reuses the same redaction module used for memory
@@ -3019,9 +3092,15 @@ def _prompt_dangerous_approval_inner(command: str, description: str,
     display_command = redact_sensitive_text(command)
     display_description = redact_sensitive_text(description)
 
+    # Smart DENY and a session-less gate both reduce the menu to
+    # once/deny; the rendered strings are the same either way.
+    once_only = smart_denied or not allow_session
+
     if approval_callback is not None:
         try:
             callback_kwargs = {"allow_permanent": allow_permanent}
+            if not allow_session:
+                callback_kwargs["allow_session"] = False
             if smart_denied:
                 callback_kwargs["smart_denied"] = True
             return approval_callback(
@@ -3068,7 +3147,7 @@ def _prompt_dangerous_approval_inner(command: str, description: str,
             print(f"  {t('approval.dangerous_header', description=display_description)}")
             print(f"      {display_command}")
             print()
-            if smart_denied:
+            if once_only:
                 print(t("approval.choose_smart_deny"))
             elif allow_permanent:
                 print(t("approval.choose_long"))
@@ -3081,7 +3160,7 @@ def _prompt_dangerous_approval_inner(command: str, description: str,
 
             def get_input():
                 try:
-                    if smart_denied:
+                    if once_only:
                         prompt = t("approval.prompt_smart_deny")
                     else:
                         prompt = t("approval.prompt_long") if allow_permanent else t("approval.prompt_short")
@@ -3101,7 +3180,7 @@ def _prompt_dangerous_approval_inner(command: str, description: str,
                 return "timeout"
 
             choice = result["choice"]
-            if smart_denied:
+            if once_only:
                 choice_map = {
                     **{
                         value: "once"

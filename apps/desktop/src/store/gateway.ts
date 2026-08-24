@@ -273,6 +273,24 @@ export function activeGatewayConnectionId(): null | string {
   return g.secondaries.get(g.activeKey)?.connectionId ?? null
 }
 
+/**
+ * Registry connections currently served by a live (open-socket) secondary.
+ * Used by the reconnect path when the restarted primary's own registry
+ * identity is unknown: Bot runtimes owned by these connections are provably
+ * NOT the restarted backend and keep their bindings; everything else re-resumes.
+ */
+export function liveSecondaryConnectionIds(): Set<string> {
+  const live = new Set<string>()
+
+  for (const entry of g.secondaries.values()) {
+    if (entry.connectionId && isOpen(entry.gateway)) {
+      live.add(entry.connectionId)
+    }
+  }
+
+  return live
+}
+
 // Mirror a backend's connection state into the global composer state, but only
 // when that backend is the one the user is currently looking at. Lets the
 // composer reflect the active profile's socket without a background reconnect
@@ -449,7 +467,13 @@ async function reconnectSecondary(entry: Secondary): Promise<void> {
     // fail to load — a skipped reconcile there must not surface as an
     // unhandled rejection (the real graph always loads in production).
     void import('@/store/session-states')
-      .then(({ reconcileBusyStatesOnReconnect }) => reconcileBusyStatesOnReconnect(entry.scope))
+      .then(({ reconcileBusyStatesOnReconnect, resetTileRuntimeBindings }) => {
+        reconcileBusyStatesOnReconnect(entry.scope)
+        resetTileRuntimeBindings({
+          connectionId: entry.connectionId || 'local',
+          profile: entry.profile
+        })
+      })
       .catch(() => undefined)
   } catch (error) {
     // The registry no longer knows this connection (removed while we were
@@ -677,13 +701,15 @@ export async function requestGatewayForAgent<T>(
   connectionId: null | string,
   profile: string,
   method: string,
-  params: Record<string, unknown> = {}
+  params: Record<string, unknown> = {},
+  timeoutMs?: number,
+  signal?: AbortSignal
 ): Promise<T> {
   const key = normKey(profile)
   const scope = registryBackendScopeKey(connectionId, key)
 
   if (scope === key) {
-    return requestGatewayForProfile<T>(key, method, params)
+    return requestGatewayForProfile<T>(key, method, params, timeoutMs, signal)
   }
 
   if (!window.hermesDesktop?.getConnectionFor) {
@@ -709,7 +735,9 @@ export async function requestGatewayForAgent<T>(
       await openSecondary(entry)
     }
 
-    return await entry.gateway.request<T>(method, params)
+    return await (timeoutMs === undefined && signal === undefined
+      ? entry.gateway.request<T>(method, params)
+      : entry.gateway.request<T>(method, params, timeoutMs, signal))
   } finally {
     entry.activeRequests = Math.max(0, entry.activeRequests - 1)
 
@@ -913,11 +941,20 @@ export async function ensureActiveGatewayOpen(): Promise<HermesGateway | null> {
 // activation before reporting the gateway as unavailable.
 const ACTIVE_GATEWAY_OPEN_WAIT_MS = 8_000
 
-// Wake signal (sleep/network/visibility): nudge every live secondary back open.
-export function reconnectSecondaryGateways(): void {
+// Recovery signal: nudge every live secondary back open. Power-resume/network
+// signals can force sockets that still report open to retire before redialing.
+export function reconnectSecondaryGateways({ forceOpenSockets = false }: { forceOpenSockets?: boolean } = {}): void {
   for (const entry of g.secondaries.values()) {
-    if (!entry.wantOpen || isOpen(entry.gateway)) {
+    if (!entry.wantOpen) {
       continue
+    }
+
+    if (isOpen(entry.gateway)) {
+      if (!forceOpenSockets) {
+        continue
+      }
+
+      entry.gateway.close()
     }
 
     entry.reconnectAttempt = 0

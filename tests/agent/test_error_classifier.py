@@ -1,5 +1,7 @@
 """Tests for agent.error_classifier — structured API error classification."""
 
+from types import SimpleNamespace
+
 import pytest
 from agent.error_classifier import (
     ClassifiedError,
@@ -17,10 +19,11 @@ from agent.error_classifier import (
 
 class MockAPIError(Exception):
     """Simulates an OpenAI SDK APIStatusError."""
-    def __init__(self, message, status_code=None, body=None):
+    def __init__(self, message, status_code=None, body=None, headers=None):
         super().__init__(message)
         self.status_code = status_code
         self.body = body or {}
+        self.response = SimpleNamespace(headers=headers or {})
 
 
 class MockTransportError(Exception):
@@ -272,6 +275,85 @@ class TestClassifyApiError:
         result = classify_api_error(e)
         assert result.reason == FailoverReason.rate_limit
         assert result.should_fallback is True
+
+    def test_anthropic_429_usage_limit_without_reset_is_billing(self):
+        e = MockAPIError(
+            "usage limit reached",
+            status_code=429,
+            body={
+                "error": {
+                    "type": "usage_limit_reached",
+                    "message": "Your account has reached its usage limit.",
+                }
+            },
+        )
+
+        result = classify_api_error(e, provider="anthropic", model="claude-opus-5")
+
+        assert result.reason == FailoverReason.billing
+        assert result.retryable is False
+        assert result.should_fallback is True
+
+    def test_anthropic_429_usage_limit_with_reset_stays_rate_limit(self):
+        e = MockAPIError(
+            "usage limit reached; resets at 2026-08-24T10:00:00Z",
+            status_code=429,
+        )
+
+        result = classify_api_error(e, provider="anthropic", model="claude-opus-5")
+
+        assert result.reason == FailoverReason.rate_limit
+        assert result.retryable is True
+
+    @pytest.mark.parametrize(
+        ("reset_field", "reset_value"),
+        [
+            ("resets_in_seconds", 3600),
+            ("resets_at", "2026-08-24T10:00:00Z"),
+            ("reset_at", "2026-08-24T10:00:00Z"),
+            ("retry_after", 3600),
+        ],
+    )
+    def test_anthropic_429_usage_limit_with_structured_reset_stays_rate_limit(
+        self,
+        reset_field,
+        reset_value,
+    ):
+        e = MockAPIError(
+            "usage limit reached",
+            status_code=429,
+            body={
+                "error": {
+                    "type": "usage_limit_reached",
+                    "message": "Your account has reached its usage limit.",
+                    reset_field: reset_value,
+                }
+            },
+        )
+
+        result = classify_api_error(e, provider="anthropic", model="claude-opus-5")
+
+        assert result.reason == FailoverReason.rate_limit
+        assert result.retryable is True
+
+    @pytest.mark.parametrize("header", ["Retry-After", "x-ratelimit-reset"])
+    def test_anthropic_429_usage_limit_with_reset_header_stays_rate_limit(self, header):
+        e = MockAPIError(
+            "usage limit reached",
+            status_code=429,
+            body={
+                "error": {
+                    "type": "usage_limit_reached",
+                    "message": "Your account has reached its usage limit.",
+                }
+            },
+            headers={header: "3600"},
+        )
+
+        result = classify_api_error(e, provider="anthropic", model="claude-opus-5")
+
+        assert result.reason == FailoverReason.rate_limit
+        assert result.retryable is True
 
     def test_alibaba_rate_increased_too_quickly(self):
         """Alibaba/DashScope returns a unique throttling message.

@@ -125,7 +125,11 @@ def _interrupt_background_review(review_agent: Any) -> None:
         try:
             from agent.interrupt_compat import request_hard_interrupt
 
-            request_hard_interrupt(review_agent, "superseded by a new live turn")
+            request_hard_interrupt(
+                review_agent,
+                "superseded by a new live turn",
+                tool_reason="background review superseded",
+            )
         except Exception:
             logger.debug(
                 "Failed to cancel in-flight background review for a new turn",
@@ -200,6 +204,23 @@ def cancel_background_review_for_live_turn(agent: Any) -> None:
 # Historical hardcoded iteration budget for the review fork.
 _REVIEW_MAX_ITERATIONS = 16
 
+# Default aggregate INPUT-token budget for one review fork (#93057). The
+# fork's first request replays the full snapshot — a warm prompt-cache read
+# that is cheap and intended (cache parity), which is why both compression
+# gates are deferred until the first provider response arrives
+# (_review_fork_first_request_pending in agent/turn_context.py). After that,
+# detached in-memory compaction bounds each request to roughly the
+# compression threshold, but nothing capped the SUM across the review's tool
+# loop: one production review made 8 requests replaying 1,487,951 input
+# tokens total (four of them at 350k-384k). This budget caps the aggregate;
+# the review tool loop stops before the provider call that would cross it
+# (see ``_review_input_budget_exhausted`` in agent/conversation_loop.py).
+# 2x the historical 300k foreground trigger keeps legitimate reviews
+# comfortable while capping the pathological case. Override with
+# ``auxiliary.background_review.max_input_tokens``; 0 or a negative value
+# disables the cap (unbounded = pre-fix behavior).
+_REVIEW_MAX_INPUT_TOKENS_DEFAULT = 600_000
+
 
 def _background_review_task_config(
     task_cfg: Optional[Dict[str, Any]] = None,
@@ -220,6 +241,26 @@ def _background_review_task_config(
     aux = cfg.get("auxiliary", {}) if isinstance(cfg.get("auxiliary"), dict) else {}
     task = aux.get("background_review", {})
     return task if isinstance(task, dict) else {}
+
+
+def _review_input_token_budget(
+    task_cfg: Optional[Dict[str, Any]] = None,
+) -> Optional[int]:
+    """Aggregate input-token budget for one review fork (None = unlimited).
+
+    Reads ``auxiliary.background_review.max_input_tokens``; falls back to
+    :data:`_REVIEW_MAX_INPUT_TOKENS_DEFAULT`. ``0`` or a negative value
+    disables the cap explicitly.
+    """
+    task = _background_review_task_config(task_cfg)
+    raw = task.get("max_input_tokens", _REVIEW_MAX_INPUT_TOKENS_DEFAULT)
+    try:
+        budget = int(raw)
+    except (TypeError, ValueError):
+        budget = _REVIEW_MAX_INPUT_TOKENS_DEFAULT
+    if budget <= 0:
+        return None
+    return budget
 
 
 def load_background_review_settings() -> tuple[bool, Dict[str, Any]]:
@@ -1269,17 +1310,93 @@ def _run_review_in_thread(
             # conversation (the review fires every ~10 turns). Leave session
             # finalization to the real owner (CLI close / gateway reset / cron).
             review_agent._end_session_on_close = False
-            # Never let the review fork compress. It shares the parent's
-            # session_id, so if it won a compression race it would rotate the
-            # parent into a NEW child that the gateway never adopts (the fork
-            # is single-lifecycle and dies right after this run_conversation).
-            # The foreground turn would then start from the stale parent and
-            # compress it again, leaving the same parent with two sibling
-            # children (issue #38727). Review also needs full context to
-            # produce a good memory/skill summary — compressing would strip
-            # detail. Both compression triggers in conversation_loop.py gate on
-            # agent.compression_enabled, so this short-circuits both paths.
-            review_agent.compression_enabled = False
+            # DETACHED IN-MEMORY COMPACTION (issue #93057). The fork shares
+            # the parent's session_id (pinned above for prefix-cache parity),
+            # so the historical guard here was ``compression_enabled = False``:
+            # if the fork ran the ordinary compression path it could rotate /
+            # archive the parent's live session — the sibling-session race
+            # behind #38727. But disabling compaction was a proxy for
+            # detachment, and it removed the ONLY bound on the review's
+            # private snapshot: as the review performs tool calls, every
+            # follow-up provider request replayed the snapshot plus the
+            # growing review tool loop (350k-384k input tokens per request in
+            # production, 1.49M total across one 8-request review).
+            #
+            # The fix is detachment, not disablement:
+            #   • Persistence is already off above (_persist_disabled /
+            #     _session_db=None), so the commit site in compress_context
+            #     (``if agent._session_db:``) skips every durable write and
+            #     compaction can only ever rewrite the fork's private
+            #     in-memory transcript.
+            #   • The compressor's OWN session binding still needs severing:
+            #     AIAgent.__init__ bound it to the parent's SessionDB and
+            #     session_id before this function nulled the agent-level
+            #     binding, so durable cooldown/streak/ineffective-count
+            #     writes would otherwise land on the parent's row. Rebinding
+            #     with session_db=None / session_id="" makes every
+            #     compressor persist guard a no-op.
+            #   • Force in-place mode (never rotation) even if the parent's
+            #     config selected rotation, and re-enable compression ONLY
+            #     after the rebind succeeds (fail-closed — see below). While
+            #     enabled, both compression gates stay deferred until the
+            #     fork's first provider response so request #1 replays the
+            #     full snapshot as a warm cache read.
+            _review_compressor = getattr(review_agent, "context_compressor", None)
+            _bind_review_compressor = getattr(
+                _review_compressor, "bind_session_state", None
+            )
+            _review_compression_detached = False
+            if callable(_bind_review_compressor):
+                try:
+                    # Plugin/third-party context engines may not accept these
+                    # kwargs; they own their own persistence policy, so a
+                    # failed rebind leaves the pre-existing flags in place
+                    # and must never abort the review (same tolerance as the
+                    # init-time binding in agent_init.py).
+                    _bind_review_compressor(session_db=None, session_id="")
+                    _review_compression_detached = True
+                except Exception:
+                    # FAIL-CLOSED (adversarial review, #93057): if the rebind
+                    # could not sever the engine's session binding, the
+                    # compressor may still point at the parent's
+                    # SessionDB/session_id. Enabling compression in that
+                    # state would let durable cooldown/streak/ineffective-
+                    # count writes land on the parent's row and re-open the
+                    # #38727 sibling race. Keep the historical
+                    # compression_enabled=False behavior instead and warn;
+                    # the review still runs, bounded by the iteration cap
+                    # and the aggregate input budget below.
+                    logger.warning(
+                        "background-review compressor detachment failed; "
+                        "keeping compression DISABLED on this review fork "
+                        "(fail-closed, issue #93057 / #38727)",
+                        exc_info=True,
+                    )
+            # Force in-place mode (never rotation) even if the parent's
+            # config selected rotation. Re-enable compression ONLY after the
+            # compressor's session binding was successfully severed; an
+            # engine without a bind hook keeps the historical disabled
+            # behavior as well.
+            review_agent.compression_in_place = True
+            review_agent.compression_enabled = _review_compression_detached
+            if _review_compression_detached:
+                # Warm-cache parity: the fork's FIRST provider request
+                # replays the parent's full snapshot as a warm prompt-cache
+                # read, so compaction must not rewrite the snapshot before
+                # that first request goes out. Defer both compression gates
+                # until the first provider response arrives (see
+                # _review_fork_first_request_pending in agent/turn_context.py
+                # and the pre-API gate in agent/conversation_loop.py); from
+                # the second request on, the fork's transcript is its own and
+                # compaction bounds it.
+                review_agent._review_defer_compaction_before_first_response = True
+            # Aggregate input budget: compaction bounds any single request;
+            # this bounds the WHOLE review. Iterations are already capped by
+            # _REVIEW_MAX_ITERATIONS. Checked in agent/conversation_loop.py
+            # via _review_input_budget_exhausted (issue #93057).
+            review_agent._review_input_token_budget = _review_input_token_budget(
+                task_cfg
+            )
 
             # Register this fork on the PARENT's _active_children (the same
             # list interrupt() fans out to for subagent delegation) and

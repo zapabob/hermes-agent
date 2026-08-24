@@ -81,6 +81,8 @@ export const ja = defineLocale({
       backendStopped: 'バックエンドが停止しました',
       desktopBootFailed: 'デスクトップの起動に失敗しました',
       gatewayConnectionLost: 'ゲートウェイへの接続が切断されました',
+      gatewayConnectionLostDetail:
+        'Still retrying in the background. You can keep reading and drafting — open Gateway settings if this persists.',
       gatewaySignInRequired: 'ゲートウェイへのサインインが必要です',
       ipcBridgeUnavailable: 'デスクトップ IPC ブリッジが利用できません。'
     },
@@ -996,6 +998,7 @@ export const ja = defineLocale({
         approval: { label: '承認', hint: 'スマート自動承認' },
         mcp: { label: 'MCP', hint: 'MCP ツールルーティング' },
         title_generation: { label: 'タイトル生成', hint: 'セッションタイトル' },
+        review: { label: 'レビュー', hint: '/review レビューサブエージェント' },
         curator: { label: 'キュレーター', hint: 'スキル使用レビュー' }
       }
     },
@@ -1527,6 +1530,38 @@ export const ja = defineLocale({
     switchToConnection: name => `${name} に切り替え`,
     switchConnectionFailed: name => `${name} に接続できませんでした`,
     manageProfiles: 'プロファイルを管理…',
+    remoteOverride: {
+      menuItem: 'リモートホストに接続…',
+      badge: (host: string) => `${host} で実行中`,
+      title: (profile: string) => `${profile} をリモートホストに接続`,
+      description: 'このプロファイルのセッションは、このパソコンではなく指定したリモートの Hermes で実行されます。',
+      urlLabel: 'リモートアドレス',
+      urlPlaceholder: 'https://hermes.example.com',
+      urlInvalid: 'http:// または https:// で始まる完全なアドレスを入力してください',
+      tokenLabel: 'アクセストークン',
+      tokenPlaceholder: 'リモートのセッショントークンを貼り付け',
+      tokenSavedHint: 'トークンは保存済みです。空欄のままにすると保持されます。',
+      plainTextOptIn:
+        'このパソコンには安全な鍵ストレージがないため、トークンは暗号化されずにディスクへ保存されます。それでも保存する。',
+      collisionWarning: (label: string) =>
+        `「${label}」という名前のゲートウェイが設定に既に存在します。このプロファイル接続は別物であり、それを変更しません。`,
+      confirmTitle: 'このプロファイルをリモートホストに接続しますか？',
+      confirmNote: (profile: string, host: string) =>
+        `${profile} の新しいチャットは ${host} で実行されます。コマンドの実行やファイルの読み取りはこのパソコンではなくそのコンピュータで行われます。信頼できるホストにのみ接続してください。`,
+      confirmBack: '戻る',
+      connect: '接続',
+      connecting: '接続中…',
+      disconnect: 'リモート接続を解除',
+      savedTitle: 'プロファイルを接続しました',
+      savedMessage: (profile: string, host: string) => `${profile} は ${host} で実行されます`,
+      removedTitle: 'リモート接続を解除しました',
+      removedMessage: (profile: string) => `${profile} はこのパソコンで実行されます`,
+      removeFailed: 'リモート接続を解除できませんでした',
+      authFailedTitle: 'リモートホストが保存済みトークンを拒否しました',
+      authFailedMessage: (profile: string, host: string) =>
+        `${host} が ${profile} 用に保存されたトークンを拒否しました。リモート側で変更された可能性があります。`,
+      updateToken: '新しいトークンを入力…'
+    },
     actions: 'アクション',
 
     color: 'カラー…',
@@ -2524,6 +2559,7 @@ export const ja = defineLocale({
       gateway: 'ゲートウェイ',
       gatewayReady: '準備完了',
       gatewayNeedsSetup: '設定が必要',
+      gatewayUnavailable: '推論を利用できません',
       gatewayChecking: '確認中',
       gatewayConnecting: '接続中',
       gatewayOffline: 'オフライン',

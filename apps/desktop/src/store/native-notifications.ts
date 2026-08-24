@@ -7,6 +7,7 @@ import { gatewayForScope } from './gateway'
 import { withinNativeNotifyBaseline } from './notify-baseline'
 import { approvalRequestForSession, clearApprovalRequest } from './prompts'
 import { $activeSessionId } from './session'
+import { requestForOwnedSession } from './session-states'
 
 export type { HermesOpenTarget }
 
@@ -382,11 +383,22 @@ export async function respondToApprovalAction(
   }
 
   try {
-    await gateway.request('approval.respond', {
-      choice,
-      request_id: request.requestId,
-      session_id: sessionId ?? undefined
-    })
+    // Route through the session's OWNER (tile route → known profile); the
+    // ambient socket follows foreground focus and, for a background approval
+    // raised by a cross-profile session, points at a backend that never held
+    // the approval (#91684 client half). Ambient only when no owner is known.
+    await requestForOwnedSession(
+      sessionId,
+      // Bound (not wrapped) so the ambient fallback keeps the exact 2-arg
+      // call shape gateway.request callers assert on.
+      gateway.request.bind(gateway) as typeof gateway.request,
+      'approval.respond',
+      {
+        choice,
+        request_id: request.requestId,
+        session_id: sessionId ?? undefined
+      }
+    )
     clearApprovalRequest(sessionId, request.requestId)
   } catch {
     // Leave the prompt parked so the user can still resolve it in-app.

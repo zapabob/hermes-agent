@@ -138,6 +138,10 @@ export function watchPreviewTiles(): void {
 
 const watchPreviewTileMirror = paneMirror<{ id: string; target: PreviewTarget }>({
   source: $previewTabs,
+  // Unscoped on purpose. `$previewTabs` is one global Browser/file surface —
+  // clicking a link in a bot chat must open the same pane Sessions already
+  // shows. Scoping this to `sessions` filtered the pane out of Bot Mode, so
+  // `openPreview` ran and the click looked like a no-op.
   key: tab => tab.id,
   prefix: PREVIEW_TILE_PREFIX,
   // URL previews are independent browser panes that share a vertical split:

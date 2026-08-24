@@ -290,6 +290,17 @@ def _disable_nagle(ws: Any) -> None:
         sock = transport.get_extra_info("socket") if transport is not None else None
         if sock is not None:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            # Dead-peer detection: without keepalive a silently-dropped client
+            # (SSH tunnel reset, client sleep) leaves the TCP leg half-open
+            # forever, receive_text() blocks indefinitely, and the disconnect
+            # teardown (detach + orphan reap + resume replay) never runs.
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            if hasattr(socket, "TCP_KEEPIDLE"):  # Linux
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 30)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+            elif hasattr(socket, "TCP_KEEPALIVE"):  # macOS idle seconds
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPALIVE, 30)
     except Exception as exc:  # pragma: no cover - best-effort tuning
         _log.debug("ws TCP_NODELAY skip: %s", exc)
 
@@ -362,6 +373,15 @@ async def handle_ws(
             # Track this peer for session-less global broadcasts (skin.changed
             # from the background watcher) — write_json can't route those.
             server.register_live_transport(transport)
+        # Same once-per-process startup pass for session rows orphaned by a
+        # previous gateway process (#65194): the desktop app and web dashboard
+        # reach the agent through this WS sidecar, not entry.main(). Idempotent
+        # + config-gated inside, so a stdio TUI that already scheduled is a
+        # no-op.
+        try:
+            server._schedule_startup_orphan_sweep()
+        except Exception:
+            _log.warning("startup orphan sweep scheduling failed", exc_info=True)
         if not ready_ok:
             disconnect_reason = "ready_send_failed"
             send_failures += 1

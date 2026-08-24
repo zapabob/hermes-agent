@@ -271,6 +271,19 @@ def _get_sudo_password_callback():
     return getattr(_callback_tls, "sudo_password", None)
 
 
+def _current_session_key() -> str:
+    """Return the active gateway/WebUI session key, or "" outside sessions.
+
+    Single lookup point for the ``HERMES_SESSION_KEY`` ContextVar with the
+    os.environ fallback that ``get_session_env()`` applies for CLI, cron, and
+    test processes. Callers scope per-session caches by prefixing the value
+    with ``"session:"`` so two sessions never share a cache slot.
+    """
+    from gateway.session_context import get_session_env
+
+    return get_session_env("HERMES_SESSION_KEY", "")
+
+
 def _get_approval_callback():
     return getattr(_callback_tls, "approval", None)
 
@@ -296,12 +309,7 @@ def set_approval_callback(cb):
 
 def _get_sudo_password_cache_scope() -> str:
     """Return the cache scope for interactive sudo passwords."""
-    try:
-        from gateway.session_context import get_session_env
-
-        session_key = get_session_env("HERMES_SESSION_KEY", "")
-    except Exception:
-        session_key = os.getenv("HERMES_SESSION_KEY", "")
+    session_key = _current_session_key()
     if session_key:
         return f"session:{session_key}"
 
@@ -421,15 +429,39 @@ def _validate_workdir(workdir: str) -> str | None:
     return None
 
 
+def _in_delegated_child_context() -> bool:
+    """Return True while running inside a delegate_task child.
+
+    Subagents execute on worker threads of the parent process, so they
+    inherit process-wide interactivity signals (``HERMES_INTERACTIVE=1`` set
+    by the CLI at startup) that do NOT mean *this* execution context can
+    reach the user. A child that passes the interactive gate with no sudo
+    callback falls through to the raw ``/dev/tty`` prompt — printed mid-TUI
+    from a background thread, racing siblings for the tty, and blocking the
+    child for the full timeout. Children must always behave as headless for
+    sudo prompting. The ContextVar is set by ``delegated_child_context()``
+    around every child run and propagates through ``contextvars.copy_context``
+    onto the executor thread.
+    """
+    try:
+        from agent.delegation_context import is_delegated_child_context
+
+        return is_delegated_child_context()
+    except Exception:
+        return False
+
+
 def _handle_sudo_failure(output: str, env_type: str) -> str:
     """
-    Check for sudo failure and add helpful message for messaging contexts.
+    Check for sudo failure and add helpful message for headless contexts
+    (messaging gateway sessions and delegate_task subagents).
 
-    Returns enhanced output if sudo failed in messaging context, else original.
+    Returns enhanced output if sudo failed in such a context, else original.
     """
     is_gateway = env_var_enabled("HERMES_GATEWAY_SESSION")
+    is_delegated_child = _in_delegated_child_context()
 
-    if not is_gateway:
+    if not is_gateway and not is_delegated_child:
         return output
 
     # Check for sudo failure indicators
@@ -442,11 +474,13 @@ def _handle_sudo_failure(output: str, env_type: str) -> str:
     for failure in sudo_failures:
         if failure in output:
             from hermes_constants import display_hermes_home as _dhh
-
-            return (
-                output
-                + f"\n\n💡 Tip: To enable sudo over messaging, add SUDO_PASSWORD to {_dhh()}/.env on the agent machine."
-            )
+            if is_delegated_child:
+                return output + (
+                    "\n\n💡 Tip: Subagents cannot prompt for a sudo password. "
+                    f"Add SUDO_PASSWORD to {_dhh()}/.env on the agent machine, "
+                    "or run the command without sudo."
+                )
+            return output + f"\n\n💡 Tip: To enable sudo over messaging, add SUDO_PASSWORD to {_dhh()}/.env on the agent machine."
 
     return output
 
@@ -1061,15 +1095,18 @@ def _transform_sudo_command(command: str | None) -> tuple[str | None, str | None
     if not has_configured_password and not sudo_password and _sudo_nopasswd_works():
         return command, None
 
-    has_interactive_sudo_prompt = (
-        env_var_enabled("HERMES_INTERACTIVE")
-        or _get_sudo_password_callback() is not None
-    )
-    if (
-        not has_configured_password
-        and not sudo_password
-        and has_interactive_sudo_prompt
-    ):
+    has_sudo_prompt_callback = _get_sudo_password_callback() is not None
+    # delegate_task children inherit the parent's process-wide
+    # HERMES_INTERACTIVE=1 (and, on a recycled worker thread, potentially a
+    # stale thread-local callback), but there is no user on the other side of
+    # this execution context: prompting from a subagent thread fights the
+    # parent's TUI for /dev/tty and blocks the child for the full timeout.
+    # Children always behave as headless — configured SUDO_PASSWORD, the
+    # session cache, and the NOPASSWD probe above all still work.
+    should_prompt_for_sudo = (
+        env_var_enabled("HERMES_INTERACTIVE") or has_sudo_prompt_callback
+    ) and not _in_delegated_child_context()
+    if not has_configured_password and not sudo_password and should_prompt_for_sudo:
         sudo_password = _prompt_for_sudo_password(timeout_seconds=45)
         if sudo_password:
             _set_cached_sudo_password(sudo_password)
@@ -1414,6 +1451,21 @@ def _resolve_container_task_id(task_id: Optional[str]) -> str:
         return task_id
     if task_id and _docker_session_isolation_enabled():
         return _resolve_container_alias(task_id)
+    # Per-session isolation: when a session key is present (the WebUI streaming
+    # layer sets it per-session, the gateway per-message via contextvars), scope
+    # the container to it so switching profiles can't reuse a previous profile's
+    # SSHEnvironment and silently run commands on the wrong remote host. Subagents
+    # inherit the same session key, so they still collapse onto the parent's
+    # container (the #16177 shared-container intent). CLI mode has no session key
+    # and falls through to "default", behaviour unchanged. See commit e00f940a9.
+    #
+    # This runs *after* the isolation-override and docker/container_persistent
+    # branches above: those paths already key containers per task_id, so they
+    # stay authoritative where they apply and this only covers the cases that
+    # would otherwise collapse to the shared "default" key (notably SSH).
+    session_key = _current_session_key()
+    if session_key:
+        return f"session:{session_key}"
     return "default"
 
 
@@ -2956,13 +3008,23 @@ def terminal_tool(
         session_key = get_current_session_key(default="") or (task_id or "")
 
         # Hard-block: gateway lifecycle commands (systemctl/launchctl/hermes
-        # restart|stop targeting hermes-gateway) must never run inside the
+        # restart|stop|uninstall targeting hermes-gateway) must never run inside the
         # gateway process itself. The restart would SIGTERM the gateway, which
         # kills this very subprocess before it can complete — the service may
         # never restart. This mirrors the `hermes gateway restart` guard in
         # hermes_cli/gateway.py and the cron-path guard in hermes_cli/cron.py,
         # but applies unconditionally (force=True cannot help here).
-        if os.environ.get("_HERMES_GATEWAY") == "1":
+        # Gate on the SUPERVISED-gateway probe, not the raw _HERMES_GATEWAY
+        # marker: gateway.run sets it at import time, so it leaks into every
+        # process that merely imports gateway.run (hermes serve --isolated,
+        # CLI, web server) which are NOT the gateway and must be able to
+        # restart it. A plain foreground `hermes gateway run` (env set, PID
+        # owned, no supervisor) now also PASSES this guard: intentional and
+        # harmless, since without a supervisor there is no KeepAlive to turn a
+        # self-restart into a respawn loop.
+        from tools.process_registry import _is_supervised_gateway_process
+
+        if _is_supervised_gateway_process():
             from cron.lifecycle_guard import (
                 _MAX_REFERENCED_SCRIPT_BYTES,
                 contains_gateway_lifecycle_command_or_referenced_script,
@@ -3054,8 +3116,8 @@ def terminal_tool(
                     "output": "",
                     "exit_code": 1,
                     "error": (
-                        "Blocked: command or referenced script cannot restart or stop "
-                        "the gateway from inside the gateway process. The gateway would "
+                        "Blocked: command or referenced script cannot restart, stop, or "
+                        "uninstall the gateway from inside the gateway process. The gateway would "
                         "kill this command before it could complete (SIGTERM propagates "
                         "to child processes). Run `hermes gateway restart` from a "
                         "separate shell outside the running gateway."
@@ -3555,7 +3617,10 @@ def terminal_tool(
             )
             if sudo_cache_cleared:
                 has_sudo_prompt_callback = _get_sudo_password_callback() is not None
-                if has_sudo_prompt_callback or env_var_enabled("HERMES_INTERACTIVE"):
+                can_reprompt = (
+                    has_sudo_prompt_callback or env_var_enabled("HERMES_INTERACTIVE")
+                ) and not _in_delegated_child_context()
+                if can_reprompt:
                     output += (
                         "\n\n⚠️ Sudo authentication failed — cached password "
                         "cleared. You will be prompted again on the next sudo "

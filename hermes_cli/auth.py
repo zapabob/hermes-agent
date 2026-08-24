@@ -2101,6 +2101,23 @@ def is_provider_explicitly_configured(provider_id: str) -> bool:
             if has_usable_secret(os.getenv(env_var, "")):
                 return True
 
+    # AWS SDK providers (Bedrock) have auth_type="aws_sdk" and empty
+    # api_key_env_vars, so the loop above never sees them. A user who sets
+    # AWS_BEARER_TOKEN_BEDROCK (or an access-key pair) in .env has configured
+    # the provider exactly as explicitly as pasting ANTHROPIC_API_KEY —
+    # without this check the desktop picker's explicit_only filter hides
+    # Bedrock even though list_authenticated_providers builds its row.
+    # Only check explicit env credentials here (NOT boto3's full chain):
+    # ambient sources like EC2 IMDS / SSO profiles must not auto-surface.
+    if pconfig and pconfig.auth_type == "aws_sdk":
+        if has_usable_secret(os.getenv("AWS_BEARER_TOKEN_BEDROCK", "")):
+            return True
+        if (
+            has_usable_secret(os.getenv("AWS_ACCESS_KEY_ID", ""))
+            and has_usable_secret(os.getenv("AWS_SECRET_ACCESS_KEY", ""))
+        ):
+            return True
+
     # 4. Check persisted credential-pool entries that came from EXPLICIT flows
     # the user initiated inside Hermes (manual add / device-code / PKCE), plus
     # env-backed pool entries. This intentionally excludes ambient borrowed
@@ -2128,20 +2145,52 @@ def is_provider_explicitly_configured(provider_id: str) -> bool:
     except Exception:
         pass
 
-    # 5. Check fallback_providers in config.yaml — allows no-auth local
-    # providers (hypura, llama.cpp, etc.) to appear in the explicit-only
-    # desktop picker when the user has added them to their fallback chain.
+    # 5. Fallback providers are explicit model selections too. This keeps
+    # no-auth local providers (Hypura, llama.cpp, etc.) available in the
+    # desktop picker's explicit-only catalogue when the user configured them
+    # as part of the fallback chain.
     try:
-        from hermes_cli.config import load_config
+        from hermes_cli.config import load_config as _load_cfg
 
-        _cfg = load_config()
-        for _fp in (_cfg.get("fallback_providers") or []):
-            if isinstance(_fp, dict):
-                _slug = str(_fp.get("provider") or "").strip().lower()
-                if _slug == normalized:
-                    return True
+        for fallback in _load_cfg().get("fallback_providers") or []:
+            if not isinstance(fallback, dict):
+                continue
+            fallback_provider = str(fallback.get("provider") or "").strip().lower()
+            if fallback_provider == normalized:
+                return True
     except Exception:
         pass
+
+    # 6. OAuth-token / cloud-SDK providers (Vertex AI, Bedrock) have NO API-key
+    # env var to detect in step 3 and mint short-lived tokens from ADC / a
+    # service account / the AWS SDK chain. The user "explicitly configures"
+    # them by writing non-secret routing settings into config.yaml
+    # (``vertex.project_id`` / a credentials path, ``bedrock.region``) rather
+    # than by pasting a key — so without this branch such a provider is only
+    # ever "explicitly configured" while it is the *current* provider, and it
+    # silently vanishes from explicit-only pickers (desktop chat model menu)
+    # otherwise. Treat the presence of that deliberate config as explicit.
+    #
+    # NOTE: this uses has_explicit_vertex_config(), NOT has_vertex_credentials()
+    # — the latter also counts an ambient GOOGLE_APPLICATION_CREDENTIALS path
+    # (commonly set globally for unrelated GCP work), which would mark Vertex
+    # explicit for users who never set Hermes up for it. Only Hermes-scoped
+    # signals (VERTEX_PROJECT_ID / vertex.project_id / VERTEX_CREDENTIALS_PATH)
+    # count here.
+    try:
+        if normalized in ("vertex", "google-vertex", "vertex-ai", "gcp-vertex", "vertexai"):
+            from agent.vertex_adapter import has_explicit_vertex_config
+
+            if has_explicit_vertex_config():
+                return True
+        elif normalized == "bedrock":
+            bedrock_cfg = _load_cfg().get("bedrock")
+            if isinstance(bedrock_cfg, dict) and str(
+                bedrock_cfg.get("region") or ""
+            ).strip():
+                return True
+    except Exception as exc:
+        logger.debug("Failed checking keyless provider explicit config for %s: %s", provider_id, exc)
 
     return False
 

@@ -2689,6 +2689,42 @@ class TestHandleMaxIterations:
             outcome="success",
         )
 
+    def test_suppress_status_output_keeps_iteration_warning_off_stdout(self, agent, capsys):
+        """Machine-readable mode (-Q/oneshot) must not contaminate stdout (#26155)."""
+        resp = _mock_response(content="Summary")
+        agent.client.chat.completions.create.return_value = resp
+        agent._cached_system_prompt = "You are helpful."
+        agent.suppress_status_output = True
+
+        result = agent._handle_max_iterations(
+            [{"role": "user", "content": "do stuff"}],
+            1,
+        )
+
+        captured = capsys.readouterr()
+        assert result == "Summary"
+        assert "Reached maximum iterations" not in captured.out
+
+    def test_plain_quiet_mode_still_prints_iteration_warning(self, agent, capsys):
+        """Interactive CLI runs quiet_mode=True by default — the warning must
+        still show there; only suppress_status_output gates it (#26155)."""
+        resp = _mock_response(content="Summary")
+        agent.client.chat.completions.create.return_value = resp
+        agent._cached_system_prompt = "You are helpful."
+        agent.quiet_mode = True
+        agent.suppress_status_output = False
+        printed = []
+        agent._print_fn = lambda *a, **k: printed.append(" ".join(str(x) for x in a))
+
+        result = agent._handle_max_iterations(
+            [{"role": "user", "content": "do stuff"}],
+            1,
+        )
+
+        assert result == "Summary"
+        combined = "\n".join(printed) + capsys.readouterr().out
+        assert "Reached maximum iterations" in combined
+
     def test_api_failure_returns_error(self, agent):
         agent.client.chat.completions.create.side_effect = Exception("API down")
         agent._cached_system_prompt = "You are helpful."
@@ -2847,6 +2883,51 @@ class TestHandleMaxIterations:
         assert [m.get("tool_call_id") for m in sanitized if m.get("role") == "tool"] == [
             "call_123"
         ]
+
+    def test_api_sanitizer_matches_responses_id_when_result_keyed_on_id(self, agent):
+        """Inverse of the call_id case: a tool_call carries BOTH ``id`` (fc_...)
+        and a distinct ``call_id``, but the matching result is keyed on ``id``.
+        The sanitizer preferred ``call_id`` only, so it treated the valid
+        result as orphaned, dropped it, and injected a bogus
+        '[Result unavailable ...]' stub — silently eating a real tool result
+        (e.g. mnemosyne_recall / cronjob list). The result must survive intact.
+        (#55626)"""
+        messages = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "fc_456",
+                        "call_id": "call_456",
+                        "type": "function",
+                        "function": {"name": "mnemosyne_recall", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "fc_456", "content": '{"results": [1, 2]}'},
+        ]
+
+        sanitized = agent._sanitize_api_messages(messages)
+
+        tool_msgs = [m for m in sanitized if m.get("role") == "tool"]
+        assert len(tool_msgs) == 1
+        assert tool_msgs[0]["tool_call_id"] == "fc_456"
+        assert tool_msgs[0]["content"] == '{"results": [1, 2]}'
+        assert "Result unavailable" not in tool_msgs[0]["content"]
+
+    def test_api_sanitizer_still_drops_genuinely_orphaned_result(self, agent):
+        """The id-variant matching must not weaken orphan removal: a tool result
+        whose tool_call_id matches NO assistant tool_call (neither call_id nor
+        id) is still dropped. (#55626 regression guard)"""
+        messages = [
+            {"role": "user", "content": "hi"},
+            {"role": "tool", "tool_call_id": "call_nomatch", "content": "orphan"},
+        ]
+
+        sanitized = agent._sanitize_api_messages(messages)
+
+        assert all(m.get("role") != "tool" for m in sanitized)
 
     def test_api_sanitizer_repairs_tool_call_with_empty_function_name(self, agent):
         """A tool_call with id but empty function.name makes the Responses-API

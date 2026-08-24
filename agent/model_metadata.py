@@ -158,6 +158,14 @@ _ENDPOINT_MODEL_CACHE_TTL = 300
 # of being pinned to the stale type for the whole process lifetime.
 # Values are (server_type, monotonic_timestamp).
 _ENDPOINT_PROBE_TTL_SECONDS = 3600.0
+# A failed probe verdict (server_type is None — no known endpoint answered)
+# is cached for a much shorter window: the in-memory entry exists only to
+# keep one image-bearing turn from re-running the 5-request waterfall on
+# every subsequent turn (#89863 — a keyed remote endpoint answered 401 to
+# each leg and the None verdict was never cached, so every turn re-probed).
+# Short TTL keeps a transient failure (server starting up, key being fixed)
+# recoverable within minutes instead of pinning "undetected" for an hour.
+_ENDPOINT_PROBE_FAILURE_TTL_SECONDS = 300.0
 _endpoint_probe_path_cache: Dict[str, tuple] = {}
 
 # A configured endpoint that is routable-but-dead — e.g. a corp LAN address
@@ -1012,8 +1020,18 @@ def detect_local_server_type(base_url: str, api_key: str = "") -> Optional[str]:
     lmstudio_url = _lmstudio_server_root(normalized)
 
     cached = _endpoint_probe_path_cache.get(server_url)
-    if cached is not None and (time.monotonic() - cached[1]) < _ENDPOINT_PROBE_TTL_SECONDS:
-        return cached[0]
+    if cached is not None:
+        # Positive verdicts live for the full TTL; a None verdict (probe
+        # waterfall answered nothing recognizable) gets the short failure
+        # TTL so it still throttles re-probing without pinning the
+        # endpoint as undetected for a whole hour (#89863).
+        ttl = (
+            _ENDPOINT_PROBE_TTL_SECONDS
+            if cached[0] is not None
+            else _ENDPOINT_PROBE_FAILURE_TTL_SECONDS
+        )
+        if (time.monotonic() - cached[1]) < ttl:
+            return cached[0]
 
     # The host already blackholed a connect: skip the waterfall below, each leg
     # of which would otherwise burn its full 2s timeout. Deliberately NOT
@@ -1092,6 +1110,12 @@ def detect_local_server_type(base_url: str, api_key: str = "") -> Optional[str]:
     if result is not None:
         _endpoint_probe_path_cache[server_url] = (result, time.monotonic())
         _local_probe_disk_put("server_type", server_url, result)
+    else:
+        # Cache the negative verdict in memory only (never on disk — a
+        # failure is often transient: server starting, key being fixed)
+        # so the very next turn does not re-run the whole waterfall
+        # against an endpoint that just answered nothing (#89863).
+        _endpoint_probe_path_cache[server_url] = (None, time.monotonic())
     return result
 
 
@@ -2421,9 +2445,18 @@ _CODEX_OAUTH_CONTEXT_FALLBACK: Dict[str, int] = {
 # ≥11K margin under the observed ceiling and matches the compaction point
 # Codex's own client config documents for the 1M window.
 #
-# Applied ONLY when the resolved value (live probe or fallback table) is
-# exactly the known-stale 272,000 advertisement — if OpenAI moves the
-# advertised number in either direction (the gpt-5.6 family shifted
+# OPT-IN ONLY (Aug 2026 policy, Teknium): the large window is exposed via
+# explicit ``-900k`` picker variants (e.g. ``gpt-5.6-sol-900k``) — the base
+# slugs keep the advertised 272K so the cheaper limit is the default. A
+# week of the 900K default burned through subscription usage for people
+# who never asked for it. The variant suffix is a Hermes-side alias: it is
+# stripped before the model id hits the wire (see
+# ``strip_codex_context_variant_suffix`` callers in agent/transports/codex.py
+# and agent/auxiliary_client.py).
+#
+# The bump is applied ONLY when the resolved value (live probe or fallback
+# table) is exactly the known-stale 272,000 advertisement — if OpenAI moves
+# the advertised number in either direction (the gpt-5.6 family shifted
 # 272K → 372K → 272K during July 2026), the catalog is trusted again and
 # this table is inert. ``gpt-5.6`` is a FAMILY PREFIX (sol/terra/luna and
 # dated snapshots; ``-pro`` slugs are not routable on Codex OAuth — the
@@ -2441,21 +2474,118 @@ _CODEX_OAUTH_VERIFIED_ABOVE_ADVERTISED_EXACT: Dict[str, int] = {
 # The advertised value the verified-above table is allowed to override.
 _CODEX_OAUTH_STALE_ADVERTISED_CTX = 272_000
 
+# Hermes-side picker suffix that opts a Codex slug into the live-verified
+# large window. Never sent on the wire.
+CODEX_CONTEXT_VARIANT_SUFFIX = "-900k"
+
+# The ONLY base slugs eligible for a ``-900k`` variant: routable,
+# live-verified models. gpt-5.6 family-prefix matching is deliberately NOT
+# used here — it would synthesize dead variants for ``-pro`` slugs (the
+# Codex backend 400s them) and accept arbitrary future descendants that
+# were never probed. Dated snapshots of the routable 5.6 bases are allowed
+# via _CODEX_900K_SNAPSHOT_RE.
+_CODEX_900K_ELIGIBLE_BASES = frozenset({
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.4",                    # exact; gpt-5.4-mini enforces 272K
+    "gpt-daybreak-blue-latest",   # verified Sol alias
+})
+_CODEX_900K_SNAPSHOT_BASES = ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna")
+_CODEX_900K_SNAPSHOT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _bare_codex_slug(model: Optional[str]) -> str:
+    """Lowercased slug with any ``vendor/`` namespace removed.
+
+    Display/auxiliary callers pass ids like ``openai/gpt-5.6-sol-900k``;
+    the main-agent path normalizes the namespace away earlier, but this
+    resolver must accept both shapes (#92797 review).
+    """
+    return (model or "").strip().lower().rsplit("/", 1)[-1]
+
+
+def is_codex_900k_base(model: Optional[str]) -> bool:
+    """True when *model* (a BASE slug, no suffix) may carry a ``-900k`` variant.
+
+    Single source of truth for the eligibility check — used by picker
+    synthesis, context resolution, `/model` validation, and wire stripping
+    so the four sites can never drift apart.
+    """
+    slug = _bare_codex_slug(model)
+    if not slug or slug.endswith(CODEX_CONTEXT_VARIANT_SUFFIX):
+        return False
+    if slug in _CODEX_900K_ELIGIBLE_BASES:
+        return True
+    # Dated snapshots of the routable 5.6 bases (gpt-5.6-sol-2026-07-09).
+    for base in _CODEX_900K_SNAPSHOT_BASES:
+        if slug.startswith(base + "-") and _CODEX_900K_SNAPSHOT_RE.match(
+            slug[len(base) + 1:]
+        ):
+            return True
+    return False
+
+
+def is_codex_context_variant(model: Optional[str]) -> bool:
+    """True when the model id is a VALID ``-900k`` opt-in variant.
+
+    Requires both the suffix and an eligible base — ``gpt-5.5-900k`` is not
+    a variant, it's an invalid alias.
+    """
+    slug = _bare_codex_slug(model)
+    if not slug.endswith(CODEX_CONTEXT_VARIANT_SUFFIX):
+        return False
+    return is_codex_900k_base(slug[: -len(CODEX_CONTEXT_VARIANT_SUFFIX)])
+
+
+def strip_codex_context_variant_suffix(model: Optional[str]) -> str:
+    """Return the wire-safe slug with a VALID ``-900k`` suffix removed.
+
+    The suffix is a Hermes picker alias (``gpt-5.6-sol-900k``); the Codex
+    backend only knows the base slug. Stripping is conditional on base
+    eligibility: an ineligible alias like ``gpt-5.5-900k`` is returned
+    unchanged so it fails honestly at the API instead of silently running
+    as a different model. Case-insensitive; preserves any ``vendor/``
+    namespace prefix.
+    """
+    raw = (model or "").strip()
+    if not raw.lower().endswith(CODEX_CONTEXT_VARIANT_SUFFIX):
+        return raw
+    base = raw[: -len(CODEX_CONTEXT_VARIANT_SUFFIX)]
+    if is_codex_900k_base(base):
+        return base
+    return raw
+
+
+def has_codex_context_variant(model_bare: str) -> bool:
+    """True when a Codex BASE slug should get a synthetic ``-900k`` entry.
+
+    Thin alias over :func:`is_codex_900k_base` kept for the picker call
+    sites' readability.
+    """
+    return is_codex_900k_base(model_bare)
+
 
 def _verified_codex_ctx_for_slug(model_bare: str) -> Optional[int]:
-    """Return the live-verified Codex cap for a slug, or ``None``.
+    """Return the live-verified Codex cap for an OPTED-IN slug, or ``None``.
 
-    Exact slugs first, then family prefixes (``<key>``, ``<key>-``,
-    ``<key>.``) so dated snapshots of a verified family inherit the bump.
+    The large window is opt-in: only VALID ``-900k`` picker variants
+    (e.g. ``gpt-5.6-sol-900k``) resolve to the verified cap. Base slugs
+    keep the advertised 272K so the cheaper default limit applies unless
+    the user explicitly selects the large-context variant; ineligible
+    aliases (``gpt-5.5-900k``) never resolve here.
     """
-    slug = (model_bare or "").strip().lower()
-    if not slug:
+    slug = _bare_codex_slug(model_bare)
+    if not slug.endswith(CODEX_CONTEXT_VARIANT_SUFFIX):
         return None
-    exact = _CODEX_OAUTH_VERIFIED_ABOVE_ADVERTISED_EXACT.get(slug)
+    base = slug[: -len(CODEX_CONTEXT_VARIANT_SUFFIX)]
+    if not is_codex_900k_base(base):
+        return None
+    exact = _CODEX_OAUTH_VERIFIED_ABOVE_ADVERTISED_EXACT.get(base)
     if exact is not None:
         return exact
     for key, ctx in _CODEX_OAUTH_VERIFIED_ABOVE_ADVERTISED_PREFIXES.items():
-        if slug == key or slug.startswith(key + "-") or slug.startswith(key + "."):
+        if base == key or base.startswith(key + "-") or base.startswith(key + "."):
             return ctx
     return None
 
@@ -2589,8 +2719,9 @@ def _resolve_codex_oauth_context_length_with_source(
     def _apply_verified_bump(ctx: int, source: str) -> Tuple[int, str]:
         """Lift a known-stale 272K advertisement to the live-verified cap.
 
-        Only fires when the resolved value is EXACTLY the stale 272,000
-        advertisement for a slug we have probed above it (see
+        Only fires for explicit ``-900k`` picker variants (opt-in), and only
+        when the resolved value is EXACTLY the stale 272,000 advertisement
+        for a slug we have probed above it (see
         ``_verified_codex_ctx_for_slug``). Any other advertised value —
         higher or lower — is trusted as a real server-side change.
         """
@@ -2603,19 +2734,26 @@ def _resolve_codex_oauth_context_length_with_source(
             return bumped, source
         return ctx, source
 
+    # ``-900k`` variants are Hermes picker aliases — the Codex catalog only
+    # knows the base slug, so resolve against the stripped id. Also drop any
+    # ``vendor/`` namespace (``openai/gpt-5.6-sol-900k``): the main-agent
+    # path normalizes it away before reaching here, but display/auxiliary
+    # callers pass it through (#92797 review).
+    lookup_bare = _bare_codex_slug(strip_codex_context_variant_suffix(model_bare))
+
     if access_token:
         live, fresh_probe = _fetch_codex_oauth_context_lengths_with_source(access_token)
         live_source = "live" if fresh_probe else "memory"
-        if model_bare in live:
-            return _apply_verified_bump(live[model_bare], live_source)
+        if lookup_bare in live:
+            return _apply_verified_bump(live[lookup_bare], live_source)
         # Case-insensitive match in case casing drifts
-        model_lower = model_bare.lower()
+        model_lower = lookup_bare.lower()
         for slug, ctx in live.items():
             if slug.lower() == model_lower:
                 return _apply_verified_bump(ctx, live_source)
 
     # Fallback: longest-key-first substring match over hardcoded defaults.
-    model_lower = model_bare.lower()
+    model_lower = lookup_bare.lower()
     for slug, ctx in sorted(
         _CODEX_OAUTH_CONTEXT_FALLBACK.items(), key=lambda x: len(x[0]), reverse=True
     ):

@@ -1034,6 +1034,19 @@ def _rpc_poll_loop(
             stop_event.wait(poll_interval)
 
 
+def _format_interrupted_output(stdout_text: str) -> str:
+    """Append an interruption marker without guessing who caused it."""
+    from tools.interrupt import get_interrupt_reason
+
+    reason = get_interrupt_reason()
+    marker = (
+        f"[execution interrupted — {reason}]"
+        if reason
+        else "[execution interrupted]"
+    )
+    return f"{stdout_text}\n{marker}" if stdout_text else marker
+
+
 def _execute_remote(
     code: str,
     task_id: Optional[str],
@@ -1212,9 +1225,7 @@ def _execute_remote(
             duration, timeout, tool_call_counter[0],
         )
     elif status == "interrupted":
-        result["output"] = (
-            stdout_text + "\n[execution interrupted — user sent a new message]"
-        )
+        result["output"] = _format_interrupted_output(stdout_text)
     elif exit_code != 0:
         result["status"] = "error"
         result["error"] = f"Script exited with code {exit_code}"
@@ -1259,6 +1270,23 @@ def execute_code(
             "parameter containing Python source. To run shell commands, use "
             "terminal(command=...) instead."
         )
+
+    # Hard-block gateway-lifecycle commands, mirroring the terminal_tool
+    # guard (#68289): without this, execute_code is a straight bypass — the
+    # terminal() path refuses `launchctl bootout ai.hermes.gateway`, but the
+    # identical command inside `os.system(...)` / `subprocess.run([...])`
+    # here sailed through and SIGTERM'd the gateway mid-task. Gated on
+    # PID-file ownership, not the inherited env marker (#92560).
+    from tools.process_registry import _is_supervised_gateway_process
+    if _is_supervised_gateway_process():
+        from cron.lifecycle_guard import contains_gateway_lifecycle_command
+        if contains_gateway_lifecycle_command(code):
+            return tool_error(
+                "Blocked: cannot restart or stop the gateway from inside the "
+                "gateway process. The gateway would kill this script before "
+                "it could complete (SIGTERM propagates to child processes). "
+                "Run the lifecycle command from a shell outside the gateway."
+            )
 
     # Dispatch: remote backends use file-based RPC, local uses UDS
     from tools.terminal_tool import _get_env_config, _docker_has_host_access
@@ -1667,7 +1695,7 @@ def execute_code(
                 duration, timeout, tool_call_counter[0],
             )
         elif status == "interrupted":
-            result["output"] = stdout_text + "\n[execution interrupted — user sent a new message]"
+            result["output"] = _format_interrupted_output(stdout_text)
         elif exit_code != 0:
             result["status"] = "error"
             result["error"] = stderr_text or f"Script exited with code {exit_code}"

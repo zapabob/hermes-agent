@@ -894,12 +894,24 @@ def _prepare_profile_gateway_update_restart(profile: str, pid: int) -> str | Non
     manager. Starting Hermes's detached watcher as well would escape the
     manager and race its replacement process. Ordinary foreground gateways
     retain the existing detached-watcher behavior.
+
+    When the profile-derived relaunch cannot be armed -- typically because
+    ``_gateway_run_args_for_profile`` cannot rebuild a run argv for this
+    profile -- fall back to replaying the process's own captured command
+    line, which is what ``launch_detached_gateway_restart_by_cmdline``
+    exists for and what the Windows post-update path already does for its
+    unmapped gateways.  Without this the caller has no way to relaunch the
+    process and (before #88654) silently left it running pre-update modules
+    against post-update code on disk.  ``argv`` is already captured above,
+    so the fallback costs nothing extra.
     """
     argv = _capture_gateway_argv(pid)
     if argv and "--external-supervisor" in argv:
         return "external-supervisor"
     if launch_detached_profile_gateway_restart(profile, pid):
         return "detached"
+    if argv and launch_detached_gateway_restart_by_cmdline(pid, list(argv)):
+        return "detached-cmdline"
     return None
 
 
@@ -1276,13 +1288,16 @@ def _wait_for_systemd_service_restart(
     *,
     system: bool = False,
     previous_pid: int | None = None,
-    timeout: float = 60.0,
+    timeout: float | None = None,
+    replacement_observed: list[bool] | None = None,
 ) -> bool:
     """Wait for the gateway service to become active after a restart handoff."""
     import time
 
     svc = get_service_name()
     scope_label = _service_scope_label(system).capitalize()
+    if timeout is None:
+        timeout = _systemd_restart_wait_timeout(system=system)
     deadline = time.monotonic() + timeout
     printed_runtime_wait = False
 
@@ -1300,9 +1315,26 @@ def _wait_for_systemd_service_restart(
         if not new_pid:
             new_pid = _systemd_main_pid_from_props(props)
 
+        runtime_state = _read_gateway_runtime_status()
+        try:
+            runtime_pid = int((runtime_state or {}).get("pid", 0) or 0)
+        except (TypeError, ValueError):
+            runtime_pid = 0
+        if (
+            previous_pid is not None
+            and replacement_observed is not None
+            and not replacement_observed
+            and any(
+                candidate_pid > 0 and candidate_pid != previous_pid
+                for candidate_pid in (new_pid or 0, runtime_pid)
+            )
+        ):
+            replacement_observed.append(True)
+
         if active_state == "active":
             if new_pid and (previous_pid is None or new_pid != previous_pid):
-                runtime_state = _gateway_runtime_status_for_pid(new_pid)
+                if runtime_pid != new_pid:
+                    runtime_state = _gateway_runtime_status_for_pid(new_pid)
                 gateway_state = (runtime_state or {}).get("gateway_state")
                 if gateway_state == "running":
                     print(f"✓ {scope_label} service restarted (PID {new_pid})")
@@ -1337,6 +1369,25 @@ def _wait_for_systemd_service_restart(
         f"  Check logs:   journalctl {'--user ' if not system else ''}-u {svc} -l --since '2 min ago'"
     )
     return False
+
+
+def _systemd_restart_wait_timeout(system: bool = False) -> float:
+    """Cover systemd's relaunch delays before applying the runtime wait floor."""
+    from gateway.shutdown_forensics import parse_systemd_duration_to_us
+
+    props = _read_systemd_unit_properties(
+        system=system,
+        properties=("RestartUSec", "TimeoutStartUSec"),
+    )
+    supervisor_budget = 0.0
+    for name in ("RestartUSec", "TimeoutStartUSec"):
+        raw = props.get(name, "")
+        duration_us = (
+            int(raw) if raw.isdigit() else parse_systemd_duration_to_us(raw)
+        )
+        if duration_us is not None:
+            supervisor_budget += duration_us / 1_000_000
+    return 60.0 + supervisor_budget
 
 
 def _systemd_unit_is_start_limited(props: dict[str, str]) -> bool:
@@ -4188,32 +4239,49 @@ def systemd_restart(system: bool = False):
             f"⏳ {scope_label} service restarting gracefully (PID {pid}) — "
             f"waiting up to {wait_budget:.0f}s for in-flight turns + drain..."
         )
+        service_action = "restart"
         if _graceful_restart_via_sigusr1(pid, wait_budget):
-            # The gateway exits with code 75 for a planned service restart.
-            # RestartSec can otherwise delay the relaunch even though the
-            # operator asked for an immediate restart, so kick the unit once
-            # the old PID has exited and then wait for the replacement PID.
-            _run_systemctl(
-                ["reset-failed", svc],
+            # Exit 75 transfers restart ownership to systemd.  Observe that
+            # single replacement instead of issuing another restart that can
+            # stop the process systemd has already brought up.
+            replacement_observed: list[bool] = []
+            if _wait_for_systemd_service_restart(
                 system=system,
-                check=False,
-                timeout=30,
-            )
-            _run_systemctl(
-                ["restart", svc],
-                system=system,
-                check=False,
-                timeout=90,
-            )
-            if _wait_for_systemd_service_restart(system=system, previous_pid=pid):
+                previous_pid=pid,
+                replacement_observed=replacement_observed,
+            ):
+                return
+            if replacement_observed:
                 return
             if _systemd_service_is_start_limited(system=system):
                 return
 
-        print(
-            f"⚠ Graceful restart did not complete within {int(wait_budget)}s; "
-            "forcing a service restart..."
-        )
+            # A replacement may have started but not reached gateway runtime
+            # readiness before the wait expired.  Never stop that generation.
+            props = _read_systemd_unit_properties(system=system)
+            if not props:
+                return
+            replacement_pid = _systemd_main_pid_from_props(props)
+            if (
+                props.get("ActiveState") in {"active", "activating", "reloading"}
+                or props.get("SubState") == "auto-restart"
+                or (replacement_pid is not None and replacement_pid != pid)
+            ):
+                return
+
+            print(
+                "⚠ Systemd did not relaunch the gateway after its graceful exit; "
+                "starting the inactive service..."
+            )
+            # ``start`` is intentionally idempotent: if a replacement appears
+            # after the snapshot, this must not stop that new generation.
+            service_action = "start"
+        else:
+            print(
+                f"⚠ Graceful restart did not complete within {int(wait_budget)}s; "
+                "forcing a service restart..."
+            )
+
         _run_systemctl(
             ["reset-failed", svc],
             system=system,
@@ -4221,7 +4289,9 @@ def systemd_restart(system: bool = False):
             timeout=30,
         )
         try:
-            _run_systemctl(["restart", svc], system=system, check=True, timeout=90)
+            _run_systemctl(
+                [service_action, svc], system=system, check=True, timeout=90
+            )
         except subprocess.CalledProcessError as exc:
             if _systemd_error_indicates_start_limit(
                 exc
@@ -5457,6 +5527,51 @@ def launchd_restart():
             return
         print("✓ Service restarted")
         _clear_launchd_unsupported_marker()
+
+
+# launchd will not relaunch a KeepAlive job more than about once per 10s.  A
+# self-restart that exits promptly therefore leaves the label registered with
+# NO pid for most of that window, so any verification budget shorter than the
+# throttle reports a healthy restart as a failure.
+LAUNCHD_SUPERVISION_VERIFY_TIMEOUT = 20.0
+
+
+def wait_for_launchd_gateway_supervision(
+    *,
+    timeout: float = LAUNCHD_SUPERVISION_VERIFY_TIMEOUT,
+    label: str | None = None,
+    poll_interval: float = 0.5,
+) -> bool:
+    """Poll launchd until it is supervising a live gateway process.
+
+    :func:`launchd_restart` returns as soon as the restart has been *requested*.
+    The ``_request_gateway_self_restart`` branch hands the work to the running
+    gateway and returns immediately, and a plist reload is handed to a detached
+    helper.  Both are asynchronous, so a caller that reads "returned without
+    raising" as "the service is up" cannot see a helper that dies before its
+    first bootstrap (#88848) — nor a ``launchctl bootstrap`` that exits 0
+    without registering, which the reporter measured on macOS 26.6.1.
+
+    Judge the outcome the way #80491 taught the helper to judge it: by a live
+    supervised pid, never by an exit code.  :func:`_launchctl_label_supervising_process`
+    is already that predicate, so this only adds the wait.
+
+    Returns True immediately when the detached fallback is active.  On a host
+    where launchd cannot manage the domain the gateway runs unsupervised *by
+    design*, so the absence of a launchd pid there is the expected state and
+    not the silent failure this guards against.
+    """
+    if _launchd_unsupported_marker_exists():
+        return True
+
+    label = label or get_launchd_label()
+    deadline = time.monotonic() + max(timeout, 0.0)
+    while True:
+        if _launchctl_label_supervising_process(label):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(max(poll_interval, 0.01))
 
 
 def launchd_status(deep: bool = False):
@@ -7901,6 +8016,20 @@ def _gateway_command_inner(args):
             sys.exit(1)
 
     elif subcmd == "uninstall":
+        # Uninstall stops the managed service before removing it. Gate on
+        # PID-file ownership like stop/restart (#92560): the env marker is
+        # inherited by every descendant, and CLI sessions spawned under the
+        # gateway tree must stay able to manage it.
+        from tools.process_registry import _is_supervised_gateway_process
+
+        if _is_supervised_gateway_process():
+            print_error(
+                "Refusing to uninstall the gateway from inside the gateway process.\n"
+                "This command was blocked to prevent the gateway from terminating itself.\n"
+                "Use `hermes gateway uninstall` from a shell outside the running gateway."
+            )
+            sys.exit(1)
+
         if is_managed():
             managed_error("uninstall gateway service")
             return
@@ -8018,7 +8147,13 @@ def _gateway_command_inner(args):
     elif subcmd == "stop":
         # Defense: refuse self-targeting gateway stop from inside the gateway.
         # Prevents agent-initiated kill loops when combined with supervisor KeepAlive.
-        if os.getenv("_HERMES_GATEWAY") == "1":
+        # The supervised probe also PASSES a plain foreground `hermes gateway run`
+        # (env set, PID owned, but no supervisor): that is intentional and
+        # harmless — with no supervisor there is no KeepAlive, so a self-stop is
+        # a one-shot exit rather than a respawn loop.
+        from tools.process_registry import _is_supervised_gateway_process
+
+        if _is_supervised_gateway_process():
             print_error(
                 "Refusing to stop the gateway from inside the gateway process.\n"
                 "This command was blocked to prevent restart loops.\n"
@@ -8111,7 +8246,13 @@ def _gateway_command_inner(args):
     elif subcmd == "restart":
         # Defense: refuse self-targeting gateway restart from inside the gateway.
         # Prevents agent-initiated kill loops when combined with supervisor KeepAlive.
-        if os.getenv("_HERMES_GATEWAY") == "1":
+        # The supervised probe also PASSES a plain foreground `hermes gateway run`
+        # (env set, PID owned, but no supervisor): that is intentional and
+        # harmless — with no supervisor there is no KeepAlive, so a self-restart
+        # is a single relaunch rather than a respawn loop.
+        from tools.process_registry import _is_supervised_gateway_process
+
+        if _is_supervised_gateway_process():
             print_error(
                 "Refusing to restart the gateway from inside the gateway process.\n"
                 "This command was blocked to prevent restart loops.\n"

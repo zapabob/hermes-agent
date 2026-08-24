@@ -45,6 +45,25 @@ describe('desktop slash command curation', () => {
     expect(isDesktopSlashSuggestion('/curator')).toBe(false)
   })
 
+  it('keeps fork management commands out of the desktop command surface', () => {
+    for (const command of ['/auth', '/billing', '/bundles', '/codex-runtime', '/credits', '/memory', '/subgoal', '/whoami']) {
+      expect(resolveDesktopCommand(command)?.surface).toEqual({ kind: 'unavailable', reason: 'advanced' })
+      expect(isDesktopSlashCommand(command)).toBe(false)
+    }
+  })
+
+  it('/voice points at the composer voice button instead of the generic advanced message', () => {
+    // /voice arms server-side capture — on the desktop the composer's own
+    // voice conversation (mic menu / Ctrl+B) is the surface. A user typing
+    // /voice must be told where the button IS, not shrugged at.
+    expect(resolveDesktopCommand('/voice')?.surface).toEqual({ kind: 'unavailable', reason: 'composer-voice' })
+    expect(isDesktopSlashCommand('/voice')).toBe(false)
+
+    const message = desktopSlashUnavailableMessage('/voice')
+    expect(message).toContain('microphone button')
+    expect(message).toContain('Ctrl+B')
+  })
+
   it('routes /compact to /compress (context compression), not the TUI display toggle', () => {
     expect(resolveDesktopCommand('/compact')?.name).toBe('/compress')
     expect(isDesktopSlashCommand('/compact')).toBe(true)

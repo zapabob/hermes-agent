@@ -950,6 +950,7 @@ def _request_protected_instruction_approval(
         choice = _approval.prompt_dangerous_approval(
             display, description,
             allow_permanent=False,
+            allow_session=False,
             approval_callback=callback,
         )
         if choice in {"once", "session", "always"}:
@@ -1042,6 +1043,11 @@ def _check_approval_required_write(paths: list[str],
         display_target=f"<write to {display_targets}>",
         cron_deny_message=blocked.format(
             why="requires approval but this cron session denies it."),
+        single_query_deny_message=blocked.format(
+            why="requires approval but single-query (-q) sessions run "
+                "without a user present to approve it. To allow flagged "
+                "actions in single-query mode, set approvals.single_query_mode: "
+                "approve in config.yaml."),
         autoapprove_log_prefix="ssh_config_write",
         fail_closed_when_no_human=True,
         no_human_block_message=blocked.format(

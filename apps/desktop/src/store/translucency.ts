@@ -118,7 +118,7 @@ export function setAppearance(appearance: Appearance): void {
 
 /** The resolved state for the painted appearance — the shape every consumer reads. */
 export const $translucency = computed([$translucencyBook, $appearance], (book, appearance) =>
-  resolveTranslucency(book, appearance, GLASS_IS_WINDOWS, GLASS_SUPPORTED)
+  resolveTranslucency(book, appearance, isWindowsPlatform())
 )
 
 /** Write an edit against the appearance being painted. */

@@ -397,6 +397,17 @@ DEFAULT_CONFIG = {
         # window so it can't leak indefinitely. 0 disables escalation (SIGTERM
         # only — the historical behavior). Floored internally at 0.
         "daemon_term_grace_seconds": 2.0,
+        # Bounded linger (seconds) for one-shot CLI runs (-q/-Q/-z) that exit
+        # while background processes spawned with notify_on_complete=true are
+        # still running. The dying parent owns those children's stdout pipes,
+        # so exiting immediately kills the delivery a few seconds later —
+        # destroying Bot Mode handoff replies dispatched via message_agent /
+        # bot_relay from a short-lived `hermes -p <bot> chat -Q` recipient
+        # (#90879). The parent instead waits (up to this bound) for tracked
+        # notify_on_complete processes to finish before exiting. Plain
+        # background processes without notify_on_complete (servers, daemons)
+        # are never waited on. 0 disables the linger.
+        "oneshot_completion_wait_seconds": 600.0,
         # Environment variables to pass through to sandboxed execution
         # (terminal and execute_code).  Skill-declared required_environment_variables
         # are passed through automatically; this list is for non-skill use cases.
@@ -1131,6 +1142,20 @@ DEFAULT_CONFIG = {
             "extra_body": {},
             "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
         },
+        # /review — the independent reviewer subagent's model. Unlike other
+        # aux tasks this is not a single LLM call: the reviewer is a full
+        # subagent (all normal subagent tools) spawned on the async
+        # delegation rail. provider/model/base_url/api_key/api_mode are
+        # resolved through the same credential system as delegation.provider
+        # pins. Leave provider "auto" + model empty to run the reviewer on
+        # the main agent's model.
+        "review": {
+            "provider": "auto",    # auto (= inherit main model) | openrouter | nous | anthropic | ...
+            "model": "",           # e.g. "anthropic/claude-opus-4.6" — a strong reviewer model
+            "base_url": "",        # direct OpenAI-compatible endpoint (takes precedence over provider)
+            "api_key": "",         # API key for base_url / provider override
+            "api_mode": "",        # force transport: chat_completions | anthropic_messages | codex_responses
+        },
         "mcp": {
             "provider": "auto",
             "model": "",
@@ -1273,6 +1298,16 @@ DEFAULT_CONFIG = {
             "timeout": 120,
             "extra_body": {},
             "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
+            # Aggregate INPUT-token budget for one review fork (issue #93057).
+            # The fork's FIRST request replays the full snapshot as a warm
+            # prompt-cache read (compaction is deferred until the first
+            # provider response arrives); after that it compacts an oversized
+            # snapshot in memory before further provider calls. This caps the
+            # SUM of input tokens replayed across the whole review tool loop
+            # (iterations are separately capped at 16). The loop stops before
+            # the provider call that would cross the budget. 0 or a negative
+            # value = unlimited.
+            "max_input_tokens": 600000,
         },
         "moa_reference": {
             "provider": "auto",
@@ -1578,6 +1613,30 @@ DEFAULT_CONFIG = {
         # Set this to True to re-enable the surfaces with the understanding
         # that the numbers are a local lower-bound estimate, not billing.
         "show_token_analytics": False,
+        # WebSocket keepalive for the dashboard/desktop web server (#79635).
+        # Applied to NON-loopback binds only: loopback always disables the
+        # protocol ping (see hermes_cli/web_server.py — an event-loop stall
+        # must never kill a healthy local connection). Values are seconds.
+        "ws_ping_interval": 20.0,
+        "ws_ping_timeout": 20.0,
+        # Grace window (seconds) before a WS-orphaned gateway session is
+        # interrupted/reaped after its client disconnects (#79635). The
+        # HERMES_TUI_WS_ORPHAN_REAP_GRACE_S env var remains an internal
+        # override for backward compatibility. 0 disables the reap
+        # (park forever).
+        "ws_orphan_reap_grace_s": 20.0,
+        # Startup sweep of session rows orphaned by a dead gateway process
+        # (#65194).  The ws-orphan grace timer above is in-process, so a
+        # gateway restart (update, crash, systemd) leaves disconnected
+        # sessions ``ended_at IS NULL`` forever — phantom "active" rows in
+        # /resume and dashboards.  On every gateway boot (stdio TUI *and*
+        # the desktop/dashboard WS sidecar), tui/desktop/subagent rows whose
+        # start time AND newest message are both older than the session TTL
+        # (HERMES_TUI_SESSION_TTL_S, default 6h) are closed with
+        # end_reason='startup_orphan_reap'.  Messaging-gateway sessions
+        # (telegram, discord, ...) are never touched; live in-memory
+        # sessions are excluded; swept sessions stay resumable.
+        "startup_orphan_sweep": True,
         # OAuth gate configuration (engaged when ``--host`` is set and
         # ``--insecure`` is not). The bundled Nous Portal plugin reads
         # both keys at startup; they are the canonical surface for these
@@ -1820,6 +1879,11 @@ DEFAULT_CONFIG = {
         "submit_mode": "direct",       # TUI: direct submits immediately; draft leaves an editable transcript
         "max_recording_seconds": 120,
         "auto_tts": False,
+        # Desktop remote clients call the profile's STT/TTS providers
+        # DIRECTLY (config + key fetched over the authenticated REST channel
+        # at voice-session start) instead of relaying audio through the
+        # gateway — lowest-hop path in both directions. false = always relay.
+        "client_direct": True,
         "beep_enabled": True,         # Play record start/stop beeps in CLI voice mode
         "beep_volume": 0.3,           # Beep amplitude multiplier (0.0-1.0, default keeps prior hardcoded value)
         "thinking_sound": True,       # Calm ambient bubble sound while the agent works in voice chat (volume follows beep_volume)
@@ -2737,6 +2801,24 @@ DEFAULT_CONFIG = {
         "done_sub_retention_days": 30,
     },
 
+    # Bot Mode cross-connection relay (tools/bot_relay.py). Envelopes queued
+    # by message_agent for agents on other connections wait in an on-disk
+    # outbox until the Desktop drains them.
+    "bot_mode": {
+        # Drain-time TTL (seconds): an envelope older than this is NOT
+        # delivered when the Desktop finally drains the outbox — the sender
+        # gets an error reply (reason 'queued_expired') instead, so a DM
+        # written while the Desktop was away can't land hours late as a
+        # confusing zombie message. 0 disables drain-time expiry (the 6h
+        # stale-artifact sweep still applies).
+        "envelope_ttl_seconds": 900,
+        # How long a second delivery into an already-busy target profile
+        # queues behind the current turn before failing with a structured
+        # 'target_busy' error. Deliveries are serialized per profile with a
+        # cross-process file lock so two turns never race one Bot Chat.
+        "turn_wait_seconds": 120,
+    },
+
     # execute_code settings — controls the tool used for programmatic tool calls.
     "code_execution": {
         # Execution mode:
@@ -2969,6 +3051,16 @@ DEFAULT_CONFIG = {
         # code so the supervisor (systemd/launchd) revives the process instead
         # of leaving a wedged-but-alive zombie. Set to false to disable.
         "loop_watchdog": True,
+
+        # Loop-liveness watchdog tuning (defaults mirror
+        # gateway/shutdown_watchdog.py constants). probe_interval = seconds
+        # between liveness probes; probe_timeout = seconds a probe may go
+        # unprocessed before counting as a miss; max_strikes = consecutive
+        # misses before the watchdog hard-exits 75 for a service respawn
+        # (~90-120s of sustained loop block at the defaults).
+        "loop_watchdog_probe_interval_s": 30.0,
+        "loop_watchdog_probe_timeout_s": 10.0,
+        "loop_watchdog_max_strikes": 3,
 
         # Whether the gateway keeps writing the legacy sessions.json mirror of
         # its routing index. The primary copy lives in state.db (the

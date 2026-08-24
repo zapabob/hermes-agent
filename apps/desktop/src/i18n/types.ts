@@ -127,6 +127,7 @@ export interface Translations {
       backendStopped: string
       desktopBootFailed: string
       gatewayConnectionLost: string
+      gatewayConnectionLostDetail: string
       gatewaySignInRequired: string
       ipcBridgeUnavailable: string
     }
@@ -1536,6 +1537,34 @@ export interface Translations {
     switchConnectionFailed: (name: string) => string
     manageProfiles: string
     connectGateway: string
+    remoteOverride: {
+      menuItem: string
+      badge: (host: string) => string
+      title: (profile: string) => string
+      description: string
+      urlLabel: string
+      urlPlaceholder: string
+      urlInvalid: string
+      tokenLabel: string
+      tokenPlaceholder: string
+      tokenSavedHint: string
+      plainTextOptIn: string
+      collisionWarning: (label: string) => string
+      confirmTitle: string
+      confirmNote: (profile: string, host: string) => string
+      confirmBack: string
+      connect: string
+      connecting: string
+      disconnect: string
+      savedTitle: string
+      savedMessage: (profile: string, host: string) => string
+      removedTitle: string
+      removedMessage: (profile: string) => string
+      removeFailed: string
+      authFailedTitle: string
+      authFailedMessage: (profile: string, host: string) => string
+      updateToken: string
+    }
     actions: string
     color: string
     colorFor: string
@@ -2429,6 +2458,7 @@ export interface Translations {
       gateway: string
       gatewayReady: string
       gatewayNeedsSetup: string
+      gatewayUnavailable: string
       gatewayChecking: string
       gatewayConnecting: string
       gatewayOffline: string

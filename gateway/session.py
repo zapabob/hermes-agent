@@ -1256,6 +1256,10 @@ class SessionStore:
         self.config = config
         self._entries: Dict[str, SessionEntry] = {}
         self._loaded = False
+        # A fallback-only initial load must be reconciled with state.db after
+        # the handle recovers, before a whole-index save can replace DB rows.
+        self._routing_db_loaded = False
+        self._routing_fallback_baseline: Optional[Dict[str, Any]] = None
         self._lock = threading.Lock()
         # Serialize whole-index persistence without holding ``_lock`` across
         # SQLite / fsync. Each writer snapshots the latest state only after
@@ -1315,6 +1319,12 @@ class SessionStore:
         self._db_pinned = _DB_UNPINNED
         self._db_handles: Dict[Path, Any] = {}
         self._db_handles_lock = threading.Lock()
+        from gateway.session_db_recovery import RecoverableHandleCache
+
+        self._db_handle_cache = RecoverableHandleCache(
+            handles=self._db_handles,
+            lock=self._db_handles_lock,
+        )
         self._open_session_db_for_active_scope()
 
     def _open_session_db_for_active_scope(self):
@@ -1329,23 +1339,16 @@ class SessionStore:
 
         Handles are cached per resolved path, so a hot inbound path opens
         SQLite once per profile rather than once per message, and two
-        profiles never share a handle.  Construction is done under the lock
-        so a concurrent first message on the same profile cannot open (and
-        then leak) a second handle for the same path.
-
-        A construction failure is cached as ``None`` for that path, matching
-        the previous behavior where a failed startup left ``_db`` None for
-        the life of the store and callers fell back to JSONL.
+        profiles never share a handle. Failed opens enter a bounded backoff;
+        once it expires, one caller reopens while concurrent callers keep
+        using the JSONL fallback.
         """
         from hermes_state import SessionDB, _default_db_path
 
         path = Path(_default_db_path())
-        with self._db_handles_lock:
-            if path in self._db_handles:
-                return self._db_handles[path]
-            db = None
+        def _open():
             try:
-                db = SessionDB()
+                return SessionDB()
             except RuntimeError as e:
                 if "live-system guard" in str(e):
                     # Test-isolation guard fired: a pytest-context process
@@ -1355,10 +1358,18 @@ class SessionStore:
                     # guard must fire again on the next attempt.
                     raise
                 print(f"[gateway] Warning: SQLite session store unavailable, falling back to JSONL: {e}")
+                raise
             except Exception as e:
                 print(f"[gateway] Warning: SQLite session store unavailable, falling back to JSONL: {e}")
-            self._db_handles[path] = db
-            return db
+                raise
+
+        return self._db_handle_cache.get(
+            path,
+            _open,
+            non_cacheable=lambda exc: (
+                isinstance(exc, RuntimeError) and "live-system guard" in str(exc)
+            ),
+        )
 
     @property
     def _db(self):
@@ -1399,14 +1410,13 @@ class SessionStore:
         handle (``store._db = fake``) is deliberately not closed here — the
         pinner owns its lifecycle.
         """
-        with self._db_handles_lock:
-            handles = [db for db in self._db_handles.values() if db is not None]
-            self._db_handles.clear()
-        for db in handles:
+        def _close(db) -> None:
             try:
                 db.close()
             except Exception as exc:
                 logger.debug("SessionDB close error during handle sweep: %s", exc)
+
+        self._db_handle_cache.close_all(_close)
 
     def _has_active_processes_safe(self, session_key: str, *, context: str) -> bool:
         """Return whether a session has active work, failing closed on registry errors."""
@@ -1450,6 +1460,7 @@ class SessionStore:
         the DB doesn't have, then persisted to the DB on the next _save).
         """
         if self._loaded:
+            self._reconcile_recovered_routing_locked()
             return
 
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
@@ -1458,6 +1469,7 @@ class SessionStore:
         # partially-initialized stores without __init__ (same pattern as
         # _prune_stale_sessions_locked).
         db_had_entries = False
+        db_load_succeeded = False
         _db = getattr(self, "_db", None)
         if _db:
             loader = getattr(_db, "load_gateway_routing_entries", None)
@@ -1473,6 +1485,7 @@ class SessionStore:
                                 "Skipping invalid routing entry %r: %s", key, e
                             )
                     db_had_entries = bool(self._entries)
+                    db_load_succeeded = True
                 except Exception as e:
                     logger.warning(
                         "gateway.session: state.db routing load failed: %s", e
@@ -1522,6 +1535,12 @@ class SessionStore:
                 print(f"[gateway] Warning: Failed to load sessions: {e}")
 
         self._loaded = True
+        self._routing_db_loaded = db_load_succeeded
+        self._routing_fallback_baseline = (
+            None
+            if db_load_succeeded
+            else {key: entry.to_dict() for key, entry in self._entries.items()}
+        )
 
         # Prune any sessions.json entries that point to sessions already ended
         # in state.db. A hard gateway crash (exit code 1) skips the graceful
@@ -1635,8 +1654,52 @@ class SessionStore:
         self._routing_generation = getattr(self, "_routing_generation", 0) + 1
         return self._routing_generation
 
+    def _reconcile_recovered_routing_locked(self) -> None:
+        """Merge authoritative rows after a fallback-only startup load."""
+        baseline = getattr(self, "_routing_fallback_baseline", None)
+        if getattr(self, "_routing_db_loaded", False) or baseline is None:
+            return
+
+        db = getattr(self, "_db", None)
+        loader = getattr(db, "load_gateway_routing_entries", None) if db else None
+        if not callable(loader):
+            return
+        try:
+            durable = loader(scope=self._routing_scope())
+        except Exception as exc:
+            logger.warning(
+                "gateway.session: recovered state.db routing load failed: %s", exc
+            )
+            return
+
+        current = {key: entry.to_dict() for key, entry in self._entries.items()}
+        for key, entry_json in durable.items():
+            try:
+                entry_data = json.loads(entry_json)
+                if not isinstance(entry_data, dict):
+                    continue
+                durable_entry = SessionEntry.from_dict(entry_data)
+            except (ValueError, KeyError, TypeError) as exc:
+                logger.warning("Skipping invalid routing entry %r: %s", key, exc)
+                continue
+
+            if key not in baseline:
+                # A key created while on fallback wins over a DB-only key;
+                # otherwise restore the authoritative row that fallback never saw.
+                self._entries.setdefault(key, durable_entry)
+            elif key not in current:
+                # The key was loaded from fallback and deliberately removed.
+                continue
+            elif current[key] == baseline[key]:
+                # Unchanged fallback data yields to the authoritative DB copy.
+                self._entries[key] = durable_entry
+
+        self._routing_db_loaded = True
+        self._routing_fallback_baseline = None
+
     def _snapshot_routing_locked(self) -> tuple[Dict[str, Any], int]:
         """Capture immutable routing data and a monotonic generation."""
+        self._reconcile_recovered_routing_locked()
         return (
             {key: entry.to_dict() for key, entry in self._entries.items()},
             self._next_routing_generation_locked(),
