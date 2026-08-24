@@ -47,7 +47,6 @@ import {
   knownSessionOwner,
   lineageAliases,
   markSessionRead,
-  ownerLookupSessionRows,
   sessionMatchesStoredId,
   setActiveSessionStoredIdRotation,
   setAwaitingResponse,
@@ -846,8 +845,12 @@ export function openTileGatewayScopes(): Set<string> {
 /**
  * Sync owner resolution for a session id that may be a RUNTIME or a STORED id.
  * Tile route first (exact connectionId+profile, survives relaunch), then the
- * known session owner (row or open-time hint). Returns undefined when no
- * owner is known — the caller falls back to ambient, never to "active".
+ * exact unique owner hint (stamped when a routed create returns / at open
+ * time), then the known session owner (a connection-tagged row's exact route,
+ * else its profile / the hint). The hint outranks the row for the same reason
+ * as contrib/wiring's ladder: a row can be stamped from the ambient profile
+ * and carries no connection. Returns undefined when no owner is known — the
+ * caller falls back to ambient, never to "active".
  */
 export function knownOwnerForSession(sessionId: null | string | undefined): SessionOwnerScope {
   if (!sessionId) {
@@ -859,7 +862,7 @@ export function knownOwnerForSession(sessionId: null | string | undefined): Sess
   return (
     sessionTileOwnerRoute(storedSessionId) ??
     getSessionOwnerHint(storedSessionId) ??
-    knownSessionOwner(ownerLookupSessionRows(), storedSessionId)
+    knownSessionOwner($sessions.get(), storedSessionId)
   )
 }
 
