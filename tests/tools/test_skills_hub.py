@@ -260,7 +260,7 @@ class TestFindSkillInRepoTree:
         auth.get_headers.return_value = {"Accept": "application/vnd.github.v3+json"}
         return GitHubSource(auth=auth)
 
-    @patch("tools.skills_hub.httpx.get")
+    @patch("tools.skills_hub._guarded_http_get")
     def test_finds_deeply_nested_skill(self, mock_get):
         tree_entries = [
             {"path": "README.md", "type": "blob"},
@@ -285,7 +285,7 @@ class TestFindSkillInRepoTree:
         result = self._source()._find_skill_in_repo_tree("davila7/claude-code-templates", "senior-backend")
         assert result == "davila7/claude-code-templates/cli-tool/components/skills/development/senior-backend"
 
-    @patch("tools.skills_hub.httpx.get")
+    @patch("tools.skills_hub._guarded_http_get")
     def test_returns_none_when_repo_api_fails(self, mock_get):
         mock_get.return_value = MagicMock(status_code=404)
         result = self._source()._find_skill_in_repo_tree("owner/repo", "my-skill")
