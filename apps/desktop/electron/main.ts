@@ -37,11 +37,7 @@ import { stopBackendChild as stopBackendChildImpl, stopBackendTreesForUpdate } f
 import { dashboardFallbackArgs, sourceDeclaresServe } from './backend-command'
 import { createBackendConnectionState } from './backend-connection-state'
 import { buildDesktopBackendEnv, hermesManagedNodePathEntries, normalizeHermesHomeRoot } from './backend-env'
-import {
-  isReauthRequiredError,
-  makeUnsignedOauthError,
-  waitForHermesReady
-} from './backend-health'
+import { isReauthRequiredError, makeUnsignedOauthError, waitForHermesReady } from './backend-health'
 import { backendCommandMatches, createBackendOwnership, createBackendShutdownCoordinator } from './backend-ownership'
 import {
   canImportHermesCli,
@@ -10950,6 +10946,7 @@ async function startHermes() {
       releaseBackendChild(hermesProcess)
       throw new Error('Hermes backend start was superseded by a newer connection attempt.')
     }
+
     let backendReady = false
     let rejectBackendStart = null
 

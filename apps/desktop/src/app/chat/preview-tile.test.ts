@@ -34,6 +34,7 @@ describe('preview tiles in Bot Mode', () => {
       source: 'https://example.com',
       url: 'https://example.com'
     }
+
     openPreview(target, 'explicit-link')
 
     const pane = browserPane(previewTabId(target))

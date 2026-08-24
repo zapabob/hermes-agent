@@ -46,7 +46,16 @@ describe('desktop slash command curation', () => {
   })
 
   it('keeps fork management commands out of the desktop command surface', () => {
-    for (const command of ['/auth', '/billing', '/bundles', '/codex-runtime', '/credits', '/memory', '/subgoal', '/whoami']) {
+    for (const command of [
+      '/auth',
+      '/billing',
+      '/bundles',
+      '/codex-runtime',
+      '/credits',
+      '/memory',
+      '/subgoal',
+      '/whoami'
+    ]) {
       expect(resolveDesktopCommand(command)?.surface).toEqual({ kind: 'unavailable', reason: 'advanced' })
       expect(isDesktopSlashCommand(command)).toBe(false)
     }

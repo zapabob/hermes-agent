@@ -81,11 +81,13 @@ export function paneMirror<T>(cfg: PaneMirror<T>): () => void {
     for (const tile of tiles) {
       const key = cfg.key(tile)
       const title = cfg.title(key)
+
       const dock = {
         before: cfg.before?.(tile),
         pane: cfg.anchor?.(tile) ?? 'workspace',
         pos: cfg.dir?.(tile) ?? 'right'
       }
+
       const dockKey = JSON.stringify(dock)
       const workspaceMode = workspaceValue(cfg.workspaceMode, tile)
       const workspaceOwnerKey = workspaceValue(cfg.workspaceOwnerKey, tile)
