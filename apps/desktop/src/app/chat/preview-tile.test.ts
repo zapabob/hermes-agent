@@ -10,7 +10,7 @@ vi.mock('./right-rail/preview-console-store', () => ({
 
 import { contributesToWorkspace } from '@/components/pane-shell/workspace-scope'
 import { registry } from '@/contrib/registry'
-import { closeRightRail, openPreview } from '@/store/preview'
+import { closeRightRail, openPreview, previewTabId, type PreviewTarget } from '@/store/preview'
 
 import { watchPreviewTiles } from './preview-tile'
 
@@ -22,18 +22,21 @@ afterEach(() => {
   closeRightRail()
 })
 
-function browserPane() {
-  return registry.getArea('panes').find(entry => entry.id === 'preview-tile:url:browser')
+function browserPane(tabId: string) {
+  return registry.getArea('panes').find(entry => entry.id === `preview-tile:${tabId}`)
 }
 
 describe('preview tiles in Bot Mode', () => {
   it('registers the in-app Browser as a global pane so Bot Mode can show it', () => {
-    openPreview(
-      { kind: 'url', label: 'example.com', source: 'https://example.com', url: 'https://example.com' },
-      'explicit-link'
-    )
+    const target: PreviewTarget = {
+      kind: 'url',
+      label: 'example.com',
+      source: 'https://example.com',
+      url: 'https://example.com'
+    }
+    openPreview(target, 'explicit-link')
 
-    const pane = browserPane()
+    const pane = browserPane(previewTabId(target))
 
     expect(pane).toBeTruthy()
     expect(pane?.workspaceMode).toBeUndefined()
