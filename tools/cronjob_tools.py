@@ -1263,6 +1263,39 @@ def _apply_continuity(
     return refs or None
 
 
+def _gateway_liveness_notice(plural: bool = False) -> dict:
+    """Build the ``gateway_running``/``warning`` payload for tool results.
+
+    Thin adapter over the shared CLI helper ``hermes_cli.cron._builtin_gateway_liveness``
+    (#87033) so the CLI and this tool can never disagree about what "scheduler
+    active" means. Returns ``{"gateway_running": False, "warning": ...}`` when
+    the builtin ticker has no gateway process to run it, ``{"gateway_running":
+    None}`` when the probe failed, and ``{"gateway_running": True}`` when the
+    scheduler is active. ``plural`` rewords the warning for multi-job results
+    (the ``list`` action).
+    """
+    try:
+        from hermes_cli.cron import _builtin_gateway_liveness
+
+        _gw = _builtin_gateway_liveness()
+    except Exception:
+        return {"gateway_running": None}
+    subject = "these jobs are saved" if plural else "this job is saved"
+    if _gw is False:
+        return {
+            "gateway_running": False,
+            "warning": (
+                f"The Hermes gateway is not running — {subject} "
+                "but will NOT fire until the gateway is started "
+                "(hermes gateway install / hermes gateway start). "
+                "Tell the user the task is scheduled but not active yet."
+            ),
+        }
+    if _gw is None:
+        return {"gateway_running": None}
+    return {"gateway_running": True}
+
+
 def cronjob(
     action: str,
     job_id: Optional[str] = None,
@@ -1412,26 +1445,37 @@ def cronjob(
             _local_notice = _local_delivery_notice(job, _normalize_deliver_param(deliver))
             if _local_notice:
                 _create_message = f"{_create_message} {_local_notice}"
-            return json.dumps(
-                {
-                    "success": True,
-                    "job_id": job["id"],
-                    "name": job["name"],
-                    "skill": job.get("skill"),
-                    "skills": job.get("skills", []),
-                    "schedule": job["schedule_display"],
-                    "repeat": _repeat_display(job),
-                    "deliver": job.get("deliver", "local"),
-                    "next_run_at": job["next_run_at"],
-                    "job": _format_job(job),
-                    "message": _create_message,
-                },
-                indent=2,
-            )
+            # Gateway liveness surfacing (#87033): the builtin scheduler's
+            # ticker lives in the gateway process, so a job created with no
+            # gateway running is stored but will never fire. Tell the model
+            # here — the CLI already warns, but the agent path saw only a
+            # clean success and confidently told the user it was scheduled.
+            _result = {
+                "success": True,
+                "job_id": job["id"],
+                "name": job["name"],
+                "skill": job.get("skill"),
+                "skills": job.get("skills", []),
+                "schedule": job["schedule_display"],
+                "repeat": _repeat_display(job),
+                "deliver": job.get("deliver", "local"),
+                "next_run_at": job["next_run_at"],
+                "job": _format_job(job),
+                "message": _create_message,
+                **_gateway_liveness_notice(),
+            }
+            return json.dumps(_result, indent=2)
 
         if normalized == "list":
             jobs = [_format_job(job) for job in list_jobs(include_disabled=include_disabled)]
-            return json.dumps({"success": True, "count": len(jobs), "jobs": jobs}, indent=2)
+            _result = {"success": True, "count": len(jobs), "jobs": jobs}
+            # Same silent-inert-job class as create (#87033): an agent
+            # inspecting existing jobs in a gateway-less environment must
+            # learn they are not firing, not just see a clean list. An empty
+            # list has nothing inert — stay quiet (and skip the probe).
+            if jobs:
+                _result.update(_gateway_liveness_notice(plural=True))
+            return json.dumps(_result, indent=2)
 
         if not job_id:
             return tool_error(f"job_id is required for action '{normalized}'", success=False)

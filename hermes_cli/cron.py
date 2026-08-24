@@ -63,6 +63,27 @@ def _active_cron_provider_name() -> str:
         return "builtin"
 
 
+def _builtin_gateway_liveness() -> Optional[bool]:
+    """Tri-state liveness of the builtin cron scheduler's trigger.
+
+    Single source of truth shared by the CLI (``_warn_if_gateway_not_running``)
+    and the ``cronjob`` model tool (#87033): the builtin ticker only runs
+    inside the gateway process, so a scheduled job with no live gateway can
+    never fire. Non-builtin providers (e.g. Chronos) fire through their own
+    machinery and are deliberately exempt — a missing gateway process means
+    nothing for them, so they report active. ``None`` = probe failed; callers
+    must not claim either way.
+    """
+    try:
+        if _active_cron_provider_name() != "builtin":
+            return True  # external provider fires jobs without the gateway
+        from hermes_cli.gateway import find_gateway_pids
+
+        return bool(find_gateway_pids())
+    except Exception:
+        return None
+
+
 def _warn_if_gateway_not_running() -> None:
     """Warn that scheduled jobs won't fire unless the gateway is running.
 
@@ -78,16 +99,9 @@ def _warn_if_gateway_not_running() -> None:
     any non-builtin provider; the gateway-process heuristic only speaks to the
     built-in ticker's trigger.
     """
-    try:
-        if _active_cron_provider_name() != "builtin":
-            return
-
-        from hermes_cli.gateway import find_gateway_pids
-
-        if find_gateway_pids():
-            return
-    except Exception:
-        # If we can't determine gateway state, stay quiet rather than nag.
+    # _builtin_gateway_liveness never raises (it maps probe failures to None),
+    # so no guard is needed here — False is the only warn-worthy state.
+    if _builtin_gateway_liveness() is not False:
         return
 
     print(color("  ⚠  Gateway is not running — jobs won't fire automatically.", Colors.YELLOW))
