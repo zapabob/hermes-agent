@@ -1,3 +1,4 @@
+import { hermesApi } from '@/api/client'
 import type {
   HermesConnection,
   HermesReadDirResult,
@@ -70,18 +71,10 @@ function bridge() {
   return desktop
 }
 
-function remoteFsApi<T>(path: string, body?: Record<string, unknown>, scope?: DesktopFsSourceScope): Promise<T> {
-  const connection = $connection.get()
-  const profile = scope ? scope.profile.trim() || 'default' : desktopFsProfile()
-  const connectionId = scope ? scope.connectionId : (connection?.connectionId ?? null)
-
-  const request = body ? { body, method: 'POST' as const, path, profile } : { path, profile }
-
-  if (scope || connection?.connectionId) {
-    return bridge().api<T>({ ...request, connectionId })
-  }
-
-  return bridge().api<T>(request)
+function remoteFsApi<T>(path: string, body?: Record<string, unknown>): Promise<T> {
+  return hermesApi<T>(
+    body ? { body, method: 'POST', path, profile: desktopFsProfile() } : { path, profile: desktopFsProfile() }
+  )
 }
 
 export async function readDesktopDir(path: string): Promise<HermesReadDirResult> {
