@@ -60,16 +60,20 @@ test('probeStartMarker passes a successful marker through', async () => {
 
 // --- real probe: drives the actual OS helper (PowerShell on the Windows lane) ---
 
+// The production PowerShell probe permits a 30-second cold start. Keep the
+// harness budget slightly above it so Vitest does not pre-empt that contract.
+const REAL_PROBE_TEST_TIMEOUT_MS = 35_000
+
 test('processStartMarker resolves a real marker for the current process', async () => {
   const marker = await processStartMarker(process.pid)
 
   assert.match(marker, /^(linux|win|winms|ps):.+/)
-})
+}, REAL_PROBE_TEST_TIMEOUT_MS)
 
 test('processStartMarker rejects for a PID that does not exist', async () => {
   // Largest PIDs are bounded well below this on every supported platform.
   await assert.rejects(processStartMarker(2 ** 30 + 12345))
-})
+}, REAL_PROBE_TEST_TIMEOUT_MS)
 
 // --- PID-only marker helpers --------------------------------------------------
 
