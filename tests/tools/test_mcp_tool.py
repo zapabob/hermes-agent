@@ -558,6 +558,9 @@ class TestToolHandler:
         return patch("tools.mcp_tool._run_on_mcp_loop", side_effect=fake_run)
 
     def test_successful_call(self):
+        import gc
+        import warnings
+
         from tools.mcp_tool import _make_tool_handler, _servers
 
         mock_session = MagicMock()
@@ -569,10 +572,21 @@ class TestToolHandler:
 
         try:
             handler = _make_tool_handler("test_srv", "greet", 120)
-            with self._patch_mcp_loop():
-                result = json.loads(handler({"name": "world"}))
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                with self._patch_mcp_loop():
+                    result = json.loads(handler({"name": "world"}))
+                gc.collect()
             assert result["result"] == "hello world"
             mock_session.call_tool.assert_called_once_with("greet", arguments={"name": "world"})
+            leaked_watchers = [
+                warning
+                for warning in caught
+                if issubclass(warning.category, RuntimeWarning)
+                and "_watch_stdio_children" in str(warning.message)
+                and "was never awaited" in str(warning.message)
+            ]
+            assert leaked_watchers == []
         finally:
             _servers.pop("test_srv", None)
 
@@ -920,6 +934,99 @@ class TestMCPServerTask:
                 assert server._next_stdio_recycle_deadline() is None
 
         asyncio.run(_test())
+
+
+# ---------------------------------------------------------------------------
+# Automatic OAuth interaction boundary
+# ---------------------------------------------------------------------------
+
+class TestAutomaticOAuthInteractionBoundary:
+    def test_connect_suppresses_oauth_unless_explicitly_forced(self, monkeypatch):
+        import tools.mcp_oauth as mcp_oauth
+        import tools.mcp_tool as mcp_tool
+
+        observed_interactivity = []
+        authorization_url = "https://example.invalid/oauth"
+        redirect_handler = mcp_oauth._make_redirect_handler(port=0)
+        browser_open = MagicMock(return_value=True)
+
+        class FakeServer:
+            def __init__(self, name):
+                self.name = name
+
+            async def start(self, _config):
+                observed_interactivity.append(mcp_oauth._is_interactive())
+                await redirect_handler(authorization_url)
+
+            async def shutdown(self):
+                return None
+
+        mock_stdin = MagicMock()
+        mock_stdin.isatty.return_value = True
+        monkeypatch.setattr(mcp_oauth.sys, "stdin", mock_stdin)
+        monkeypatch.setattr(mcp_oauth, "_can_open_browser", lambda: True)
+        monkeypatch.setattr(mcp_oauth.webbrowser, "open", browser_open)
+        monkeypatch.setattr(mcp_tool, "MCPServerTask", FakeServer)
+
+        with pytest.raises(mcp_oauth.OAuthNonInteractiveError):
+            asyncio.run(
+                mcp_tool._connect_server(
+                    "automatic",
+                    {"url": "https://mcp.example"},
+                )
+            )
+
+        with mcp_oauth.force_interactive_oauth():
+            asyncio.run(
+                mcp_tool._connect_server(
+                    "explicit",
+                    {"url": "https://mcp.example"},
+                )
+            )
+
+        with (
+            mcp_oauth.suppress_interactive_oauth(),
+            mcp_oauth.force_interactive_oauth(),
+            pytest.raises(mcp_oauth.OAuthNonInteractiveError),
+        ):
+            asyncio.run(
+                mcp_tool._connect_server(
+                    "suppressed",
+                    {"url": "https://mcp.example"},
+                )
+            )
+
+        assert observed_interactivity == [False, True, False]
+        browser_open.assert_called_once_with(authorization_url)
+
+    def test_reconnects_drop_explicit_oauth_interaction(self, monkeypatch):
+        import tools.mcp_oauth as mcp_oauth
+        import tools.mcp_tool as mcp_tool
+
+        observed_interactivity = []
+
+        async def fake_run_http(server, _config):
+            observed_interactivity.append(mcp_oauth._is_interactive())
+            if len(observed_interactivity) > 1:
+                server._shutdown_event.set()
+            return "reconnect"
+
+        monkeypatch.setattr(mcp_tool, "_ensure_mcp_sdk", lambda: None)
+        monkeypatch.setattr(mcp_tool.MCPServerTask, "_run_http", fake_run_http)
+
+        server = mcp_tool.MCPServerTask("explicit")
+        with mcp_oauth.force_interactive_oauth():
+            asyncio.run(
+                server.run(
+                    {
+                        "url": "https://mcp.example",
+                        "auth": "oauth",
+                        "skip_preflight": True,
+                    }
+                )
+            )
+
+        assert observed_interactivity == [True, False]
 
 
 # ---------------------------------------------------------------------------
@@ -1290,14 +1397,15 @@ class TestBuildSafeEnv:
         with patch.dict("os.environ", fake_env, clear=True):
             result = _build_safe_env(None)
 
-        assert result["ProgramFiles"] == r"C:\Program Files"
-        assert result["ProgramData"] == r"C:\ProgramData"
-        assert result["ProgramW6432"] == r"C:\Program Files"
-        assert result["LOCALAPPDATA"].endswith("Local")
-        assert result["APPDATA"].endswith("Roaming")
-        assert result["USERPROFILE"] == r"C:\Users\alice"
-        assert "GITHUB_TOKEN" not in result
-        assert "OPENAI_API_KEY" not in result
+        normalized = {key.upper(): value for key, value in result.items()}
+        assert normalized["PROGRAMFILES"] == r"C:\Program Files"
+        assert normalized["PROGRAMDATA"] == r"C:\ProgramData"
+        assert normalized["PROGRAMW6432"] == r"C:\Program Files"
+        assert normalized["LOCALAPPDATA"].endswith("Local")
+        assert normalized["APPDATA"].endswith("Roaming")
+        assert normalized["USERPROFILE"] == r"C:\Users\alice"
+        assert "GITHUB_TOKEN" not in normalized
+        assert "OPENAI_API_KEY" not in normalized
 
 
 # ---------------------------------------------------------------------------

@@ -381,6 +381,16 @@ def suppress_interactive_oauth():
         _oauth_interactive_enabled.reset(token)
 
 
+@contextmanager
+def suppress_unforced_interactive_oauth():
+    """Disable OAuth prompts unless an explicit auth flow forced interaction."""
+    if _oauth_interactive_enabled.get() and _oauth_interactive_forced.get():
+        yield
+        return
+    with suppress_interactive_oauth():
+        yield
+
+
 def _can_open_browser() -> bool:
     """Return True if opening a browser is likely to work."""
     # Explicit SSH session → no local display

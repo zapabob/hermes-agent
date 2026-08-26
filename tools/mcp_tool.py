@@ -110,7 +110,7 @@ import shutil
 import sys
 import threading
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from types import SimpleNamespace
 from typing import Callable
 from datetime import datetime
@@ -3985,13 +3985,27 @@ class MCPServerTask:
         self._reconnect_retries = 0
         initial_retries = 0
         backoff = 1.0
+        first_connection_attempt = True
+
+        from tools.mcp_oauth import suppress_interactive_oauth
 
         while True:
             try:
-                if self._is_http():
-                    lifecycle_reason = await self._run_http(config)
-                else:
-                    lifecycle_reason = await self._run_stdio(config)
+                # Explicit /auth and `hermes mcp login` may authorize the
+                # initial attempt. Every later lifecycle attempt is automatic,
+                # so it must remain browser- and stdin-free even though this
+                # long-lived Task copied the caller's ContextVars at creation.
+                oauth_context = (
+                    nullcontext()
+                    if first_connection_attempt
+                    else suppress_interactive_oauth()
+                )
+                first_connection_attempt = False
+                with oauth_context:
+                    if self._is_http():
+                        lifecycle_reason = await self._run_http(config)
+                    else:
+                        lifecycle_reason = await self._run_stdio(config)
                 # Transport returned cleanly. Two cases:
                 #  - _shutdown_event was set: exit the run loop entirely.
                 #  - _reconnect_event was set (auth recovery): loop back and
@@ -5779,6 +5793,8 @@ def _load_mcp_config() -> Dict[str, dict]:
 async def _connect_server(name: str, config: dict) -> MCPServerTask:
     """Create an MCPServerTask, start it, and return when ready.
 
+    Automatic discovery and probes never open a browser or prompt on stdin.
+    Explicit auth flows may wrap this call with ``force_interactive_oauth()``.
     The server Task keeps the connection alive in the background.
     Call ``server.shutdown()`` (on the same event loop) to tear it down.
 
@@ -5796,8 +5812,11 @@ async def _connect_server(name: str, config: dict) -> MCPServerTask:
         # The ownership callback is only for this connection attempt; do not
         # retain its discovery closure for the server's lifetime.
         claim_token = _connect_server_claim.set(None)
+    from tools.mcp_oauth import suppress_unforced_interactive_oauth
+
     try:
-        await server.start(config)
+        with suppress_unforced_interactive_oauth():
+            await server.start(config)
     except asyncio.CancelledError:
         # start() already cancels/reaps server._task on external cancellation
         # (see the comment there) -- awaiting a redundant shutdown() inside a
@@ -6133,12 +6152,14 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
                             f"waiting {float(tool_timeout):.0f}s"
                         )
                     _call_coro = server.session.call_tool(tool_name, arguments=args)
+                    _call_is_coroutine = asyncio.iscoroutine(_call_coro)
                     _watch_children = getattr(server, "_watch_stdio_children", None)
-                    _watch_ok = (
-                        _watch_children is not None
-                        and inspect.isawaitable(_watch_children())
-                        and asyncio.iscoroutine(_call_coro)
+                    _watch_awaitable = (
+                        _watch_children()
+                        if callable(_watch_children) and _call_is_coroutine
+                        else None
                     )
+                    _watch_ok = inspect.isawaitable(_watch_awaitable)
                     if not _watch_ok:
                         # Stubbed sessions (MagicMock in tests) return a
                         # non-awaitable, or there is no child-watcher to race
@@ -6146,7 +6167,7 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
                         # semantics.
                         result = (
                             await _call_coro
-                            if asyncio.iscoroutine(_call_coro)
+                            if _call_is_coroutine
                             else _call_coro
                         )
                     else:
@@ -6155,7 +6176,9 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
                         # the call immediately instead of riding out the full
                         # tool timeout.
                         rpc_task = asyncio.ensure_future(_call_coro)
-                        watch_task = asyncio.ensure_future(_watch_children())
+                        # Reuse the awaitable inspected above; creating a second
+                        # coroutine leaks the first one.
+                        watch_task = asyncio.ensure_future(_watch_awaitable)
                         try:
                             done, _pending = await asyncio.wait(
                                 {rpc_task, watch_task},
