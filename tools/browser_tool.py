@@ -2693,7 +2693,7 @@ def _kill_process_tree(proc: "subprocess.Popen") -> None:
 
 def _legacy_kill_process_tree(proc: "subprocess.Popen") -> None:
     """Pre-#85125 local tree-kill — fallback when agent.deadline is unavailable."""
-    if os.name == "nt":
+    if _is_windows():
         try:
             subprocess.run(
                 ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
@@ -2705,7 +2705,7 @@ def _legacy_kill_process_tree(proc: "subprocess.Popen") -> None:
             pass
         return
     # os.killpg/signal.SIGKILL don't exist on Windows; this branch is
-    # POSIX-only (the `os.name == "nt"` check above already returns first
+    # POSIX-only (the `_is_windows()` check above already returns first
     # on Windows), but resolve them defensively via getattr anyway so an
     # accidental future refactor that drops that guard degrades to a plain
     # kill() instead of AttributeError — same discipline as

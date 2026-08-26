@@ -65,9 +65,11 @@ def test_current_config_keeps_stale_key_visible_to_doctor(tmp_path):
         raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         findings = dict(collect_relay_plugin_cutover_findings(raw, {}))
 
-    # No v38 -> v39 migration is allowed to discard a stale user entry. The
-    # doctor finding is the explicit hand-off to native core Relay config.
-    assert raw == original
+    # Later migrations may advance the schema version or materialise unrelated
+    # defaults, but none may discard the stale entry before doctor reports the
+    # explicit hand-off to native core Relay config.
+    assert raw["_config_version"] >= original["_config_version"]
+    assert raw["plugins"] == original["plugins"]
     assert findings["plugins.enabled: observability/nemo_relay"].endswith(
         f"configure {RELAY_PLUGINS_CONFIG_ENV}"
     )
