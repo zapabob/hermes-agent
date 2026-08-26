@@ -2472,7 +2472,7 @@ class ContextCompressor(ContextEngine):
     @property
     def tail_token_budget(self) -> int:
         if self._tail_token_budget is None:
-            if getattr(self, "tail_mode", "legacy") == "lean":
+            if getattr(self, "tail_mode", "lean") == "lean":
                 # Lean mode (#compaction-v2): the verbatim tail is a small
                 # recency window, not a context hoard — the upgraded summary
                 # (verbatim user messages, constraints section, recovery
@@ -3091,8 +3091,12 @@ class ContextCompressor(ContextEngine):
         self._apply_threshold_tokens_cap()
         # Recalculate token budgets for the new context length so the
         # compressor stays calibrated after a model switch (e.g. 200K → 32K).
-        target_tokens = int(self.threshold_tokens * self.summary_target_ratio)
-        self.tail_token_budget = target_tokens
+        # Reset to None and let the tail_token_budget property recompute
+        # through the MODE-AWARE path: assigning the legacy formula here
+        # directly silently reverted lean mode to the 0.20×threshold hoard
+        # on every mid-session model switch.
+        self._tail_token_budget = None
+        _ = self.tail_token_budget  # eager recompute, same timing as before
         self.max_summary_tokens = min(
             int(context_length * 0.05), _SUMMARY_TOKENS_CEILING,
         )
@@ -4787,7 +4791,7 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         verbatim user messages and the recovery pointer never depend on the
         summarizer's cooperation. No-op in legacy mode.
         """
-        if getattr(self, "tail_mode", "legacy") != "lean":
+        if getattr(self, "tail_mode", "lean") != "lean":
             return summary
         if _LEAN_ANCHOR_HEADING not in summary:
             summary += _redact_compaction_text(
@@ -7559,7 +7563,7 @@ This compaction should PRIORITISE preserving all information related to the focu
         # Lean mode: snapshot pristine tool contents BEFORE Phase-1 pruning so
         # the chunk digests summarize what actually happened, not the pruned
         # stubs (#compaction-v2). Bounded per entry to keep memory sane.
-        if getattr(self, "tail_mode", "legacy") == "lean":
+        if getattr(self, "tail_mode", "lean") == "lean":
             self._lean_pristine_tools = {
                 str(m.get("tool_call_id") or ""): (m.get("content") or "")[:80_000]
                 for m in messages
@@ -7637,7 +7641,7 @@ This compaction should PRIORITISE preserving all information related to the focu
         # budget binds without the tool-group alignment floor hoarding old
         # output (#compaction-v2). Runs before summary generation so the
         # recovery stubs are already in place if the summary aborts.
-        if getattr(self, "tail_mode", "legacy") == "lean":
+        if getattr(self, "tail_mode", "lean") == "lean":
             messages = self._demote_stale_tail_tools(messages, compress_end)
         # Snapshot the rehydration state so an aborted attempt below can roll
         # it back. The self-heal scan mutates ``_previous_summary`` (populating

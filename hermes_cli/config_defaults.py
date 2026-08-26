@@ -849,6 +849,9 @@ DEFAULT_CONFIG = {
                                       #              tokens after compaction; costs a few
                                       #              extra summarizer calls at the
                                       #              compaction boundary.
+                                      #   "legacy" — pre-#87326 0.20×threshold verbatim
+                                      #              tail (100-240K tokens on big-window
+                                      #              or raised-threshold setups).
         "protect_last_n": 20,         # minimum recent messages to keep uncompressed
         "min_tail_user_messages": 1,  # REAL (actionable) user messages guaranteed to
                                       # survive in the uncompressed tail. 1 = existing
