@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url'
 
 import { test } from 'vitest'
 
-import { gitRootForIpc } from './git-root'
+import { gitRootForIpc, selectGitRoot } from './git-root'
 
 function mkTmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-git-root-'))
@@ -38,5 +38,21 @@ test('gitRootForIpc resolves directories files missing descendants and file URLs
     assert.equal(await gitRootForIpc(path.join(srcDir, 'missing.ts')), root)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('linked worktree remains the first canonical update root', async () => {
+  const worktree = mkTmpDir()
+  const activeInstall = mkTmpDir()
+
+  try {
+    fs.writeFileSync(path.join(worktree, '.git'), 'gitdir: C:/repo/.git/worktrees/desktop', 'utf8')
+    fs.mkdirSync(path.join(activeInstall, '.git'))
+
+    assert.equal(await gitRootForIpc(worktree), worktree)
+    assert.equal(selectGitRoot([worktree, activeInstall], activeInstall), worktree)
+  } finally {
+    fs.rmSync(worktree, { recursive: true, force: true })
+    fs.rmSync(activeInstall, { recursive: true, force: true })
   }
 })

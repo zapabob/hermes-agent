@@ -47,4 +47,10 @@ async function gitRootForIpc(startPath, options: { fs?: typeof fs } = {}) {
   }
 }
 
-export { findGitRoot, gitRootForIpc }
+function selectGitRoot(candidates, fallback, fsImpl = fs) {
+  const roots = candidates.filter(Boolean)
+
+  return roots.find(candidate => findGitRoot(candidate, fsImpl) === candidate) || roots[0] || fallback
+}
+
+export { findGitRoot, gitRootForIpc, selectGitRoot }
