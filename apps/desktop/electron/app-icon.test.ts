@@ -1,82 +1,112 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 
 import { test } from 'vitest'
 
-import { appIconCandidates, resolveAppIconPath } from './app-icon'
+import { appIconCandidates, decodingFileProbe, resolveAppIcon } from './app-icon'
 
-test('windows candidates prefer resources then assets .ico over apple-touch', () => {
-  const candidates = appIconCandidates({
-    appRoot: 'C:\\app',
-    resourcesPath: 'C:\\resources',
-    platform: 'win32'
+// Regression: a packaged app.asar can contain a TRUNCATED apple-touch-icon.png
+// (interrupted electron-builder run, partial copy). Electron's
+// BrowserWindow({ icon }) / app.dock.setIcon() decode synchronously and THROW
+// on undecodable bytes, which killed the main process inside createWindow()
+// and took the app down mid-session. Icon resolution must fail soft: skip a
+// candidate that exists but does not decode, exactly like a missing one.
+
+test('resolveAppIcon skips an existing but undecodable candidate', () => {
+  // First candidate "exists" (probe says true) but does not decode; second
+  // decodes. The resolver must return the second, not the first.
+  const probeCalls: string[] = []
+
+  const probe = (p: string) => {
+    probeCalls.push(p)
+
+    return p !== '/packaged/app.asar/public/apple-touch-icon.png'
+  }
+
+  const picked = resolveAppIcon(
+    ['/packaged/app.asar/public/apple-touch-icon.png', '/packaged/app.asar/dist/apple-touch-icon.png'],
+    probe
+  )
+
+  assert.equal(picked, '/packaged/app.asar/dist/apple-touch-icon.png')
+  assert.deepEqual(probeCalls, [
+    '/packaged/app.asar/public/apple-touch-icon.png',
+    '/packaged/app.asar/dist/apple-touch-icon.png'
+  ])
+})
+
+test('resolveAppIcon returns undefined when every candidate fails the probe', () => {
+  const picked = resolveAppIcon(['/a.png', '/b.ico'], () => false)
+  assert.equal(picked, undefined)
+})
+
+test('resolveAppIcon returns the first candidate that passes the probe', () => {
+  const picked = resolveAppIcon(['/a.png', '/b.png'], () => true)
+  assert.equal(picked, '/a.png')
+})
+
+test('decodingFileProbe rejects a missing file', () => {
+  const missing = path.join(os.tmpdir(), `hermes-icon-missing-${process.pid}.png`)
+  assert.equal(decodingFileProbe(missing), false)
+})
+
+test('decodingFileProbe rejects an existing but empty (0-byte) file', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-icon-'))
+  const empty = path.join(dir, 'apple-touch-icon.png')
+  fs.writeFileSync(empty, Buffer.alloc(0))
+
+  try {
+    // 0 bytes exist but decode to an empty image — and without electron in
+    // the test runtime the require itself fails. Both paths must be false.
+    assert.equal(decodingFileProbe(empty), false)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('decodingFileProbe rejects a directory', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-icon-dir-'))
+
+  try {
+    assert.equal(decodingFileProbe(dir), false)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('appIconCandidates keeps the documented precedence ladder', () => {
+  const mac = appIconCandidates({
+    isWindows: false,
+    appRoot: '/Applications/Hermes.app/Contents/Resources',
+    unpackedPathFor: p => `${p}.unpacked`
   })
 
-  assert.equal(candidates[0], path.join('C:\\resources', 'icon.ico'))
-  assert.equal(candidates[1], path.join('C:\\app', 'assets', 'icon.ico'))
-  assert.ok(candidates.includes(path.join('C:\\app', 'public', 'apple-touch-icon.png')))
-  assert.ok(
-    candidates.indexOf(path.join('C:\\app', 'assets', 'icon.ico')) <
-      candidates.indexOf(path.join('C:\\app', 'public', 'apple-touch-icon.png'))
-  )
-})
-
-test('darwin prefers native icns/.png ahead of the packaged .ico', () => {
-  const candidates = appIconCandidates({
-    appRoot: '/Applications/Hermes.app/Contents/Resources/app.asar',
-    resourcesPath: '/Applications/Hermes.app/Contents/Resources',
-    platform: 'darwin'
-  })
-
-  // extraResources always ships resources/icon.ico (the Windows PE-stamp
-  // source) on every platform, so the macOS-native .icns/.png must be ordered
-  // ahead of it; otherwise .ico would win first-pick on Darwin even when a
-  // proper .icns exists.
-  assert.equal(candidates[0], path.join('/Applications/Hermes.app/Contents/Resources', 'icon.icns'))
-  assert.equal(candidates[1], path.join('/Applications/Hermes.app/Contents/Resources', 'icon.png'))
-  assert.equal(candidates[2], path.join('/Applications/Hermes.app/Contents/Resources', 'icon.ico'))
-  assert.ok(
-    candidates.indexOf(path.join('/Applications/Hermes.app/Contents/Resources/app.asar', 'assets', 'icon.icns')) <
-      candidates.indexOf(
-        path.join('/Applications/Hermes.app/Contents/Resources/app.asar', 'public', 'apple-touch-icon.png')
-      )
-  )
-})
-
-test('resolveAppIconPath prefers icns when Darwin resources include icns and ico', () => {
-  const resourcesPath = '/Applications/Hermes.app/Contents/Resources'
-  const icnsPath = path.join(resourcesPath, 'icon.icns')
-  const icoPath = path.join(resourcesPath, 'icon.ico')
-  const existing = new Set([icnsPath, icoPath])
-
-  const resolved = resolveAppIconPath(
-    { appRoot: '/Applications/Hermes.app/Contents/Resources/app.asar', resourcesPath, platform: 'darwin' },
-    filePath => existing.has(filePath)
-  )
-
-  assert.equal(resolved, icnsPath)
-})
-
-test('resolveAppIconPath returns first existing candidate', () => {
-  const existing = new Set([
-    path.join('C:\\app', 'public', 'apple-touch-icon.png'),
-    path.join('C:\\resources', 'icon.ico')
+  assert.deepEqual(mac, [
+    path.join('/Applications/Hermes.app/Contents/Resources', 'public', 'apple-touch-icon.png'),
+    path.join('/Applications/Hermes.app/Contents/Resources', 'dist', 'apple-touch-icon.png'),
+    path.join('/Applications/Hermes.app/Contents/Resources.unpacked', 'dist', 'apple-touch-icon.png')
   ])
 
-  const resolved = resolveAppIconPath(
-    { appRoot: 'C:\\app', resourcesPath: 'C:\\resources', platform: 'win32' },
-    filePath => existing.has(filePath)
+  // Windows prepends the two full-bleed .ico rungs ahead of the PNG ladder.
+  const win = appIconCandidates({
+    isWindows: true,
+    appRoot: 'C:\\app',
+    resourcesPath: 'C:\\resources',
+    unpackedPathFor: p => `${p}\\unpacked`
+  })
+
+  assert.equal(win.length, 5)
+  assert.equal(win.filter(c => c.endsWith('.ico')).length, 2)
+  assert.equal(
+    win[0],
+    path.join('C:\\resources', 'icon.ico'),
+    'resources/ icon.ico is the highest-precedence Windows rung'
   )
-
-  assert.equal(resolved, path.join('C:\\resources', 'icon.ico'))
-})
-
-test('resolveAppIconPath falls back to apple-touch when ico missing', () => {
-  const existing = new Set([path.join('/app', 'public', 'apple-touch-icon.png')])
-
-  const resolved = resolveAppIconPath({ appRoot: '/app', resourcesPath: '/resources', platform: 'linux' }, filePath =>
-    existing.has(filePath)
+  assert.equal(
+    win.filter(c => c.endsWith('apple-touch-icon.png')).length,
+    3,
+    'all three PNG rungs remain after the ico rungs'
   )
-
-  assert.equal(resolved, path.join('/app', 'public', 'apple-touch-icon.png'))
 })

@@ -1,90 +1,85 @@
+import fs from 'node:fs'
 import path from 'node:path'
 
+import { nativeImage } from 'electron'
+
 /**
- * Resolve the native BrowserWindow / dock icon path.
+ * Validate that a candidate app-icon file exists and decodes as an image.
  *
- * Why this order matters on Windows: the taskbar / Start Menu / .lnk identity
- * comes from the PE icon stamped onto Hermes.exe (assets/icon.ico via
- * set-exe-identity / extraResources). BrowserWindow `{ icon }` must prefer that
- * same .ico (or resources/icon.ico) — not apple-touch-icon.png — or Alt+Tab /
- * window grouping can show a different glyph than the taskbar.
+ * Electron's `new BrowserWindow({ icon })` and `app.dock.setIcon()` decode the
+ * file synchronously on the main process and THROW when the bytes are not a
+ * decodable image — `statSync().isFile()` only proves the file exists, not that
+ * it decodes. A truncated or zero-byte PNG inside a packaged `app.asar` (e.g.
+ * interrupted electron-builder run) therefore killed the main process inside
+ * `createWindow()` and took the whole app down mid-session: the window never
+ * appeared, running turns lost their renderer, and the desktop log showed
+ * `Uncaught exception: Error: Failed to load image from path
+ * '.../app.asar/public/apple-touch-icon.png' at createWindow`.
+ *
+ * This helper makes icon resolution fail-soft: a candidate that exists but does
+ * not decode is skipped like a missing one, so the app falls through to the
+ * next candidate (or starts with the platform default icon) instead of dying.
+ * `nativeImage.createFromPath` is Electron's own decoder with the same failure
+ * mode, so callers can inject a probe matching their environment; the shipped
+ * probe decodes eagerly and treats a thrown error OR an empty image as invalid.
  */
+export type IconProbe = (filePath: string) => boolean
 
-export type AppIconPathOptions = {
-  appRoot: string
-  resourcesPath?: string | null
-  /** When APP_ROOT is inside app.asar, Electron still serves sibling files. */
-  unpackedAppRoot?: string | null
-  platform?: NodeJS.Platform
+/** Eager-decoding default probe: the file must decode to a non-empty image. */
+export function decodingFileProbe(filePath: string): boolean {
+  try {
+    if (!fs.statSync(filePath).isFile()) {
+      return false
+    }
+  } catch {
+    return false
+  }
+
+  try {
+    return !nativeImage.createFromPath(filePath).isEmpty()
+  } catch {
+    return false
+  }
 }
 
 /**
- * Candidate absolute paths, highest priority first.
- * Pure: no fs I/O — caller picks the first existing path.
+ * Pick the first app-icon candidate that exists AND decodes; `undefined` when
+ * none do (callers already treat a missing icon as optional — `if (icon)`).
+ *
+ * Pure over `(candidates, probe)` so the precedence ladder is unit-testable
+ * without a running Electron app; the shipped probe injects the real decoder.
  */
-export function appIconCandidates({
-  appRoot,
-  resourcesPath = null,
-  unpackedAppRoot = null,
-  platform = process.platform
-}: AppIconPathOptions): string[] {
-  const roots = [appRoot, unpackedAppRoot].filter((r): r is string => Boolean(r))
-  const out: string[] = []
-
-  // 1) Packaged extraResources copy — byte-identical to the PE stamp source.
-  if (resourcesPath) {
-    if (platform === 'darwin') {
-      // extraResources always ships resources/icon.ico (the Windows PE-stamp
-      // source) on every platform, so without this reorder the .ico candidate
-      // would win first-pick on Darwin even though a native .icns/.png exists.
-      // Prefer macOS-native formats so the dock icon stays crisp.
-      out.push(path.join(resourcesPath, 'icon.icns'))
-      out.push(path.join(resourcesPath, 'icon.png'))
+export function resolveAppIcon(
+  candidates: readonly string[],
+  probe: IconProbe = decodingFileProbe
+): string | undefined {
+  for (const candidate of candidates) {
+    if (probe(candidate)) {
+      return candidate
     }
-
-    out.push(path.join(resourcesPath, 'icon.ico'))
   }
 
-  // 2) Dev / asar-packaged assets next to the app (files: assets/**).
-  for (const root of roots) {
-    if (platform === 'darwin') {
-      // Same reasoning as the extraResources block: keep .icns ahead of .ico on
-      // macOS so the native format is selected when both are present.
-      out.push(path.join(root, 'assets', 'icon.icns'))
-    }
-
-    out.push(path.join(root, 'assets', 'icon.ico'))
-    out.push(path.join(root, 'assets', 'icon.png'))
-  }
-
-  // 3) Renderer favicon last — historically used, but can drift from the
-  //    stamped .ico; keep as a soft fallback so windows still get *an* icon.
-  for (const root of roots) {
-    out.push(path.join(root, 'public', 'apple-touch-icon.png'))
-    out.push(path.join(root, 'dist', 'apple-touch-icon.png'))
-  }
-
-  // Dedupe while preserving order.
-  const seen = new Set<string>()
-  const unique: string[] = []
-
-  for (const candidate of out) {
-    const key = platform === 'win32' ? candidate.toLowerCase() : candidate
-
-    if (seen.has(key)) {
-      continue
-    }
-
-    seen.add(key)
-    unique.push(candidate)
-  }
-
-  return unique
+  return undefined
 }
 
-export function resolveAppIconPath(
-  options: AppIconPathOptions,
-  exists: (filePath: string) => boolean
-): string | undefined {
-  return appIconCandidates(options).find(exists)
+/**
+ * Build the platform-aware candidate ladder shared by every window factory.
+ * Kept next to the resolver so precedence has one home; `appRoot` is injected
+ * (packaged `APP_ROOT` vs dev tree) and `unpackedPathFor` maps into
+ * `app.asar.unpacked` for builds that leave assets outside the archive.
+ */
+export function appIconCandidates(opts: {
+  isWindows: boolean
+  appRoot: string
+  resourcesPath?: string
+  unpackedPathFor: (p: string) => string
+}): string[] {
+  const { isWindows, appRoot, resourcesPath, unpackedPathFor } = opts
+
+  return [
+    ...(isWindows ? [path.join(resourcesPath ?? '', 'icon.ico'), path.join(appRoot, 'assets', 'icon.ico')] : []),
+    path.join(appRoot, 'public', 'apple-touch-icon.png'),
+    path.join(appRoot, 'dist', 'apple-touch-icon.png'),
+    path.join(unpackedPathFor(appRoot), 'dist', 'apple-touch-icon.png')
+  ]
 }
