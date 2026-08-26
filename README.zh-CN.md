@@ -1,208 +1,190 @@
-<p align="center">
-  <img src="assets/banner.png" alt="Hermes Agent" width="100%">
+# Hermes Agent Windows Workstation Edition
+
+<p align="right">
+  <a href="README.md"><kbd>English</kbd></a>
+  <a href="README.ja.md"><kbd>日本語</kbd></a>
+  <a href="README.zh-CN.md"><kbd>简体中文</kbd></a>
 </p>
 
-# Hermes Agent ☤
+> [!NOTE]
+> 英文版 `README.md` 是规范正本。本简体中文版以英文版为准并随其更新。
 
-<p align="center">
-  <a href="https://hermes-agent.nousresearch.com/docs/"><img src="https://img.shields.io/badge/Docs-hermes--agent.nousresearch.com-FFD700?style=for-the-badge" alt="Documentation"></a>
-  <a href="https://discord.gg/NousResearch"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
-  <a href="https://github.com/NousResearch/hermes-agent/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
-  <a href="https://nousresearch.com"><img src="https://img.shields.io/badge/Built%20by-Nous%20Research-blueviolet?style=for-the-badge" alt="Built by Nous Research"></a>
-  <a href="README.md"><img src="https://img.shields.io/badge/Lang-English-lightgrey?style=for-the-badge" alt="English"></a>
-  <a href="README.ur-pk.md"><img src="https://img.shields.io/badge/Lang-اردو-green?style=for-the-badge" alt="اردو"></a>
-</p>
+Hermes Agent 的 Windows 优先下游发行版。
 
-**由 [Nous Research](https://nousresearch.com) 构建的自进化 AI 代理。** 它是唯一内置学习闭环的智能代理——从经验中创建技能，在使用中改进技能，主动持久化知识，搜索过往对话，并在跨会话中逐步构建对你的深度理解。可以在 $5 的 VPS 上运行，也可以在 GPU 集群上运行，或者使用几乎零成本的 Serverless 基础设施。它不绑定你的笔记本——你可以在 Telegram 上与它对话，而它在云端 VM 上工作。
+这是一个非官方的下游发行版。
+本项目不隶属于 Nous Research，也未获得其认可。
+原版 Hermes Agent 由 Nous Research 开发，并采用 MIT License。
 
-支持任意模型——[Nous Portal](https://portal.nousresearch.com)、[OpenRouter](https://openrouter.ai)（200+ 模型）、[NVIDIA NIM](https://build.nvidia.com)（Nemotron）、[小米 MiMo](https://platform.xiaomimimo.com)、[z.ai/GLM](https://z.ai)、[Kimi/Moonshot](https://platform.moonshot.ai)、[MiniMax](https://www.minimax.io)、[Hugging Face](https://huggingface.co)、OpenAI，或自定义端点。使用 `hermes model` 即可切换——无需改代码，无锁定。
+[![Windows Workstation Tier-1 CI](https://github.com/zapabob/hermes-agent-windows/actions/workflows/fork-cicd.yml/badge.svg)](https://github.com/zapabob/hermes-agent-windows/actions/workflows/fork-cicd.yml)
 
-<table>
-<tr><td><b>真正的终端界面</b></td><td>完整的 TUI，支持多行编辑、斜杠命令自动补全、对话历史、中断重定向和流式工具输出。</td></tr>
-<tr><td><b>随你所在</b></td><td>Telegram、Discord、Slack、WhatsApp、Signal 和 CLI——全部从单个网关进程运行。语音备忘录转写、跨平台对话连续性。</td></tr>
-<tr><td><b>闭环学习</b></td><td>代理管理记忆并定期自我提醒。复杂任务后自动创建技能。技能在使用中自我改进。FTS5 会话搜索配合 LLM 摘要实现跨会话回溯。<a href="https://github.com/plastic-labs/honcho">Honcho</a> 辩证式用户建模。兼容 <a href="https://agentskills.io">agentskills.io</a> 开放标准。</td></tr>
-<tr><td><b>定时自动化</b></td><td>内置 cron 调度器，支持向任何平台投递。日报、夜间备份、周审计——全部用自然语言描述，无人值守运行。</td></tr>
-<tr><td><b>委派与并行</b></td><td>生成隔离子代理处理并行工作流。编写 Python 脚本通过 RPC 调用工具，将多步管道压缩为零上下文开销的轮次。</td></tr>
-<tr><td><b>随处运行</b></td><td>六种终端后端——本地、Docker、SSH、Daytona、Singularity 和 Modal。Daytona 和 Modal 提供 Serverless 持久化——代理环境空闲时休眠、按需唤醒，空闲期间几乎零成本。$5 VPS 或 GPU 集群都能跑。</td></tr>
-<tr><td><b>研究就绪</b></td><td>批量轨迹生成、轨迹压缩——用于训练下一代工具调用模型。</td></tr>
-</table>
+## 1. 产品定位
 
----
+Hermes Agent Windows Workstation Edition 是面向持久运行的本地 AI 工作站、功能完整的
+Windows 优先下游发行版。它保留 Hermes CLI 命令、公开契约、插件模型和 upstream 历史，
+同时为 Windows 原生运行、本地模型、记忆、语音、VR/Unity 与恢复机制维护明确的下游策略。
 
-## 快速安装
+产品功能台账位于 [FEATURES.yaml](FEATURES.yaml)。保留在 upstream 所有文件中的直接补丁，
+由 [CARRY.yaml](CARRY.yaml) 单独追踪。
 
-```bash
-curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+## 2. Windows 优先目标
+
+主要目标平台是配备原生 Python、原生 Node/Electron、交互式桌面和消费级 NVIDIA GPU 的
+Windows 11 x64。设计支持本地 LLM 与 embedding 服务、语音服务、VRChat/Unity 集成及
+远程管理的持续运行。
+
+无论 upstream 如何安排平台优先级，Windows 都是独立的 Tier-1 目标。原生行为在
+`windows-latest` 上测试；Linux 交叉编译不能作为 Windows 运行时证据。
+
+## 3. 适用人群
+
+本发行版面向维护 Windows AI 工作站，并需要从源码层面控制本地推理、长期运行服务、记忆、
+桌面行为与恢复机制的运维人员和开发者。使用者应熟悉 PowerShell、Git、Python 环境、
+Node 工具以及 CI 结果的阅读。
+
+如果需要最简洁的 Hermes 官方安装方式和 upstream 支持模式，请使用第 15 节链接的原版项目。
+
+## 4. 下游优势
+
+本下游版增加了 Windows 原生运行与恢复契约、外部 Go watchdog、本地 llama.cpp/GGUF 与
+embedding 生命周期、本地秘书及 provider 集成、semantic memory 与 cognitive memory
+扩展、VRChat/Unity 和本地语音路由、OSINT/Shinka 扩展、Desktop Git/review 界面，
+以及额外的 security 与 provider fallback 覆盖。
+
+这些能力通过官方 Hermes API 组合运行。本 fork 不会为 session、approval、profile、
+gateway、model catalogue 或 tool registry 建立并行的权威来源。
+
+## 5. 已验证功能矩阵
+
+| 领域 | 已验证实现 | 契约证据 |
+| --- | --- | --- |
+| Windows runtime | 原生 path、process、IPC、NTFS handoff、terminal、credential、power 与 GPU helper | `tests/downstream/test_windows_contracts.py` |
+| Recovery | 外部 Go watchdog 与由 watchdog 管理的 Desktop backend | `scripts/windows/watchdog-go/*_test.go` |
+| Local inference | llama.cpp/GGUF fallback 与 hot-swap script | `tests/hermes_cli/test_llama_fallback_runtime.py` |
+| Local embeddings | watchdog embedding lifecycle 与 semantic graph backend | `scripts/windows/watchdog-go/embedding_test.go` |
+| Local secretary | 基于官方 agent boundary 的 read/write action 分离 | `tests/downstream/test_upstream_api_contracts.py` |
+| Providers | Hypura/local provider 集成与 provider rotation/fallback | `tests/fork/test_hypura_oai_proxy.py` |
+| Memory | Semantic Graph hybrid retrieval 与 Ebbinghaus cognitive extension | `tests/plugins/test_semantic_graph_registration.py` |
+| VR and Unity | VRChat autonomy tooling 与 Unity bridge | `tests/plugins/test_vrchat_autonomy_plugin.py` |
+| Voice | Irodori、VOICEVOX 与 local TTS route | `tests/plugins/test_irodori_tts_plugin.py` |
+| AITuber | AITuber OnAir 与 AITuber Kit plugin | `tests/plugins/test_aituber_onair_plugin.py` |
+| OSINT/Shinka | Shinka、SitDeck、WorldMonitor 与 OSINT plugin surface | `tests/plugins/test_shinka_osint_plugin.py` |
+| Desktop | 通过官方 Desktop IPC 与 pane contract 扩展 Git/review | `apps/desktop/electron/git-review-ops.test.ts` |
+| Security | security guidance 与强化的 approval/execution boundary | `tests/plugins/test_security_guidance_plugin.py` |
+
+每项功能的所有者、公开 surface、upstream 重叠范围、Windows 要求、测试和集成策略，
+均记录在 `FEATURES.yaml` 中。
+
+## 6. Windows Tier-1 支持契约
+
+Tier-1 覆盖原生 drive path、MSYS `/c/...` 与受支持的 WSL `/mnt/c/...` alias、NTFS lock、
+已锁定 executable 与 extension module 的 update、process tree、适用的 Job Object 行为、
+PowerShell quoting、Git Bash boundary、CP932/UTF-8 boundary、CRLF、venv `Scripts\\`，
+以及 Electron stdio pipe。
+
+运行时资格验证覆盖 sleep/resume、network 与 loopback provider 恢复、Desktop relaunch、
+updater handoff、watchdog 恢复、llama restart 与 hot-swap、embedding restart，
+以及 profile/session persistence。规范契约见
+[.codex/WINDOWS_PLATFORM_CONTRACT.md](.codex/WINDOWS_PLATFORM_CONTRACT.md)。
+
+## 7. 本地 AI 架构
+
+官方 Hermes provider 与 model catalogue 契约仍是权威来源。下游本地运行时通过这些契约接入：
+llama.cpp/GGUF 使用 local fallback runtime，Hypura 使用 provider plugin seam，
+local embedding 使用 Semantic Graph backend 与 watchdog 管理的 loopback service。
+
+运维脚本保留在 `scripts/windows/` 下。运行时 plugin entrypoint 保留在 `plugins/` 下，
+使官方 discovery 能够继续工作。
+
+## 8. Watchdog 与恢复架构
+
+`scripts/windows/watchdog-go` 是唯一的外层自动重启权威。它可以监控 packaged Desktop、
+发布 prewarmed backend manifest，并协调已配置的 local embedding process。Desktop、
+backend、llama 与 embedding component 可以公开 health 或请求恢复，但不会形成各自独立的
+自动重启 loop。
+
+下游 Python service module 是无副作用的契约。实际的 operator startup 与 deployment
+仍由 `scripts/windows/` 下的 PowerShell 和 Go surface 负责。
+## 9. 记忆与 semantic retrieval
+
+Semantic Graph plugin 通过官方 plugin 与 memory interface 提供 graph storage、
+hybrid retrieval、embedding、fusion、abstention 和 cognitive helper。Ebbinghaus provider
+增加 experience 与 retention policy，并可连接 Semantic Graph。两者均保留独立的
+plugin entrypoint 与针对性的 test suite。
+
+## 10. VRChat、Unity 与语音集成
+
+VRChat autonomy tool、observation/relay helper、Unity bridge package、VOICEVOX、
+Irodori 及其他 local TTS route 都是下游所有的功能。它们使用官方 plugin、tool 与
+TTS contract，而不会把 core 改造成 VR 或 voice 专用 runtime。
+
+外部发布与写入 action 仍须明确 approval。本地生成不代表获得向外部 account 发布内容或
+修改其状态的授权。
+
+## 11. 安装
+
+本仓库目前没有对外提供经过验证的 fork 专用 binary installer。请在 PowerShell 中从
+source 安装：
+
+```powershell
+git clone https://github.com/zapabob/hermes-agent-windows.git
+Set-Location hermes-agent-windows
+uv sync --all-extras
+uv run hermes --help
+uv run hermes setup
 ```
 
-支持 Linux、macOS、WSL2 和 Android (Termux)。安装程序会自动处理平台特定的配置。
+Desktop 开发与 source build：
 
-> **Android / Termux：** 已测试的手动安装路径请参考 [Termux 指南](https://hermes-agent.nousresearch.com/docs/getting-started/termux)。在 Termux 上，Hermes 会安装精选的 `.[termux]` 扩展，因为完整的 `.[all]` 扩展会拉取 Android 不兼容的语音依赖。
->
-> **Windows：** 在 PowerShell 中运行：
-> ```powershell
-> iex (irm https://hermes-agent.nousresearch.com/install.ps1)
-> ```
-> 安装完成后，可能需要重启终端，然后运行 `hermes` 开始对话。
-
-安装后：
-
-```bash
-source ~/.bashrc    # 重新加载 shell（或: source ~/.zshrc）
-hermes              # 开始对话！
+```powershell
+npm ci
+npm --workspace apps/desktop run typecheck
+npm --workspace apps/desktop run build
 ```
 
----
+启用任何全天候 service 或 Scheduled Task 前，请先检查配置。API key 与 token 应存放在
+profile-scoped Hermes secret store 中，或按照 Hermes 文档保存到 `.env`；非 secret 设置
+应放入 `config.yaml`。
 
-## 快速入门
+## 12. 更新与 upstream 集成策略
 
-```bash
-hermes              # 交互式 CLI — 开始对话
-hermes model        # 选择 LLM 提供商和模型
-hermes tools        # 配置启用的工具
-hermes config set   # 设置单个配置项
-hermes gateway      # 启动消息网关（Telegram、Discord 等）
-hermes setup        # 运行完整设置向导（一次性配置所有内容）
-hermes claw migrate # 从 OpenClaw 迁移（如果来自 OpenClaw）
-hermes update       # 更新到最新版本
-hermes doctor       # 诊断问题
-```
+upstream 是集成输入，而不是下游产品的权威来源。每次 campaign 都会在
+`.codex/UPSTREAM_SNAPSHOT.json` 中固定准确 SHA，在 `UPSTREAM_ADOPTION.yaml` 中分类
+commit，并在 `CARRY.yaml` 中记录直接保留的修改。`scripts/upstream/snapshot_sync.py`
+只接受显式 SHA，绝不会解析持续变化的 latest branch。
 
-📖 **[完整文档 →](https://hermes-agent.nousresearch.com/docs/)**
+优先采用官方 public API。security 与 data integrity 修复会和更强、且经过验证的下游特性
+组合。不能仅因 upstream 增加了名称相似的功能就移除下游功能；替换必须提供 parity 证据。
 
----
+## 13. 架构
 
-## 省去到处收集 API Key — Nous Portal
+fork 所有的 Python boundary 位于 `downstream/`：`compat/hermes` 委托给官方 contract，
+`platform/windows` 负责 native policy，`services` 定义 long-lived service contract，
+`features` 验证 product ledger。项目刻意不创建名为 `platform` 的 top-level Python package。
 
-Hermes 始终允许你使用任意服务商，这点不会改变。但如果你不想为模型、网页搜索、图像生成、TTS、云浏览器分别去申请五个不同的 API Key，**[Nous Portal](https://portal.nousresearch.com)** 用一个订阅就能覆盖全部：
+Hermes core 继续保持为狭窄的公共边界。capability 由 plugin 与 skill 承载，state path 由
+profile-aware 的官方 path helper 管理，prompt cache 与 message role invariant 始终是
+强制要求。
 
-- **300+ 模型** — 用 `/model <name>` 随时切换
-- **Tool Gateway** — 网页搜索（Firecrawl）、图像生成（FAL）、文本转语音（OpenAI）、云浏览器（Browser Use），全部通过订阅托管。无需额外注册任何账户。
+## 14. 安全
 
-全新安装时一条命令即可：
+请勿 commit secret、个人 runtime data、profile database、model file、local artifact 或
+生成的 credential。write、publish、destructive 与 shell action 必须置于明确 approval
+之后。child service environment 只应传递必要 variable，不应继承 ambient credential。
 
-```bash
-hermes setup --portal
-```
+security gate 会检查锁定的 Python graph、Python advisory、production npm advisory、
+Go module integrity、OSV result、supply-chain policy，以及本仓库的 security regression
+test。green 的 local unit test 不能代替 exact-head CI 或 live runtime evidence。
 
-它会通过 OAuth 登录、把 Nous 设为推理服务商，并启用 Tool Gateway。随时用 `hermes portal info` 查看路由状态。完整说明见 [Tool Gateway 文档](https://hermes-agent.nousresearch.com/docs/user-guide/features/tool-gateway)。
+## 15. Upstream 项目
 
-你随时可以按工具单独切回自己的 API Key — Gateway 是按工具粒度生效的，不是一刀切。
+原版 Hermes Agent 由 Nous Research 维护：
+[NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)。
 
----
+官方 upstream installer、website、documentation、issue tracker 与 support channel 仅适用于
+upstream distribution。它们不会安装或认可本下游仓库。
 
-## CLI 与消息平台 快速对照
+## 16. 许可证与归属
 
-Hermes 有两种入口：用 `hermes` 启动终端 UI，或运行网关从 Telegram、Discord、Slack、WhatsApp、Signal 或 Email 与之对话。进入对话后，许多斜杠命令在两种界面中通用。
-
-| 操作 | CLI | 消息平台 |
-|------|-----|----------|
-| 开始对话 | `hermes` | 运行 `hermes gateway setup` + `hermes gateway start`，然后给机器人发消息 |
-| 开始新对话 | `/new` 或 `/reset` | `/new` 或 `/reset` |
-| 更换模型 | `/model [provider:model]` | `/model [provider:model]` |
-| 设置人格 | `/personality [name]` | `/personality [name]` |
-| 重试或撤销上一轮 | `/retry`、`/undo` | `/retry`、`/undo` |
-| 压缩上下文 / 查看用量 | `/compress`、`/usage`、`/insights [--days N]` | `/compress`、`/usage`、`/insights [days]` |
-| 浏览技能 | `/skills` 或 `/<skill-name>` | `/skills` 或 `/<skill-name>` |
-| 中断当前工作 | `Ctrl+C` 或发送新消息 | `/stop` 或发送新消息 |
-| 平台特定状态 | `/platforms` | `/status`、`/sethome` |
-
-完整命令列表请参阅 [CLI 指南](https://hermes-agent.nousresearch.com/docs/user-guide/cli) 和 [消息网关指南](https://hermes-agent.nousresearch.com/docs/user-guide/messaging)。
-
----
-
-## 文档
-
-所有文档位于 **[hermes-agent.nousresearch.com/docs](https://hermes-agent.nousresearch.com/docs/)**：
-
-| 章节 | 内容 |
-|------|------|
-| [快速开始](https://hermes-agent.nousresearch.com/docs/getting-started/quickstart) | 安装 → 设置 → 2 分钟内开始首次对话 |
-| [CLI 使用](https://hermes-agent.nousresearch.com/docs/user-guide/cli) | 命令、快捷键、人格、会话 |
-| [配置](https://hermes-agent.nousresearch.com/docs/user-guide/configuration) | 配置文件、提供商、模型、所有选项 |
-| [消息网关](https://hermes-agent.nousresearch.com/docs/user-guide/messaging) | Telegram、Discord、Slack、WhatsApp、Signal、Home Assistant |
-| [安全](https://hermes-agent.nousresearch.com/docs/user-guide/security) | 命令审批、DM 配对、容器隔离 |
-| [工具与工具集](https://hermes-agent.nousresearch.com/docs/user-guide/features/tools) | 40+ 工具、工具集系统、终端后端 |
-| [技能系统](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills) | 过程记忆、技能中心、创建技能 |
-| [记忆](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory) | 持久记忆、用户画像、最佳实践 |
-| [MCP 集成](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp) | 连接任意 MCP 服务器扩展能力 |
-| [定时调度](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron) | 定时任务与平台投递 |
-| [上下文文件](https://hermes-agent.nousresearch.com/docs/user-guide/features/context-files) | 影响每次对话的项目上下文 |
-| [架构](https://hermes-agent.nousresearch.com/docs/developer-guide/architecture) | 项目结构、代理循环、关键类 |
-| [贡献](https://hermes-agent.nousresearch.com/docs/developer-guide/contributing) | 开发设置、PR 流程、代码风格 |
-| [CLI 参考](https://hermes-agent.nousresearch.com/docs/reference/cli-commands) | 所有命令和标志 |
-| [环境变量](https://hermes-agent.nousresearch.com/docs/reference/environment-variables) | 完整环境变量参考 |
-
----
-
-## 从 OpenClaw 迁移
-
-如果你来自 OpenClaw，Hermes 可以自动导入你的设置、记忆、技能和 API 密钥。
-
-**首次安装时：** 安装向导（`hermes setup`）会自动检测 `~/.openclaw` 并在配置开始前提供迁移选项。
-
-**安装后任意时间：**
-
-```bash
-hermes claw migrate              # 交互式迁移（完整预设）
-hermes claw migrate --dry-run    # 预览将要迁移的内容
-hermes claw migrate --preset user-data   # 仅迁移用户数据，不含密钥
-hermes claw migrate --overwrite  # 覆盖已有冲突
-```
-
-导入内容：
-- **SOUL.md** — 人格文件
-- **记忆** — MEMORY.md 和 USER.md 条目
-- **技能** — 用户创建的技能 → `~/.hermes/skills/openclaw-imports/`
-- **命令白名单** — 审批模式
-- **消息设置** — 平台配置、允许用户、工作目录
-- **API 密钥** — 白名单中的密钥（Telegram、OpenRouter、OpenAI、Anthropic、ElevenLabs）
-- **TTS 资产** — 工作区音频文件
-- **工作区指令** — AGENTS.md（使用 `--workspace-target`）
-
-使用 `hermes claw migrate --help` 查看所有选项，或使用 `openclaw-migration` 技能进行交互式代理引导迁移（含干运行预览）。
-
----
-
-## 贡献
-
-欢迎贡献！请参阅 [贡献指南](https://hermes-agent.nousresearch.com/docs/developer-guide/contributing) 了解开发设置、代码风格和 PR 流程。
-
-贡献者快速开始——使用标准安装器，然后在它创建的完整 git checkout 中开发：
-`$HERMES_HOME/hermes-agent`（通常是 `~/.hermes/hermes-agent`）。这会匹配
-`hermes update`、托管 venv、lazy dependencies、gateway 和 docs tooling 使用的布局。
-
-```bash
-curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
-cd "${HERMES_HOME:-$HOME/.hermes}/hermes-agent"
-uv pip install -e ".[all,dev]"
-scripts/run_tests.sh
-```
-
-手动克隆备用路径（用于一次性 clone / CI，或你明确不想使用 managed install layout 时）：
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-uv venv venv --python 3.11
-source venv/bin/activate
-uv pip install -e ".[all,dev]"
-python -m pytest tests/ -q
-```
-
----
-
-## 社区
-
-- 💬 [Discord](https://discord.gg/NousResearch)
-- 📚 [技能中心](https://agentskills.io)
-- 🐛 [问题反馈](https://github.com/NousResearch/hermes-agent/issues)
-- 💡 [讨论区](https://github.com/NousResearch/hermes-agent/discussions)
-- 🔌 [HermesClaw](https://github.com/AaronWong1999/hermesclaw) — 社区微信桥接：在同一微信账号上运行 Hermes Agent 和 OpenClaw。
-
----
-
-## 许可证
-
-MIT — 详见 [LICENSE](LICENSE)。
-
-由 [Nous Research](https://nousresearch.com) 构建。
+本下游版本继续采用仓库中的 MIT License。原版 Hermes Agent 的 copyright 与 contributor
+history 均予保留。下游工作由 fork contributor 独立维护；upstream 与 downstream 的
+issue、release 和产品声明必须清楚区分。

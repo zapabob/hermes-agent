@@ -1,5 +1,14 @@
 # Hermes Agent Windows Workstation Edition
 
+<p align="right">
+  <a href="README.md"><kbd>English</kbd></a>
+  <a href="README.ja.md"><kbd>日本語</kbd></a>
+  <a href="README.zh-CN.md"><kbd>简体中文</kbd></a>
+</p>
+
+> [!NOTE]
+> `README.md` is the canonical English document. The Japanese and Simplified Chinese translations follow this file.
+
 Windows-first downstream distribution of Hermes Agent.
 
 This is an unofficial downstream distribution.
