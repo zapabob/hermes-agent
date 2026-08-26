@@ -142,27 +142,9 @@ const registry: DesktopConnectionsRegistry = {
 
 const roster: DesktopAgentRoster = {
   agents: [
-    {
-      connectionId: 'pandora',
-      connectionKind: 'remote',
-      connectionLabel: 'Pandora',
-      profile: 'default',
-      handle: 'hermes-pandora'
-    },
-    {
-      connectionId: 'pandora',
-      connectionKind: 'remote',
-      connectionLabel: 'Pandora',
-      profile: 'scout',
-      handle: 'scout'
-    },
-    {
-      connectionId: 'local',
-      connectionKind: 'local',
-      connectionLabel: 'This device',
-      profile: 'default',
-      handle: 'hermes'
-    },
+    { connectionId: 'pandora', connectionKind: 'remote', connectionLabel: 'Pandora', profile: 'default', handle: 'hermes-pandora' },
+    { connectionId: 'pandora', connectionKind: 'remote', connectionLabel: 'Pandora', profile: 'scout', handle: 'scout' },
+    { connectionId: 'local', connectionKind: 'local', connectionLabel: 'This device', profile: 'default', handle: 'hermes' },
     { connectionId: 'local', connectionKind: 'local', connectionLabel: 'This device', profile: 'omer', handle: 'omer' }
   ],
   sources: [
