@@ -21,7 +21,9 @@ const electronNative: TestProjectConfiguration = {
     name: 'electron',
     environment: 'node',
     include: ['electron/**/*.test.ts', 'scripts/**.test.{ts,mjs}'],
-    exclude: ['scripts/run-short-session-hang-repro.test.mjs']
+    exclude: ['scripts/run-short-session-hang-repro.test.mjs'],
+    testTimeout: 15_000,
+    fileParallelism: process.platform !== 'win32'
   }
 }
 

@@ -18,10 +18,14 @@ env:
   PYTHONUTF8: "1"
   UV_VERSION: "0.9.28"
 
+defaults:
+  run:
+    shell: pwsh
+
 jobs:
   downstream-policy:
     name: Downstream policy
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -41,10 +45,18 @@ jobs:
         run: uv run --no-sync python -m pytest tests/downstream/test_ci_contracts.py -q
       - name: Enforce compatibility boundary layout
         run: |
-          test ! -d platform
-          test -d downstream/compat/hermes
-          test -d downstream/platform/windows
-          test -d downstream/services
+          if (Test-Path -LiteralPath platform -PathType Container) {
+            throw 'The legacy platform directory must not exist'
+          }
+          foreach ($required in @(
+            'downstream/compat/hermes',
+            'downstream/platform/windows',
+            'downstream/services'
+          )) {
+            if (-not (Test-Path -LiteralPath $required -PathType Container)) {
+              throw "Required compatibility boundary is missing: $required"
+            }
+          }
 
   windows-native-python:
     name: Windows native Python
@@ -150,7 +162,7 @@ jobs:
 
   upstream-api-compat:
     name: Upstream API compatibility
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -162,9 +174,9 @@ jobs:
       - run: uv sync --locked --python 3.11 --extra dev
       - run: uv run --no-sync python -m pytest tests/downstream/test_upstream_api_contracts.py -q
 
-  linux-regression:
-    name: Linux regression
-    runs-on: ubuntu-latest
+  windows-regression:
+    name: Windows regression
+    runs-on: windows-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -189,7 +201,7 @@ jobs:
 
   security-locks:
     name: Security and lockfiles
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -201,13 +213,19 @@ jobs:
         with:
           node-version: 22.22.0
           cache: npm
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: scripts/windows/watchdog-go/go.mod
+          cache-dependency-path: scripts/windows/watchdog-go/go.sum
       - run: uv python install 3.11
       - name: Locked dependency graph must be current
         run: uv lock --check
       - name: Python dependency advisory audit
         run: |
-          uv export --frozen --all-extras --no-dev --no-emit-project --no-header --output-file "$RUNNER_TEMP/hermes-audit-requirements.txt" > /dev/null
-          uvx --from pip-audit==2.10.1 pip-audit --require-hashes --disable-pip --requirement "$RUNNER_TEMP/hermes-audit-requirements.txt"
+          $requirements = Join-Path $env:RUNNER_TEMP 'hermes-audit-requirements.txt'
+          uv export --frozen --all-extras --no-dev --no-emit-project --no-header --output-file $requirements | Out-Null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uvx --from pip-audit==2.10.1 pip-audit --require-hashes --disable-pip --requirement $requirements
       - name: Node production dependency advisory audit
         run: npm audit --omit=dev --audit-level=high
       - name: Go module integrity

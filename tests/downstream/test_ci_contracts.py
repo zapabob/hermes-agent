@@ -26,7 +26,7 @@ def test_required_tier_one_jobs_exist() -> None:
         "windows-native-desktop",
         "windows-watchdog-go",
         "upstream-api-compat",
-        "linux-regression",
+        "windows-regression",
         "security-locks",
     }
 
@@ -36,7 +36,19 @@ def test_policy_lane_fetches_frozen_upstream_history() -> None:
     assert checkout["with"]["fetch-depth"] == 0
 
 
-def test_native_jobs_really_run_on_windows() -> None:
+def test_all_tier_one_jobs_run_natively_on_windows() -> None:
+    workflow = _workflow(WORKFLOW)
+    jobs = workflow["jobs"]
+    assert workflow["defaults"]["run"]["shell"] == "pwsh"
+    assert all(job["runs-on"] == "windows-latest" for job in jobs.values())
+    commands = "\n".join(_step_commands(job) for job in jobs.values())
+    assert "/dev/null" not in commands
+    assert "$RUNNER_TEMP/" not in commands
+    assert "test ! -d" not in commands
+    assert "test -d" not in commands
+
+
+def test_native_jobs_cover_windows_contracts() -> None:
     jobs = _workflow(WORKFLOW)["jobs"]
     assert jobs["windows-native-python"]["runs-on"] == "windows-latest"
     assert jobs["windows-native-desktop"]["runs-on"] == "windows-latest"
@@ -67,7 +79,7 @@ def test_security_lane_checks_all_lock_ecosystems() -> None:
     commands = _step_commands(_workflow(WORKFLOW)["jobs"]["security-locks"])
     assert "uv lock --check" in commands
     assert "uv export --frozen --all-extras --no-dev --no-emit-project" in commands
-    assert "--output-file \"$RUNNER_TEMP/hermes-audit-requirements.txt\" > /dev/null" in commands
+    assert "Join-Path $env:RUNNER_TEMP 'hermes-audit-requirements.txt'" in commands
     assert "pip-audit==2.10.1 pip-audit --require-hashes --disable-pip --requirement" in commands
     assert "npm audit" in commands
     assert "go mod verify" in commands
