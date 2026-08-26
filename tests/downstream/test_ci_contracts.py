@@ -61,7 +61,9 @@ def test_desktop_lane_derives_metadata_and_builds() -> None:
 def test_security_lane_checks_all_lock_ecosystems() -> None:
     commands = _step_commands(_workflow(WORKFLOW)["jobs"]["security-locks"])
     assert "uv lock --check" in commands
-    assert "pip-audit==2.10.1" in commands
+    assert "uv export --frozen --all-extras --no-dev --no-emit-project" in commands
+    assert "--output-file \"$RUNNER_TEMP/hermes-audit-requirements.txt\" > /dev/null" in commands
+    assert "pip-audit==2.10.1 pip-audit --require-hashes --disable-pip --requirement" in commands
     assert "npm audit" in commands
     assert "go mod verify" in commands
 

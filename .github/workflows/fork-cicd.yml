@@ -203,7 +203,9 @@ jobs:
       - name: Locked dependency graph must be current
         run: uv lock --check
       - name: Python dependency advisory audit
-        run: uvx --from pip-audit==2.10.1 pip-audit --locked .
+        run: |
+          uv export --frozen --all-extras --no-dev --no-emit-project --no-header --output-file "$RUNNER_TEMP/hermes-audit-requirements.txt" > /dev/null
+          uvx --from pip-audit==2.10.1 pip-audit --require-hashes --disable-pip --requirement "$RUNNER_TEMP/hermes-audit-requirements.txt"
       - name: Node production dependency advisory audit
         run: npm audit --omit=dev --audit-level=high
       - name: Go module integrity

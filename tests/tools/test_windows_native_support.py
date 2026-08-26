@@ -342,15 +342,14 @@ class TestReadmeNoLongerSaysWindowsUnsupported:
         # Previous string (removed in this PR): "Native Windows is not supported"
         assert "Native Windows is not supported" not in source, (
             "README.md still says native Windows is not supported — update the "
-            "install copy to reflect the PowerShell installer."
+            "source-install copy to reflect native Windows support."
         )
 
-    def test_readme_mentions_powershell_installer(self):
+    def test_readme_uses_downstream_source_installation(self):
         root = Path(__file__).resolve().parents[2]
         source = (root / "README.md").read_text(encoding="utf-8")
-        assert "install.ps1" in source, (
-            "README.md must point at scripts/install.ps1 for Windows users"
-        )
+        assert "git clone https://github.com/zapabob/hermes-agent-windows.git" in source
+        assert "no verified fork-specific binary installer" in source
 
 
 # ---------------------------------------------------------------------------
@@ -932,7 +931,8 @@ class TestWindowlessGatewayRestartSpec:
         import hermes_cli.gateway_windows as gw
 
         argv = ["/path/venv/bin/python", "-m", "hermes_cli.main", "gateway", "run"]
-        new_argv, cwd, env = gw.windowless_gateway_restart_spec(list(argv))
+        with mock.patch.object(gw.sys, "platform", "linux"):
+            new_argv, cwd, env = gw.windowless_gateway_restart_spec(list(argv))
         assert new_argv == argv
         assert cwd == ""
         assert env == {}
