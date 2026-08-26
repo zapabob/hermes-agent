@@ -17,19 +17,19 @@
   "schema_version": 1,
   "snapshot_sha": "1fe0f2f3ac9748ce799272eb93bee2937b5ab802",
   "summary": {
-    "all_fork_specific_loc": 426511,
-    "carry_surface_files": 936,
-    "cwc": 149947,
-    "fork_owned_loc": 309134,
-    "upstream_owned_fork_loc": 117377,
-    "utr": 0.275203
+    "all_fork_specific_loc": 426555,
+    "carry_surface_files": 938,
+    "cwc": 150244,
+    "fork_owned_loc": 309149,
+    "upstream_owned_fork_loc": 117406,
+    "utr": 0.275242
   },
   "top_carry_risks": [
     {
-      "added": 297,
-      "cwc": 56331,
-      "deleted": 272,
-      "patch_size": 569,
+      "added": 299,
+      "cwc": 56628,
+      "deleted": 273,
+      "patch_size": 572,
       "path": "apps/desktop/electron/main.ts",
       "semantic_coupling": 3,
       "upstream_frequency": 33
