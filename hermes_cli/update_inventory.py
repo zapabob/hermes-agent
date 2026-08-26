@@ -117,8 +117,8 @@ def _restart_mechanism(supervisor: str, profile: str) -> str:
         return "launchd"
     if supervisor == "desktop":
         return "desktop"
-    if supervisor == "windows-service":
-        return "windows-service"
+     if supervisor == "windows-service":
+         return "windows-service"
     if supervisor == "manual-serve":
         return "respawn-argv"
     return "manual"
@@ -132,8 +132,8 @@ def describe_restart_mechanism(mechanism: str, profile: str) -> str:
         return "launchctl kickstart -k (drain-first, per-label domain)"
     if mechanism == "desktop":
         return "Desktop app respawns its serve backend"
-    if mechanism == "windows-service":
-        return "sc.exe stop before venv mutation, sc.exe start after update"
+     if mechanism == "windows-service":
+         return "sc.exe stop before venv mutation, sc.exe start after update"
     if mechanism == "respawn-argv":
         return "stop before code swap, relaunch with recorded launch args"
     if profile != "default":
