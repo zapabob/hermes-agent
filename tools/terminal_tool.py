@@ -542,7 +542,12 @@ def _prompt_for_sudo_password(timeout_seconds: int = 45) -> str:
     _sudo_cb = _get_sudo_password_callback()
     if _sudo_cb is not None:
         try:
-            return _sudo_cb() or ""
+            # Blocked on a human typing their password: exclude from tool
+            # deadlines (#85125 2e). Local import avoids any import-layering
+            # surprises; tools.terminal_tool already imports tools.approval.
+            from tools.approval import human_wait_window
+            with human_wait_window():
+                return _sudo_cb() or ""
         except Exception:
             return ""
 
@@ -616,8 +621,13 @@ def _prompt_for_sudo_password(timeout_seconds: int = 45) -> str:
 
         password_thread = threading.Thread(target=read_password_thread, daemon=True)
         password_thread.start()
-        password_thread.join(timeout=timeout_seconds)
+        # Blocked on a human typing their password: exclude from tool
+        # deadlines on both executor paths (#85125 2e). Local import avoids
+        # any import-layering surprises.
+        from tools.approval import human_wait_window
 
+        with human_wait_window():
+            password_thread.join(timeout=timeout_seconds)
         if result["done"]:
             password = result["password"] or ""
             print()  # newline after hidden input
@@ -1210,14 +1220,11 @@ def _maybe_reap_docker_orphans(container_config: Dict[str, Any]) -> None:
     max_age = lifetime * 2
 
     try:
-        from tools.environments.docker import (
-            reap_orphan_containers,
-            _get_active_profile_name,
-        )
+        from tools.environments.docker import reap_orphan_containers, _container_identity
     except ImportError:
         return
     try:
-        profile = _get_active_profile_name()
+        profile = _container_identity(container_config.get("docker_shared_container_key", ""))
         removed = reap_orphan_containers(
             max_age_seconds=max_age,
             profile_filter=profile,
@@ -1382,20 +1389,72 @@ def _resolve_container_alias(task_id: str) -> str:
     return key
 
 
-def _docker_session_isolation_enabled() -> bool:
-    """True when docker sessions get their OWN containers (issue: stale
-    workspace mounts leaking between desktop sessions).
+def _session_isolation_enabled() -> bool:
+    """True when non-persistent sandboxes get per-session identities.
 
-    Gated on ``terminal.backend: docker`` + ``container_persistent: false``:
-    a non-persistent sandbox is a statement that state must not survive the
-    session, so sharing one container across sessions contradicts it. With
-    ``container_persistent: true`` the documented ONE-long-lived-container
-    contract is unchanged.
+    ``container_persistent: false`` is a statement that state must not
+    survive or be shared across sessions, so sharing one sandbox across
+    sessions contradicts it (#82731). Backends whose non-persistent mode is
+    session-scoped:
+
+    - ``docker`` — per-session containers (the original fix).
+    - plugin backends that declare ``session_isolated_when_nonpersistent``
+      (e.g. sandboxes resumed *by name*, where a shared deterministic name
+      under non-persistent mode would let two independent ephemeral runs
+      attach one live VM and delete it out from under each other).
+    """
+    _ensure_terminal_env_bridged()
+    env_type = os.getenv("TERMINAL_ENV", "local")
+    if env_type != "docker" and not _plugin_env_flag(
+        env_type, "session_isolated_when_nonpersistent"
+    ):
+        return False
+    return os.getenv("TERMINAL_CONTAINER_PERSISTENT", "true").lower() not in {"true", "1", "yes"}
+
+
+def _docker_session_isolation_enabled() -> bool:
+    """Docker-specific view of :func:`_session_isolation_enabled`.
+
+    Kept separate because several docker-only paths (workspace mount
+    selection, session-scoped container teardown) key off it; those must
+    not fire for other backends.
+    """
+    if os.getenv("TERMINAL_ENV", "local") != "docker":
+        return False
+    return _session_isolation_enabled()
+
+
+def _docker_persistent_profile_scoped() -> bool:
+    """True when the persistent Docker container is shared per PROFILE.
+
+    The product contract for ``TERMINAL_ENV=docker`` +
+    ``container_persistent: true`` is ONE long-lived container per Hermes
+    profile, shared by every session of that profile (CLI, gateway chats,
+    WebUI). Commit a270c4ade added a session-key fallback to
+    :func:`_resolve_container_task_id` to stop cross-profile SSH environment
+    reuse, but the fallback wasn't backend-gated, so persistent Docker
+    silently fragmented into one container per gateway session (#93950 was
+    downstream damage from that). This predicate gates the resolver back to
+    profile scoping for exactly this backend/mode; SSH and other backends
+    keep the session-scoped cache key that fixed the original leak.
     """
     _ensure_terminal_env_bridged()
     if os.getenv("TERMINAL_ENV", "local") != "docker":
         return False
-    return os.getenv("TERMINAL_CONTAINER_PERSISTENT", "true").lower() not in {"true", "1", "yes"}
+    return os.getenv("TERMINAL_CONTAINER_PERSISTENT", "true").lower() in {"true", "1", "yes"}
+
+
+def _current_session_profile() -> str:
+    """Return the active session's Hermes profile name, or "" when unset.
+
+    Same lookup discipline as :func:`_current_session_key`: the ContextVar
+    (bound per message by the gateway, per session by the WebUI streaming
+    layer) with the ``get_session_env`` os.environ fallback for CLI, cron,
+    and test processes.
+    """
+    from gateway.session_context import get_session_env
+
+    return get_session_env("HERMES_SESSION_PROFILE", "")
 
 
 _ISOLATION_OVERRIDE_KEYS = frozenset({
@@ -1449,7 +1508,7 @@ def _resolve_container_task_id(task_id: Optional[str]) -> str:
     """
     if task_id and _has_isolation_overrides(task_id):
         return task_id
-    if task_id and _docker_session_isolation_enabled():
+    if task_id and _session_isolation_enabled():
         return _resolve_container_alias(task_id)
     # Per-session isolation: when a session key is present (the WebUI streaming
     # layer sets it per-session, the gateway per-message via contextvars), scope
@@ -1465,7 +1524,33 @@ def _resolve_container_task_id(task_id: Optional[str]) -> str:
     # would otherwise collapse to the shared "default" key (notably SSH).
     session_key = _current_session_key()
     if session_key:
+        # Persistent Docker is PROFILE-scoped by contract: one long-lived
+        # container shared by every session of the profile. Key it by profile
+        # (not session) so gateway chats, CLI, and WebUI all land in the same
+        # container and sandbox. The bare "profile:default" key stays literally
+        # "default" so CLI mode (no session key at all) and gateway sessions of
+        # the default profile share the SAME container — CLI's historical key
+        # IS the default profile's container.
+        if _docker_persistent_profile_scoped():
+            # Explicit opt-in: trusted profiles configuring the same
+            # terminal.docker_shared_container_key share ONE container/cache
+            # slot (and sandbox dir) regardless of profile name (#84671).
+            shared = os.getenv("TERMINAL_DOCKER_SHARED_CONTAINER_KEY", "").strip()
+            if shared:
+                return f"shared:{shared}"
+            profile = _current_session_profile() or "default"
+            if profile == "default":
+                return "default"
+            return f"profile:{profile}"
         return f"session:{session_key}"
+    # CLI/no-session path: honour the shared-container opt-in here too, or a
+    # CLI run of a keyed profile would land in "default" while its gateway
+    # sessions land in "shared:<key>" — splitting the very container the
+    # setting exists to unify.
+    if _docker_persistent_profile_scoped():
+        shared = os.getenv("TERMINAL_DOCKER_SHARED_CONTAINER_KEY", "").strip()
+        if shared:
+            return f"shared:{shared}"
     return "default"
 
 
@@ -1595,6 +1680,44 @@ def _normalize_docker_host_cwd(cwd: str) -> str:
     return os.path.abspath(expanded)
 
 
+def _plugin_env_flag(env_type: str, attr: str, default=False):
+    """Classification attribute for a plugin-registered terminal backend.
+
+    Fail-soft: returns *default* when the registry is unavailable, the
+    backend is unknown, or the provider attribute raises — a misbehaving
+    plugin must degrade, never take the terminal tool down.
+    """
+    if not env_type or env_type in _CONTAINER_BACKENDS or env_type in {"local", "ssh", "managed_modal"}:
+        return default
+    try:
+        from agent.terminal_env_registry import provider_flag
+
+        return provider_flag(env_type, attr, default)
+    except Exception:
+        return default
+
+
+def _is_container_backend(env_type: str) -> bool:
+    """True when *env_type* behaves like a container/sandbox backend.
+
+    Built-in container backends via ``_CONTAINER_BACKENDS``; plugin-registered
+    backends via their declarative ``is_container`` flag.
+    """
+    return env_type in _CONTAINER_BACKENDS or _plugin_env_flag(env_type, "is_container")
+
+
+def _get_plugin_env_provider(env_type: str):
+    """Return the registered plugin provider for *env_type*, or None."""
+    if not env_type or env_type in _CONTAINER_BACKENDS or env_type in {"local", "ssh", "managed_modal"}:
+        return None
+    try:
+        from agent.terminal_env_registry import get_provider
+
+        return get_provider(env_type)
+    except Exception:
+        return None
+
+
 def _is_unusable_container_cwd(cwd: str) -> bool:
     """Return True if *cwd* is a host/relative path that won't work as the
     working directory inside a container sandbox.
@@ -1677,15 +1800,11 @@ def _get_env_config() -> Dict[str, Any]:
     _ensure_terminal_env_bridged()
     env_type = os.getenv("TERMINAL_ENV", "local")
     
-    mount_docker_cwd = os.getenv("TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE", "false").lower() in {"true", "1", "yes"}
-    container_backend = env_type in {"docker", "singularity", "modal", "daytona", "vercel_sandbox"}
-    docker_backend = env_type == "docker"
-
     mount_docker_cwd = os.getenv(
         "TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE", "false"
     ).lower() in {"true", "1", "yes"}
 
-    container_backend = env_type in _CONTAINER_BACKENDS
+    container_backend = _is_container_backend(env_type)
     docker_backend = env_type == "docker"
     if container_backend:
         container_cpu = _parse_env_var(
@@ -1741,7 +1860,7 @@ def _get_env_config() -> Dict[str, Any]:
         ):
             host_cwd = candidate
             cwd = "/workspace"
-    elif env_type in _CONTAINER_BACKENDS and cwd:
+    elif _is_container_backend(env_type) and cwd:
         # Host paths and relative paths that won't work inside containers
         if _is_unusable_container_cwd(cwd) and cwd != default_cwd:
             logger.info("Ignoring TERMINAL_CWD=%r for %s backend "
@@ -1800,8 +1919,10 @@ def _get_env_config() -> Dict[str, Any]:
         # removed on exit).
         "docker_persist_across_processes": os.getenv(
             "TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES", "true"
-        ).lower()
-        in {"true", "1", "yes"},
+        ).lower() in {"true", "1", "yes"},
+        "docker_shared_container_key": os.getenv(
+            "TERMINAL_DOCKER_SHARED_CONTAINER_KEY", ""
+        ).strip(),
         # Startup orphan reaper for hermes-tagged containers left behind by
         # crashed / SIGKILL'd previous processes that bypassed atexit.
         # Conservative: only sweeps Exited containers older than 2× the
@@ -1860,6 +1981,7 @@ def _container_config_from_config(config: Dict[str, Any]) -> dict:
         "docker_shm_size": config.get("docker_shm_size", "1g"),
         "docker_network": config.get("docker_network", True),
         "docker_persist_across_processes": config.get("docker_persist_across_processes", True),
+        "docker_shared_container_key": config.get("docker_shared_container_key", ""),
         "docker_orphan_reaper": config.get("docker_orphan_reaper", True),
     }
 
@@ -1935,6 +2057,7 @@ def _create_environment(env_type: str, image: str, cwd: str, timeout: int,
                 False if session_scoped
                 else cc.get("docker_persist_across_processes", True)
             ),
+            shared_container_key=cc.get("docker_shared_container_key", ""),
             shm_size=cc.get("docker_shm_size", "1g"),
         )
         # Marker read by is_persistent_env(): a session-scoped container
@@ -2071,9 +2194,31 @@ def _create_environment(env_type: str, image: str, cwd: str, timeout: int,
         )
 
     else:
+        provider = _get_plugin_env_provider(env_type)
+        if provider is not None:
+            env_obj = provider.create_environment(
+                cwd=cwd, timeout=timeout, task_id=task_id,
+                image=image, container_config=cc,
+            )
+            # Stamp the backend name so path-resolution and progress surfaces
+            # can identify plugin backends without class-name sniffing.
+            try:
+                env_obj._hermes_backend_name = provider.name.strip().lower()
+            except AttributeError:
+                pass  # test doubles may reject attributes
+            return env_obj
+        try:
+            from agent.terminal_env_registry import plugin_backend_names
+
+            plugin_names = plugin_backend_names()
+        except Exception:
+            plugin_names = []
+        extra = (
+            ", " + ", ".join(f"'{n}'" for n in plugin_names) if plugin_names else ""
+        )
         raise ValueError(
             f"Unknown environment type: {env_type}. Use 'local', 'docker', "
-            f"'singularity', 'modal', 'daytona', 'vercel_sandbox', or 'ssh'"
+            f"'singularity', 'modal', 'daytona', 'vercel_sandbox', 'ssh'{extra}"
         )
 
 
@@ -2250,7 +2395,7 @@ def ensure_task_env(task_id: Optional[str] = None):
                 ssh_config=_ssh_config_from_config(config) if env_type == "ssh" else None,
                 container_config=(
                     _container_config_from_config(config)
-                    if env_type in _CONTAINER_BACKENDS else None
+                    if _is_container_backend(env_type) else None
                 ),
                 local_config=None,
                 task_id=effective_task_id,
@@ -2736,7 +2881,7 @@ def _resolve_command_cwd(
     recorded = get_session_cwd(session_key)
     if (
         recorded
-        and env_type in _CONTAINER_BACKENDS
+        and _is_container_backend(env_type)
         and _is_unusable_container_cwd(recorded)
     ):
         logger.info(
@@ -2855,7 +3000,7 @@ def terminal_tool(
         # Valid in-container override paths (RL/benchmark sandboxes that set
         # cwd to /workspace, /root, etc.) are absolute non-host paths and pass
         # through untouched.
-        if env_type in _CONTAINER_BACKENDS and _is_unusable_container_cwd(cwd):
+        if _is_container_backend(env_type) and _is_unusable_container_cwd(cwd):
             remapped = "/workspace" if host_cwd else config["cwd"]
             if cwd != remapped:
                 logger.info(
@@ -2957,7 +3102,7 @@ def terminal_tool(
                         ssh_config = _ssh_config_from_config(config) if env_type == "ssh" else None
                         container_config = (
                             _container_config_from_config(config)
-                            if env_type in _CONTAINER_BACKENDS else None
+                            if _is_container_backend(env_type) else None
                         )
 
                         local_config = None
@@ -4006,9 +4151,12 @@ def check_terminal_requirements() -> bool:
             return get_secret("DAYTONA_API_KEY") is not None
 
         else:
+            provider = _get_plugin_env_provider(env_type)
+            if provider is not None:
+                return bool(provider.check_requirements(config))
             logger.error(
                 "Unknown TERMINAL_ENV '%s'. Use one of: local, docker, singularity, "
-                "modal, daytona, vercel_sandbox, ssh.",
+                "modal, daytona, vercel_sandbox, ssh, or a plugin-registered backend.",
                 env_type,
             )
             return False

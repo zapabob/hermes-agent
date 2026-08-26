@@ -2,19 +2,34 @@ import { atom, computed } from 'nanostores'
 
 import type { DesktopConnectionsRegistry } from '@/global'
 import { persistStringRecord, storedStringRecord } from '@/lib/storage'
-import { wipeSessionListsForGatewaySwitch } from '@/store/gateway-switch'
+import { isTimeoutError, withTimeout } from '@/lib/with-timeout'
+import {
+  beginGatewaySwitch,
+  endGatewaySwitch,
+  type GatewaySwitchToken,
+  recoverActiveSourceAfterFailedGatewaySwitch
+} from '@/store/gateway-switch'
 import {
   $activeGatewayProfile,
   $newChatProfile,
   $showAllProfiles,
   ensureGatewayAgent,
   normalizeProfileKey,
+  openGatewayAgent,
   refreshActiveProfile,
   requestFreshSession
 } from '@/store/profile'
 import { $connection } from '@/store/session'
 
 const LAST_PROFILE_STORAGE_KEY = 'hermes.desktop.lastProfileByConnection'
+
+// Every await of a source switch is bounded. A wedged spawn, ticket mint,
+// handshake or IPC (the #93454 class) must surface as a failed click — not a
+// spinner that also swallows every later click on the same source, and never
+// a barrier left up or a wipe left unpainted.
+const SWITCH_DIAL_TIMEOUT_MS = 20_000
+const SWITCH_COMMIT_TIMEOUT_MS = 20_000
+const SWITCH_REMEMBER_TIMEOUT_MS = 5_000
 
 export const $connectionsRegistry = atom<DesktopConnectionsRegistry | null>(null)
 
@@ -104,11 +119,17 @@ async function rememberConnection(connectionId: string): Promise<void> {
   }
 
   try {
-    const result = await setLastUsed(connectionId)
+    const result = await withTimeout(
+      setLastUsed(connectionId),
+      SWITCH_REMEMBER_TIMEOUT_MS,
+      'Timed out remembering the last-used connection'
+    )
+
     setConnectionsRegistry(result.registry)
   } catch {
-    // The source is already usable. A read-only/full userData directory must
-    // not turn a successful backend switch into a false connection failure.
+    // The source is already usable. A read-only/full userData directory (or
+    // a stalled IPC) must not turn a successful backend switch into a false
+    // connection failure.
   }
 }
 
@@ -160,6 +181,25 @@ export async function initializeConnectionsRegistry(): Promise<DesktopConnection
  * Re-home Sessions to one registered source, restoring that source's last
  * profile. Only the selected source is dialed; merely rendering the switcher
  * never probes or opens remote gateways.
+ *
+ * Two phases, same commit contract as a Settings → Gateway apply (softSwitch):
+ *  1. Dial the target WITHOUT activating it. The previous source stays fully
+ *     bound and painted, so a dead target fails with nothing lost.
+ *  2. Commit: beginGatewaySwitch() — barrier up, machine-context reset,
+ *     session bindings wiped — then activate the already-open socket. The
+ *     wipe runs inside the activation's serialized section, synchronously
+ *     before the publication, so no route/session effect can observe the new
+ *     source while $activeSessionId still names the previous backend's
+ *     runtime. Activating first and wiping after (across an IPC round-trip)
+ *     is exactly how that id leaked to the new backend and came back as
+ *     "session not found" (#93937).
+ *
+ * Overlap and stalls: clicks can supersede a switch at any point. A switch
+ * superseded while queued behind another activation declines its commit —
+ * no wipe, no activation — so the winner's wipe is always the one that
+ * precedes the final publication, and the barrier is owned by the latest
+ * switch. Every await is bounded; a commit that stalls after the wipe lowers
+ * the barrier and repaints the source that is still active.
  */
 export async function selectConnection(connectionId: string): Promise<void> {
   const registry = $connectionsRegistry.get()
@@ -179,6 +219,12 @@ export async function selectConnection(connectionId: string): Promise<void> {
   const currentProfile = normalizeProfileKey($activeGatewayProfile.get())
   const targetProfile = normalizeProfileKey($lastProfileByConnection.get()[connectionId] ?? 'default')
   const targetKey = `${connectionId}::${targetProfile}`
+
+  const targetIsActive = () => {
+    const active = $connection.get()
+
+    return active?.connectionId === connectionId && normalizeProfileKey(active.profile) === targetProfile
+  }
 
   if (pendingTarget === targetKey) {
     return
@@ -208,14 +254,98 @@ export async function selectConnection(connectionId: string): Promise<void> {
   const revision = ++switchRevision
   pendingTarget = targetKey
   $pendingConnectionId.set(connectionId)
+  // Set by the commit hook once THIS switch has wiped — i.e. it owns the
+  // barrier and, if the commit then fails, owes the still-active source a
+  // repaint. Null while queued, or if it stepped aside before its turn.
+  let token = null as GatewaySwitchToken | null
 
   try {
+    // Phase 1 — open the target's socket; the active route is untouched.
     // Always use the explicit registry route. `local` must mean This device,
     // and a registry primary can differ from a legacy per-profile override.
-    await ensureGatewayAgent(connectionId, targetProfile)
+    await withTimeout(
+      openGatewayAgent(connectionId, targetProfile),
+      SWITCH_DIAL_TIMEOUT_MS,
+      `Timed out connecting to "${targetConnection.label}".`
+    )
 
-    if ($connection.get()?.connectionId !== connectionId) {
-      throw new Error(`Connection "${targetConnection.label}" did not become active.`)
+    // A newer click owns the switch from here on. The superseded dial never
+    // activates, so the user doesn't flip through it on the way to the source
+    // they picked last; its socket stays warm for that click or idles out.
+    if (revision !== switchRevision) {
+      return
+    }
+
+    // Phase 2 — commit. The hook runs inside the activation's serialized
+    // section, right before the socket is activated: sever the previous
+    // backend's bindings, then publish, with nothing in between. A click that
+    // superseded this switch while it was queued makes the hook decline —
+    // neither wipe nor activation — so the user never flips through it.
+    const activationController = new AbortController()
+    let markActivationStarted: () => void = () => undefined
+
+    const activationStarted = new Promise<void>(resolve => {
+      markActivationStarted = resolve
+    })
+
+    try {
+      try {
+        const activation = ensureGatewayAgent(connectionId, targetProfile, {
+          signal: activationController.signal,
+          beforeActivate: () => {
+            if (revision !== switchRevision) {
+              return false
+            }
+
+            token = beginGatewaySwitch()
+            markActivationStarted()
+
+            return true
+          }
+        })
+
+        const timedActivation = activationStarted.then(() =>
+          withTimeout(
+            activation,
+            SWITCH_COMMIT_TIMEOUT_MS,
+            `Timed out activating "${targetConnection.label}".`,
+            error => {
+              // withTimeout does not cancel its input. Every timed-out owner
+              // loses future activation/publication rights, even when low-level
+              // activation already published the target and the commit remains
+              // fail-open. The shared activation signal suppresses any trailing
+              // descriptor/profile publication when stale work later settles.
+              activationController.abort(error)
+            }
+          )
+        )
+
+        // Queue time belongs to the profile-store mutex. Start the bounded
+        // commit window only once beforeActivate grants this request its turn.
+        await Promise.race([activation, timedActivation])
+      } catch (error) {
+        // The socket is activated and its descriptor published synchronously;
+        // only best-effort descriptor resync trails it. A commit that timed out
+        // AFTER the new source became active has landed, so keep it fail-open;
+        // the timeout signal still revokes all trailing publication rights.
+        if (!isTimeoutError(error) || !targetIsActive()) {
+          throw error
+        }
+      }
+
+      if (revision !== switchRevision) {
+        return
+      }
+
+      if (!targetIsActive()) {
+        throw new Error(`Connection "${targetConnection.label}" did not become active.`)
+      }
+    } finally {
+      // Lower the barrier the moment the commit settles — before the
+      // bookkeeping awaits below — but only if this switch still owns it.
+      if (token !== null) {
+        endGatewaySwitch(token)
+      }
     }
 
     // A newer click owns the final refresh. Serialized gateway activation
@@ -223,7 +353,6 @@ export async function selectConnection(connectionId: string): Promise<void> {
     // request from repainting its profile list after that newer activation.
     if (revision === switchRevision) {
       await rememberConnection(connectionId)
-      wipeSessionListsForGatewaySwitch()
 
       if (!restoreOnBoot) {
         $showAllProfiles.set(false)
@@ -235,6 +364,15 @@ export async function selectConnection(connectionId: string): Promise<void> {
     }
   } catch (error) {
     if (revision === switchRevision) {
+      if (token !== null) {
+        // This switch wiped for a commit that never landed. The previous
+        // source is still the active one, and nothing reactive re-pulls its
+        // lists (no scope moved): repaint it and land on a fresh draft there,
+        // matching what a failed Settings apply leaves behind.
+        recoverActiveSourceAfterFailedGatewaySwitch(token)
+        requestFreshSession()
+      }
+
       throw error
     }
   } finally {

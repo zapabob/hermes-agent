@@ -41,7 +41,7 @@ import {
 import { onGatewayEvent } from '@/contrib/events'
 import { registry } from '@/contrib/registry'
 import type { WorkspaceMode } from '@/contrib/types'
-import { deleteProfile, getLogs, getStatus, type HermesGateway } from '@/hermes'
+import { deleteProfile, getLogs, getStatus, hermesApi, type HermesGateway } from '@/hermes'
 import {
   $gateway,
   activeGatewayConnectionId,
@@ -92,7 +92,7 @@ import {
   $sessionTiles
 } from '@/store/session-states'
 import { runGatewayRestart } from '@/store/system-actions'
-import type { UsageStats } from '@/types/hermes'
+import type { PaginatedSessions, UsageStats } from '@/types/hermes'
 
 import { planPluginOpenSession } from './plugin-open-session-plan'
 
@@ -617,6 +617,16 @@ export const host = {
     }
 
     const targetProfile = route?.targetProfile || name
+    // A name-only call is ambient, not local: Bot Mode's active SSH roster
+    // rows deliberately use the ambient gateway door and therefore carry no
+    // explicit owner route. Preserve the active registry connection so the
+    // profile teardown and DELETE both land on the VPS instead of retiring the
+    // unrelated local pool and leaving the warmed remote backend to recreate
+    // the deleted profile.
+    const ambientConnectionId = route ? null : String(activeGatewayConnectionId() || '').trim()
+
+    const ambientRemoteConnectionId =
+      ambientConnectionId && ambientConnectionId !== 'local' ? ambientConnectionId : null
 
     if (!name) {
       throw new Error('deleteProfile: profile name required')
@@ -637,11 +647,18 @@ export const host = {
     // A hover-warmed Bot Mode row owns a retained renderer socket. Retire it
     // before Electron stops the profile backend so the socket closure cannot
     // schedule a reconnect that resurrects the deleted profile.
-    if (!route || route.mode === 'local') {
+    if (route?.mode === 'local' || (!route && !ambientRemoteConnectionId)) {
       retireLocalProfileGateways(targetProfile)
     }
 
-    await deleteProfile(targetProfile, route ? { connectionId: route.connectionId, profile: route.profile } : undefined)
+    await deleteProfile(
+      targetProfile,
+      route
+        ? { connectionId: route.connectionId, profile: route.profile }
+        : ambientRemoteConnectionId
+          ? { connectionId: ambientRemoteConnectionId, profile: name }
+          : undefined
+    )
 
     // The profile rail paints from the shared $profiles cache; without a
     // refresh the deleted profile's badge survives and clicking it starts a
@@ -1165,6 +1182,65 @@ export const host = {
     }
 
     return retainGatewayForAgent(null, route.trim() || 'default')
+  },
+
+  /** Read persisted sessions from a profile's owning source without dialing
+   *  that profile's gateway. The source primary opens state.db directly. */
+  listPersistedSessions: async (
+    route: PluginProfileRoute | null,
+    options: { profile: string; limit?: number }
+  ): Promise<PaginatedSessions> => {
+    if (route && (!route.connectionId.trim() || !route.profile.trim() || !route.targetProfile.trim())) {
+      throw new Error('Profile route must include connectionId, profile, and targetProfile')
+    }
+
+    const profile = options.profile.trim()
+
+    if (!profile) {
+      throw new Error('Persisted session reads require a profile')
+    }
+
+    const limit = Math.min(500, Math.max(0, options.limit ?? 200))
+
+    const query = new URLSearchParams({
+      limit: String(limit),
+      offset: '0',
+      min_messages: '0',
+      archived: 'exclude',
+      order: 'created',
+      profile
+    })
+
+    return hermesApi<PaginatedSessions>({
+      ...(route ? { connectionId: route.connectionId } : {}),
+      path: `/api/profiles/sessions?${query.toString()}`,
+      timeoutMs: 60_000
+    })
+  },
+
+  /** Mutate the durable hidden flag through the source primary. Keeping the
+   *  owner profile in the body (not request.profile) prevents Electron from
+   *  starting a profile backend merely to reconcile persisted visibility. */
+  setPersistedSessionHidden: async (
+    route: PluginProfileRoute | null,
+    options: { sessionId: string; profile: string; hidden: boolean }
+  ): Promise<{ ok: boolean; hidden: boolean }> => {
+    if (route && (!route.connectionId.trim() || !route.profile.trim() || !route.targetProfile.trim())) {
+      throw new Error('Profile route must include connectionId, profile, and targetProfile')
+    }
+
+    const profile = options.profile.trim()
+
+    if (!profile || !options.sessionId.trim()) {
+      throw new Error('Persisted session updates require a profile and session id')
+    }
+
+    return hermesApi<{ ok: boolean; hidden: boolean }>({
+      ...(route ? { connectionId: route.connectionId } : {}),
+      path: `/api/sessions/${encodeURIComponent(options.sessionId)}`,
+      method: 'PATCH',
+      body: { hidden: options.hidden, profile }
+    })
   },
 
   /** Gateway JSON-RPC — sessions, config, skills, cron, kanban, everything

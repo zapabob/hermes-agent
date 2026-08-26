@@ -46,7 +46,7 @@ import { requestVoiceConversationStart } from '@/store/composer'
 import { $activeConnectionId } from '@/store/connections'
 import { $cronReviewRequest, setCronFocusJobId } from '@/store/cron'
 import { $pinnedSessionIds, pinSession, restoreWorktree, unpinSession } from '@/store/layout'
-import { notify } from '@/store/notifications'
+import { notify, notifyError } from '@/store/notifications'
 import { $previewTarget } from '@/store/preview'
 import {
   $activeGatewayProfile,
@@ -72,7 +72,7 @@ import {
   $selectedStoredSessionId,
   $sessionResumeRequest,
   $sessions,
-  knownSessionProfile,
+  knownSessionOwner,
   sessionMatchesStoredId,
   sessionPinId,
   setAwaitingResponse,
@@ -83,7 +83,7 @@ import { requestForSessionProfile, type SessionOwnerScope } from '@/store/sessio
 import { $focusedStoredSessionId, sessionTileOwnerRoute, storedSessionIdForRuntimeId } from '@/store/session-states'
 import { clearSessionTodos, setSessionTodos, todosForHydration } from '@/store/todos'
 import { armWakeWord, stopClientCapture } from '@/store/wake-word'
-import { isAuxiliaryWindow, isHudWindow } from '@/store/windows'
+import { isAuxiliaryWindow, isBrowserWindow, isHudWindow } from '@/store/windows'
 import { useSkinCommand } from '@/themes/use-skin-command'
 
 import { closeWorkspaceTab } from '../chat/close-tab'
@@ -320,7 +320,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
   // profile's own local gateway — never to whatever is "active" (active is
   // presentation only). Resolve the owner from, in order: the tile's persisted
   // route (bot chats carry an exact connectionId+profile), the known session
-  // profile (row or open-time hint), then a cross-profile REST probe that
+  // owner (row or open-time hint), then a cross-profile REST probe that
   // stamps ownership for a hidden/unlisted session. Only a request with NO
   // session at all (a fresh draft, global chrome) falls to the ambient socket.
   // The probe result is cached as an owner hint so the next call is sync.
@@ -358,7 +358,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
 
       let owner: SessionOwnerScope =
         (routingSessionId ? sessionTileOwnerRoute(routingSessionId) : undefined) ??
-        knownSessionProfile($sessions.get(), routingSessionId)
+        knownSessionOwner($sessions.get(), routingSessionId)
 
       if (!owner && routingSessionId) {
         // Unknown owner for a REAL session: probe across profiles (REST, not the
@@ -829,7 +829,10 @@ export function ContribWiring({ children }: { children: ReactNode }) {
           if (payload?.start_new_session !== false) {
             newSessionInProfile(targetProfile)
           } else {
-            void ensureGatewayProfile(normalizeProfileKey(targetProfile))
+            void ensureGatewayProfile(normalizeProfileKey(targetProfile)).catch((error: unknown) => {
+              // #81094: the voice-path switch must surface its failure too.
+              notifyError(error, `Failed to switch to profile "${normalizeProfileKey(targetProfile)}"`)
+            })
           }
         } else if (payload?.start_new_session !== false) {
           startFreshSessionDraft()
@@ -1175,10 +1178,10 @@ export function ContribWiring({ children }: { children: ReactNode }) {
           } as CSSProperties
         }
       >
-        {/* HUD mode has no titlebar to hang these off — the clusters are
-            `fixed`, so without this they'd float over the chat as orphaned
-            buttons. Exits are the ⌘⇧H toggle and ⌘W. */}
-        {!isHudWindow() && (
+        {/* HUD and the popped-out Browser have no titlebar to hang these off —
+            the clusters are `fixed`, so without this they'd float over the
+            surface as orphaned buttons. */}
+        {!isHudWindow() && !isBrowserWindow() && (
           <TitlebarControls
             leftTools={leftTitlebarTools}
             onOpenSettings={() => navigate(SETTINGS_ROUTE)}
@@ -1298,11 +1301,13 @@ export function ContribWiring({ children }: { children: ReactNode }) {
 
       {/* Petdex floating mascot — renders nothing unless installed + enabled.
           Never in the HUD: that window is the chat bar and nothing else. */}
-      {!isHudWindow() && <FloatingPet />}
+      {!isHudWindow() && !isBrowserWindow() && <FloatingPet />}
 
       {/* Single persistent xterm host chasing the terminal pane's slot rect.
           The HUD has no terminal pane, so it has nothing to chase. */}
-      {!isHudWindow() && <PersistentTerminal onAddSelectionToChat={composer.addTerminalSelectionAttachment} />}
+      {!isHudWindow() && !isBrowserWindow() && (
+        <PersistentTerminal onAddSelectionToChat={composer.addTerminalSelectionAttachment} />
+      )}
     </ContribWiringContext.Provider>
   )
 }

@@ -185,6 +185,7 @@ export interface RegistryLocalRoute {
 }
 
 export interface ResolvedConnectionSshDescriptor {
+  effectiveConfigFingerprint?: string
   host?: string
   keyPath?: string
   port?: number
@@ -333,6 +334,69 @@ export function resolvedConnectionId(
   return matchingConnectionId(registry, route, 'unique') ?? null
 }
 
+export interface ReuseMatchingPrimarySshBackendOptions {
+  connectionId: null | string | undefined
+  effectiveFingerprint: (source: RegistryConnection) => Promise<string>
+  ensurePrimary: () => Promise<ResolvedConnectionDescriptor>
+  profile: null | string | undefined
+  registry: ConnectionRegistry
+  source: RegistryConnection
+}
+
+/**
+ * Reuse the v1 window SSH backend only when its actual dialing identity matches
+ * the registry primary. Resolving that descriptor may boot the primary; a
+ * mismatch returns null without reusing it so the caller continues with its
+ * separately scoped registry backend. A matching descriptor is returned
+ * unchanged and the caller may re-stamp routing fields such as profile and
+ * connectionId. Guards run before either async dependency so secondary
+ * profiles and sources never bootstrap the primary.
+ */
+export async function reuseMatchingPrimarySshBackend({
+  connectionId,
+  effectiveFingerprint,
+  ensurePrimary,
+  profile,
+  registry,
+  source
+}: ReuseMatchingPrimarySshBackendOptions): Promise<null | ResolvedConnectionDescriptor> {
+  const id = String(connectionId ?? '').trim()
+  const profileKey = String(profile ?? '').trim() || 'default'
+
+  if (profileKey !== 'default' || !id || id !== registry.primary || source.id !== id || source.kind !== 'ssh') {
+    return null
+  }
+
+  let sourceFingerprint
+
+  try {
+    sourceFingerprint = String(await effectiveFingerprint(source)).trim()
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : String(cause)
+
+    throw new Error(
+      `Could not resolve effective SSH config for connection "${source.label}" (${source.id}) via ssh -G: ${detail}`,
+      { cause }
+    )
+  }
+
+  const descriptor = await ensurePrimary()
+  const activeSsh = descriptor.mode === 'remote' && descriptor.remoteKind === 'ssh' ? descriptor.ssh : null
+  const rootProfile = (value: unknown) => String(value || '').trim() || 'default'
+
+  if (
+    !sourceFingerprint ||
+    !activeSsh ||
+    sourceFingerprint !== String(activeSsh.effectiveConfigFingerprint || '').trim() ||
+    String(source.remoteHermesPath || '').trim() !== String(activeSsh.remoteHermesPath || '').trim() ||
+    rootProfile(source.remoteProfile) !== rootProfile(activeSsh.remoteProfile)
+  ) {
+    return null
+  }
+
+  return descriptor
+}
+
 function normalizedSshTarget(route: { host?: unknown; port?: unknown; user?: unknown }): null | string {
   const ssh = normalizeSshConfig({ ...route, mode: 'ssh' })
 
@@ -413,6 +477,9 @@ export interface ConnectionAgents {
   /** Profile names enumerated from the connection, or null when unreachable /
    * connect-on-demand (ssh not yet dialed). */
   profiles: null | string[]
+  /** Credential-free profile metadata from the same connection. Kept separate
+   * from `profiles` so old enumerators can continue returning names only. */
+  profileMetadata?: Record<string, RosterProfileMetadata>
   /** Present when profiles is null: why enumeration was skipped. */
   error?: string
   /** Stable backend identity from the connection's /api/status (`install_id`).
@@ -433,6 +500,15 @@ export interface RosterAgent {
   /** Bare profile name, or `<profile>-<label-slug>` when the profile name
    * exists on more than one registered source (the @name-device rule). */
   handle: string
+  /** Rich metadata for this exact connection + profile, when enumerated. */
+  profileMetadata?: RosterProfileMetadata
+}
+
+export interface RosterProfileMetadata {
+  display_name?: string
+  title?: string
+  ui_meta?: Record<string, unknown>
+  has_avatar?: boolean
 }
 
 /**
@@ -529,18 +605,30 @@ export function buildAgentRoster(
   // counting names for @name-device disambiguation.
   const identities = new Map<
     string,
-    { connection: RegistryConnection; installId?: string; order: number; profile: string }
+    {
+      connection: RegistryConnection
+      installId?: string
+      order: number
+      profile: string
+      profileMetadata?: RosterProfileMetadata
+    }
   >()
 
   let order = 0
 
-  for (const { connection, installId, profiles } of enumerations) {
+  for (const { connection, installId, profiles, profileMetadata } of enumerations) {
     for (const profile of profiles || []) {
       const name = String(profile || '').trim() || 'default'
       const key = `${connection.id}\0${name}`
 
       if (!identities.has(key)) {
-        identities.set(key, { connection, installId, order, profile: name })
+        identities.set(key, {
+          connection,
+          installId,
+          order,
+          profile: name,
+          ...(profileMetadata?.[name] ? { profileMetadata: profileMetadata[name] } : {})
+        })
       }
     }
 
@@ -551,16 +639,19 @@ export function buildAgentRoster(
   // are the SAME physical install registered under two addresses, so their
   // (install, profile) rows are one bot, not two. Connections without an id
   // (older backends, undialed ssh) keep a per-connection key — no collapse.
-  const backends = new Map<string, { connection: RegistryConnection; order: number; profile: string }[]>()
+  const backends = new Map<
+    string,
+    { connection: RegistryConnection; order: number; profile: string; profileMetadata?: RosterProfileMetadata }[]
+  >()
 
-  for (const { connection, installId, order: rank, profile } of identities.values()) {
+  for (const { connection, installId, order: rank, profile, profileMetadata } of identities.values()) {
     const key = installId ? `id:${installId}\0${profile}` : `conn:${connection.id}\0${profile}`
     const group = backends.get(key)
 
     if (group) {
-      group.push({ connection, order: rank, profile })
+      group.push({ connection, order: rank, profile, profileMetadata })
     } else {
-      backends.set(key, [{ connection, order: rank, profile }])
+      backends.set(key, [{ connection, order: rank, profile, profileMetadata }])
     }
   }
 
@@ -577,14 +668,15 @@ export function buildAgentRoster(
 
   const roster: RosterAgent[] = []
 
-  for (const { connection, profile } of rows) {
+  for (const { connection, profile, profileMetadata } of rows) {
     roster.push({
       connectionId: connection.id,
       connectionKind: connection.kind,
       connectionLabel: connection.label,
       profile,
       targetProfile: connection.remoteProfile || profile,
-      handle: agentHandle(profile, connection.label, (counts.get(profile) || 0) > 1)
+      handle: agentHandle(profile, connection.label, (counts.get(profile) || 0) > 1),
+      ...(profileMetadata ? { profileMetadata } : {})
     })
   }
 

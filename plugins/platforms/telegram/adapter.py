@@ -9,7 +9,6 @@ Uses python-telegram-bot library for:
 
 import asyncio
 import dataclasses
-import faulthandler
 import inspect
 import json
 import logging
@@ -23,6 +22,8 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
+
+from agent.deadline import run_bounded_async
 
 
 def _redact_telegram_error_text(error: object) -> str:
@@ -65,111 +66,31 @@ def _consume_abandoned_task(task: asyncio.Task) -> None:
         logger.debug("Abandoned Telegram init task failed after timeout", exc_info=True)
 
 
-# Grace period after the wall-clock deadline fires: if the event loop still
-# hasn't processed the expiry callback by then, the loop thread itself is
-# blocked in a synchronous call — the exact state in which every asyncio-based
-# timeout (including this helper's own expiry hand-off) goes silent, so the
-# gateway hangs at "attempt 1/8" with no further output (#63309).
-_LOOP_BLOCKED_DUMP_GRACE = 5.0
-
-
-def _dump_loop_blocked_diagnostics(timeout: float, grace: float) -> None:
-    """Emit diagnostics from the deadline timer thread when the loop is stuck.
-
-    Runs OFF the event loop, so it works precisely when the loop cannot. The
-    faulthandler dump names the frame the loop thread is blocked in — the one
-    piece of information #63309-class hangs otherwise never surface.
-    """
-    logger.warning(
-        "[Telegram] init deadline (%.0fs) expired but the event loop has not "
-        "processed the expiry after a further %.0fs — the loop thread appears "
-        "BLOCKED in a synchronous call, which is why no timeout fires (#63309). "
-        "Dumping all thread stacks to stderr to identify the blocking frame.",
-        timeout,
-        grace,
-    )
-    try:
-        faulthandler.dump_traceback(all_threads=True)
-    except Exception:
-        logger.debug("faulthandler traceback dump failed", exc_info=True)
-
-
 async def _await_with_thread_deadline(awaitable, timeout: float, *, on_abandon=None):
     """Await with a wall-clock deadline that does not depend on loop timers.
 
-    ``asyncio.wait_for`` schedules its timeout on the event loop and then waits
-    for cancellation to propagate.  PTB/httpcore initialization can sit inside
-    cancellation-shielded anyio scopes, so a timed-out initialize() may never
-    hand control back to the retry ladder under some supervisors.  This helper
-    lets a daemon ``threading.Timer`` wake the loop and, on timeout, abandons
-    the shielded task instead of awaiting cancellation completion.
+    Thin wrapper over :func:`agent.deadline.run_bounded_async` (#85125 Phase
+    2f) — this adapter's private implementation was the ancestor of that
+    primitive and is now consolidated onto it. The unified layer keeps every
+    property the 9 call sites here rely on: thread-timer deadline that
+    survives a blocked event loop (#63309), abandonment of
+    cancellation-shielded tasks (PTB/httpcore init inside anyio scopes),
+    detached best-effort ``on_abandon`` cleanup so an abandoned initialize()
+    can't leak an httpx pool per retry attempt, and off-loop stack-dump
+    diagnostics when the loop never processes the expiry.
 
-    ``on_abandon`` (optional) is a zero-arg callable returning an awaitable that
-    is scheduled as a detached best-effort cleanup when the task is abandoned on
-    timeout.  The abandoned initialize() may leave a half-built httpx client /
-    connection pool open (it never completed and we do not await its
-    cancellation), so the caller uses this to shut that state down and avoid
-    leaking a pool per retry attempt.  Cleanup runs detached and its own errors
-    are swallowed, so it can never re-block the retry ladder.
+    Callers expect ``asyncio.TimeoutError`` on expiry (the PTB retry ladder
+    catches it), so the ``BoundedResult`` outcome is mapped back to a raise.
     """
-    task = asyncio.ensure_future(awaitable)
-    loop = asyncio.get_running_loop()
-    deadline = loop.create_future()
-    # Set the moment the loop actually runs the expiry callback (or the helper
-    # exits normally). threading.Event so the watchdog thread can read it
-    # without touching asyncio state from off-loop.
-    loop_processed_expiry = threading.Event()
-
-    def _mark_expired() -> None:
-        loop_processed_expiry.set()
-        if not deadline.done():
-            deadline.set_result(None)
-
-    def _expire_from_thread() -> None:
-        loop.call_soon_threadsafe(_mark_expired)
-
-    def _watchdog_check() -> None:
-        # The deadline fired _LOOP_BLOCKED_DUMP_GRACE ago but the loop never
-        # ran _mark_expired: the loop thread is stuck in a synchronous call.
-        # Diagnose from this thread — the loop can't.
-        if not loop_processed_expiry.is_set():
-            _dump_loop_blocked_diagnostics(timeout, _LOOP_BLOCKED_DUMP_GRACE)
-
-    timer = threading.Timer(max(timeout, 0.0), _expire_from_thread)
-    timer.daemon = True
-    timer.start()
-    watchdog = threading.Timer(
-        max(timeout, 0.0) + _LOOP_BLOCKED_DUMP_GRACE, _watchdog_check
+    result = await run_bounded_async(
+        awaitable,
+        timeout,
+        label="telegram-init",
+        on_abandon=on_abandon,
     )
-    watchdog.daemon = True
-    watchdog.start()
-    try:
-        done, _ = await asyncio.wait(
-            {task, deadline},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if task in done:
-            if not deadline.done():
-                deadline.cancel()
-            return await task
-
-        task.cancel()
-        task.add_done_callback(_consume_abandoned_task)
-        if on_abandon is not None:
-            # Detached best-effort cleanup: close the half-built app's httpx
-            # client/pool so an abandoned attempt can't leak sockets across the
-            # retry ladder. Detached + exception-observed so it never re-blocks
-            # or re-hangs the ladder we are trying to advance.
-            cleanup = asyncio.ensure_future(_run_abandon_cleanup(on_abandon))
-            cleanup.add_done_callback(_consume_abandoned_task)
+    if result.timed_out:
         raise asyncio.TimeoutError()
-    finally:
-        timer.cancel()
-        watchdog.cancel()
-        # cancel() cannot stop a Timer whose callback is already running;
-        # setting the event closes that race so a completed await can never
-        # be misreported as a blocked loop.
-        loop_processed_expiry.set()
+    return result.value
 
 
 async def _first_completed(*futures: "asyncio.Future") -> None:
@@ -180,20 +101,6 @@ async def _first_completed(*futures: "asyncio.Future") -> None:
     losers — the caller owns their lifecycle.
     """
     await asyncio.wait(set(futures), return_when=asyncio.FIRST_COMPLETED)
-
-
-async def _run_abandon_cleanup(on_abandon) -> None:
-    """Run the abandonment cleanup coroutine, swallowing any failure.
-
-    Wrapped so a cleanup that itself hangs or raises cannot surface as an
-    unhandled task error or block anything — it is fully fire-and-forget.
-    """
-    try:
-        result = on_abandon()
-        if asyncio.iscoroutine(result) or asyncio.isfuture(result):
-            await result
-    except Exception:
-        logger.debug("Abandoned Telegram init cleanup failed", exc_info=True)
 
 
 async def _shutdown_abandoned_app(app) -> None:
@@ -692,6 +599,14 @@ class TelegramAdapter(BasePlatformAdapter):
     # Bounds memory during extended outages; oldest events are dropped first.
     HELD_INBOUND_MAX = 64
     _GENERAL_TOPIC_THREAD_ID = "1"
+    # send() can race a disconnect/reconnect window: the final reply is
+    # generated, Telegram drops, and send() used to fail immediately with
+    # "Not connected" (retryable=False). The delivery ledger then held the
+    # answer until the next gateway boot — hours later. Wait briefly for
+    # _bot (or a replacement adapter the reconnect watcher just installed)
+    # so a 10–20s blip delivers now. Same idea as QQBot._wait_for_reconnection.
+    _RECONNECT_WAIT_SECONDS = 15.0
+    _RECONNECT_POLL_INTERVAL = 0.5
 
     # Telegram's edit_message applies MarkdownV2 formatting only on the
     # finalize=True path.  Without this flag, stream_consumer._send_or_edit
@@ -988,6 +903,53 @@ class TelegramAdapter(BasePlatformAdapter):
         if not getattr(self, "_fatal_error_code", None):
             return False
         return not bool(getattr(self, "_fatal_error_retryable", True))
+
+    def _replacement_telegram_adapter(self) -> Optional["TelegramAdapter"]:
+        """Return the live Telegram adapter if the reconnect watcher replaced us.
+
+        The background reconnect watcher builds a *new* adapter and puts it in
+        ``runner.adapters``. An in-flight ``send()`` still holds the old
+        instance whose ``_bot`` stays None. Waiting only on ``self._bot``
+        would miss that replacement and still drop the final reply.
+        """
+        runner = getattr(self, "gateway_runner", None)
+        adapters = getattr(runner, "adapters", None) or {}
+        live = adapters.get(self.platform)
+        if live is not None and live is not self and getattr(live, "_bot", None):
+            return live
+        return None
+
+    async def _wait_for_reconnection(self) -> bool:
+        """Wait for ``_bot`` or a replacement adapter after a transient drop.
+
+        Returns True if sending can proceed (this instance or a replacement
+        is connected). Returns False if still disconnected when the wait
+        expires, or if the failure is permanently fatal.
+        """
+        if self._bot or self._replacement_telegram_adapter() is not None:
+            return True
+        if self._is_permanent_fatal():
+            return False
+        wait_s = float(getattr(self, "_RECONNECT_WAIT_SECONDS", 15.0))
+        poll_s = float(getattr(self, "_RECONNECT_POLL_INTERVAL", 0.5))
+        logger.info(
+            "[%s] Not connected — waiting for reconnection (up to %.0fs)",
+            self.name, wait_s,
+        )
+        waited = 0.0
+        while waited < wait_s:
+            await asyncio.sleep(poll_s)
+            waited += poll_s
+            if self._is_permanent_fatal():
+                return False
+            if self._bot or self._replacement_telegram_adapter() is not None:
+                logger.info("[%s] Reconnected after %.1fs", self.name, waited)
+                return True
+        logger.warning(
+            "[%s] Still not connected after %.0fs",
+            self.name, wait_s,
+        )
+        return False
 
     def _should_drop_delayed_delivery(self) -> bool:
         """True once teardown/fatal-error started — delayed flushes must not dispatch.
@@ -5297,7 +5259,20 @@ class TelegramAdapter(BasePlatformAdapter):
     ) -> SendResult:
         """Send a message to a Telegram chat."""
         if not self._bot:
-            return SendResult(success=False, error="Not connected")
+            live = self._replacement_telegram_adapter()
+            if live is not None:
+                return await live.send(chat_id, content, reply_to, metadata)
+            if self._is_permanent_fatal() or not await self._wait_for_reconnection():
+                return SendResult(
+                    success=False,
+                    error="Not connected",
+                    retryable=not self._is_permanent_fatal(),
+                )
+            live = self._replacement_telegram_adapter()
+            if not self._bot and live is not None:
+                return await live.send(chat_id, content, reply_to, metadata)
+            if not self._bot:
+                return SendResult(success=False, error="Not connected", retryable=True)
 
         # getattr() — tests build adapters via object.__new__() (no __init__).
         if getattr(self, "_send_path_degraded", False):

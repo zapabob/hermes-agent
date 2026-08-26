@@ -1631,6 +1631,18 @@ def _schema_with_dynamic_provider_options() -> Dict[str, Dict[str, Any]]:
 
     merge("memory.provider", _memory_provider_schema_options(cfg))
 
+    tb_entry = CONFIG_SCHEMA.get("terminal.backend")
+    if isinstance(tb_entry, dict) and isinstance(tb_entry.get("options"), list):
+        try:
+            plugin_names = sorted(
+                {row["name"] for row in _plugin_terminal_backend_rows()}
+                - set(tb_entry["options"])
+            )
+        except Exception:
+            plugin_names = []
+        if plugin_names:
+            merge("terminal.backend", [*tb_entry["options"], *plugin_names])
+
     if not overlay:
         return CONFIG_SCHEMA
 
@@ -7380,7 +7392,6 @@ def get_model_info(profile: Optional[str] = None):
 # in hermes_cli/config.py — listed here for deterministic ordering in the UI.
 _AUX_TASK_SLOTS: Tuple[str, ...] = (
     "vision",
-    "web_extract",
     "compression",
     "skills_hub",
     "approval",
@@ -15910,6 +15921,46 @@ _TERMINAL_BACKENDS: List[Dict[str, str]] = [
 _TERMINAL_BACKEND_NAMES = {row["name"] for row in _TERMINAL_BACKENDS}
 
 
+def _plugin_terminal_backend_rows() -> List[Dict[str, str]]:
+    """Picker rows for plugin-registered terminal backends (fail-soft)."""
+    rows: List[Dict[str, str]] = []
+    try:
+        from hermes_cli.plugins import discover_plugins
+
+        discover_plugins()  # idempotent — plugin state may not be loaded yet
+    except Exception:
+        pass
+    try:
+        from agent.terminal_env_registry import list_providers
+
+        for provider in list_providers():
+            try:
+                rows.append({
+                    "name": provider.name.strip().lower(),
+                    "label": provider.display_name,
+                    "description": provider.description,
+                })
+            except Exception:
+                continue
+    except Exception:
+        return rows
+    return rows
+
+
+def _terminal_backend_rows() -> List[Dict[str, str]]:
+    """Built-in picker rows plus plugin-registered backends (request time).
+
+    Computed per request (mirrors ``_schema_with_dynamic_provider_options``)
+    so a plugin installed after server start still shows up.
+    """
+    return [*_TERMINAL_BACKENDS, *_plugin_terminal_backend_rows()]
+
+
+def _terminal_backend_names() -> set:
+    """Valid ``terminal.backend`` values, including plugin backends."""
+    return {row["name"] for row in _terminal_backend_rows()}
+
+
 def _terminal_cfg_value(terminal_cfg: dict, key: str, env_var: str) -> str:
     """Read a terminal.* setting from config.yaml, falling back to its env var."""
     value = terminal_cfg.get(key)
@@ -16022,6 +16073,14 @@ def _probe_terminal_backend(name: str, terminal_cfg: dict) -> tuple:
             return _probe_modal_backend()
         if name == "daytona":
             return _probe_daytona_backend()
+        try:
+            from agent.terminal_env_registry import get_provider
+
+            provider = get_provider(name)
+            if provider is not None:
+                return provider.probe()
+        except Exception:
+            pass
         return ("unavailable", f"Unknown backend: {name}")
     except Exception as exc:  # pragma: no cover — belt-and-braces guard
         return ("unavailable", f"Probe failed: {exc}")
@@ -20031,6 +20090,91 @@ def _demo() -> None:
     print("web_server parent-death watchdog self-check: OK")
 
 
+# ── Port-conflict sentinel (#93608) ─────────────────────────────────────────
+# When the requested port is already bound, uvicorn's ``bind_socket()``
+# catches the OSError itself and does ``logger.error(exc); sys.exit(1)`` — a
+# bare ERROR line plus the same exit 1 as any real backend crash. The desktop
+# spawn (and any script wrapping ``hermes serve``) cannot tell "port occupied"
+# from "backend broken". So we probe the exact bind before handing the socket
+# to uvicorn and, on conflict, emit ONE machine-readable stdout sentinel plus
+# a human hint, then exit with a distinct code.
+#
+# 75 == BSD ``EX_TEMPFAIL`` (sysexits.h) — the codebase's existing convention
+# for "transient environmental condition, not a code failure" (see
+# gateway/restart.py and kanban_db.py's quota-wall sentinel).
+PORT_IN_USE_EXIT_CODE = 75
+
+# One line, stable format, parsed by machines — mirrors the shape of the
+# HERMES_BACKEND_READY sentinel (which is NOT changed by any of this).
+_PORT_IN_USE_SENTINEL = "BACKEND_PORT_IN_USE port={port}"
+
+
+def _is_addr_in_use_error(exc: OSError) -> bool:
+    """True when ``exc`` is the platform's address-in-use bind failure."""
+    import errno
+
+    codes = {errno.EADDRINUSE, 98, 48, 10048}  # POSIX, Linux, macOS, WinSock
+    if exc.errno in codes:
+        return True
+    return getattr(exc, "winerror", None) == 10048  # WSAEADDRINUSE
+
+
+def _port_bind_conflict(host: str, port: int) -> bool:
+    """Probe whether binding ``host:port`` would fail with EADDRINUSE.
+
+    ``port == 0`` (ephemeral) can never conflict — the kernel picks a free
+    port — so the probe is skipped and ``--port 0`` behaves exactly as
+    before. Any probe error other than address-in-use returns ``False`` so
+    uvicorn surfaces it with its normal diagnostics (bad host, EACCES, …).
+    """
+    if not port:
+        return False
+    import socket as _socket
+
+    family = _socket.AF_INET6 if ":" in host else _socket.AF_INET
+    try:
+        probe = _socket.socket(family, _socket.SOCK_STREAM)
+    except OSError:
+        return False
+    try:
+        import sys as _sys_mod
+
+        _exclusive = getattr(_socket, "SO_EXCLUSIVEADDRUSE", None)
+        if _sys_mod.platform == "win32" and _exclusive is not None:
+            # Windows: SO_REUSEADDR means "bind over anyone" — a probe (or
+            # uvicorn bind) with it SUCCEEDS on top of a live LISTEN socket,
+            # so it can never detect a conflict. SO_EXCLUSIVEADDRUSE makes
+            # the probe fail with WSAEADDRINUSE exactly when another socket
+            # holds the port (the reporter's 10048 shape in #93608).
+            probe.setsockopt(_socket.SOL_SOCKET, _exclusive, 1)
+        else:
+            # POSIX: match uvicorn's bind flags (uvicorn/config.py
+            # bind_socket) so the probe conflicts exactly when uvicorn's own
+            # bind would: SO_REUSEADDR lets TIME_WAIT remnants pass while a
+            # live LISTEN socket still fails.
+            probe.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        probe.bind((host, port))
+    except OSError as exc:
+        return _is_addr_in_use_error(exc)
+    except Exception:
+        return False
+    finally:
+        probe.close()
+    return False
+
+
+def _report_port_in_use(host: str, port: int) -> None:
+    """Print the machine sentinel + a human hint naming likely holders."""
+    print(_PORT_IN_USE_SENTINEL.format(port=port), flush=True)
+    print(
+        f"  Port {port} on {host} is already in use — likely another "
+        "'hermes serve' / 'hermes dashboard' backend or the Hermes gateway. "
+        "Stop the other process, or pass --port <other> "
+        "(--port 0 picks a free ephemeral port).",
+        flush=True,
+    )
+
+
 def start_server(
     host: str = "127.0.0.1",
     port: int = 9119,
@@ -20230,9 +20374,9 @@ def start_server(
     # (bind port 0 → close → uvicorn rebind): the socket is held by
     # uvicorn the entire time, so no other process can steal the port.
     #
-    # For explicit non-zero ports, if the port is taken uvicorn catches
-    # OSError inside create_server() and exits with a clear error — no
-    # separate preflight probe needed.
+    # For explicit non-zero ports, a taken port is detected by the #93608
+    # preflight probe below (BACKEND_PORT_IN_USE sentinel + distinct exit
+    # code); uvicorn's own bind error remains the fallback for races.
     # Loopback binds are the Desktop case: a single local client, no reverse
     # proxy in front. uvicorn's ws keepalive ping runs ON the same event loop
     # as agent turns, and a single synchronous GIL-holding call on a worker
@@ -20282,6 +20426,16 @@ def start_server(
         ws_max_size=_DESKTOP_ATTACHMENT_WS_MAX_BYTES,
     )
     server = uvicorn.Server(config)
+
+    # ── #93608: machine-readable port-conflict detection ──────────────
+    # uvicorn's own bind_socket() would catch the EADDRINUSE and exit 1
+    # with a bare ERROR line — indistinguishable from "backend broken".
+    # Probe the exact bind first so a conflict surfaces as the stable
+    # BACKEND_PORT_IN_USE sentinel + a distinct exit code instead.
+    # ``--port 0`` (ephemeral) is skipped by the probe and unaffected.
+    if _port_bind_conflict(host, port):
+        _report_port_in_use(host, port)
+        raise SystemExit(PORT_IN_USE_EXIT_CODE)
 
     async def _serve():
         # Split startup from main_loop so we can read the bound port
@@ -20449,6 +20603,15 @@ def start_server(
             asyncio.run(_serve())
         except KeyboardInterrupt:
             return
+        except SystemExit as exc:
+            # Probe-to-bind race (#93608): another process grabbed the port
+            # between our preflight probe and uvicorn's real bind. uvicorn's
+            # bind_socket() exits 1 — re-check the bind and translate a
+            # confirmed conflict into the sentinel + distinct exit code.
+            if exc.code == 1 and _port_bind_conflict(host, port):
+                _report_port_in_use(host, port)
+                raise SystemExit(PORT_IN_USE_EXIT_CODE) from None
+            raise
         return
 
     # Windows-only path. Resolve the runner + loop factory FIRST (and fall back
@@ -20483,3 +20646,9 @@ def start_server(
             asyncio.run(_serve())
     except KeyboardInterrupt:
         return
+    except SystemExit as exc:
+        # Same probe-to-bind race translation as the POSIX branch (#93608).
+        if exc.code == 1 and _port_bind_conflict(host, port):
+            _report_port_in_use(host, port)
+            raise SystemExit(PORT_IN_USE_EXIT_CODE) from None
+        raise

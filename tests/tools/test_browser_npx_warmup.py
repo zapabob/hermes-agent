@@ -20,7 +20,7 @@ from unittest.mock import MagicMock, patch
 
 from tools.browser_tool import (
     AGENT_BROWSER_NPX_SPEC,
-    _kill_process_tree,
+    _legacy_kill_process_tree,
     warm_agent_browser_npx_cache,
 )
 
@@ -216,7 +216,11 @@ def test_returns_false_instead_of_raising_on_unexpected_communicate_exception():
     mock_kill.assert_called_once_with(proc)
 
 
-class TestKillProcessTree:
+class TestLegacyKillProcessTree:
+    """Contract of the pre-#85125 local fallback (used when agent.deadline
+    delegation fails); the delegating wrapper is covered in
+    tests/agent/test_treekill_consolidation.py."""
+
     def test_posix_kills_process_group_term_then_kill(self, monkeypatch):
         import signal
 
@@ -229,7 +233,7 @@ class TestKillProcessTree:
             "os.killpg", lambda pgid, sig: killpg_calls.append((pgid, sig)), raising=False
         )
 
-        _kill_process_tree(proc)
+        _legacy_kill_process_tree(proc)
 
         assert killpg_calls == [
             (999, signal.SIGTERM),
@@ -246,7 +250,7 @@ class TestKillProcessTree:
 
         monkeypatch.setattr("os.getpgid", _raise, raising=False)
 
-        _kill_process_tree(proc)  # must not raise
+        _legacy_kill_process_tree(proc)  # must not raise
 
     def test_posix_missing_killpg_attribute_falls_back_to_proc_kill(self, monkeypatch):
         """Some POSIX-like environments may lack os.killpg entirely (the
@@ -263,7 +267,7 @@ class TestKillProcessTree:
         monkeypatch.setattr("tools.browser_tool._is_windows", lambda: False)
         monkeypatch.delattr(os_module, "killpg", raising=False)
 
-        _kill_process_tree(proc)
+        _legacy_kill_process_tree(proc)
 
         proc.kill.assert_called_once()
 
@@ -276,7 +280,7 @@ class TestKillProcessTree:
         monkeypatch.setattr("tools.browser_tool._is_windows", lambda: False)
         monkeypatch.delattr(os_module, "killpg", raising=False)
 
-        _kill_process_tree(proc)  # must not raise
+        _legacy_kill_process_tree(proc)  # must not raise
 
     def test_posix_sigterm_permission_denied_does_not_attempt_sigkill(self, monkeypatch):
         """If SIGTERM itself is rejected (e.g. a stale pgid reused by an
@@ -296,7 +300,7 @@ class TestKillProcessTree:
 
         monkeypatch.setattr("os.killpg", fake_killpg, raising=False)
 
-        _kill_process_tree(proc)  # must not raise
+        _legacy_kill_process_tree(proc)  # must not raise
 
         assert killpg_calls == [(999, signal.SIGTERM)]
 
@@ -305,7 +309,7 @@ class TestKillProcessTree:
         proc.pid = 4321
         monkeypatch.setattr("tools.browser_tool._is_windows", lambda: True)
         with patch("subprocess.run") as mock_run:
-            _kill_process_tree(proc)
+            _legacy_kill_process_tree(proc)
 
         mock_run.assert_called_once()
         cmd = mock_run.call_args.args[0]
@@ -316,4 +320,4 @@ class TestKillProcessTree:
         proc.pid = 4321
         monkeypatch.setattr("tools.browser_tool._is_windows", lambda: True)
         with patch("subprocess.run", side_effect=OSError("taskkill missing")):
-            _kill_process_tree(proc)  # must not raise
+            _legacy_kill_process_tree(proc)  # must not raise

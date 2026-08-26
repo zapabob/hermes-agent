@@ -10,9 +10,9 @@ vi.mock('./right-rail/preview-console-store', () => ({
 
 import { contributesToWorkspace } from '@/components/pane-shell/workspace-scope'
 import { registry } from '@/contrib/registry'
-import { closeRightRail, openPreview, previewTabId, type PreviewTarget } from '@/store/preview'
+import { $previewTabs, closeRightRail, noteBrowserPage, openPreview, type PreviewTarget } from '@/store/preview'
 
-import { watchPreviewTiles } from './preview-tile'
+import { browserTabExternalUrl, browserTabLabel, watchPreviewTiles } from './preview-tile'
 
 beforeAll(() => {
   watchPreviewTiles()
@@ -22,8 +22,10 @@ afterEach(() => {
   closeRightRail()
 })
 
-function browserPane(tabId: string) {
-  return registry.getArea('panes').find(entry => entry.id === `preview-tile:${tabId}`)
+// By prefix, not by a literal id: a Browser tab's id is minted per tab now
+// that there can be more than one of them.
+function browserPane() {
+  return registry.getArea('panes').find(entry => entry.id.startsWith('preview-tile:url:'))
 }
 
 describe('preview tiles in Bot Mode', () => {
@@ -37,12 +39,70 @@ describe('preview tiles in Bot Mode', () => {
 
     openPreview(target, 'explicit-link')
 
-    const pane = browserPane(previewTabId(target))
+    const pane = browserPane()
 
     expect(pane).toBeTruthy()
     expect(pane?.workspaceMode).toBeUndefined()
     expect(contributesToWorkspace(pane, 'sessions')).toBe(true)
     expect(contributesToWorkspace(pane, 'bots', 'bot:connection-a::default')).toBe(true)
+  })
+})
+
+describe('browserTabLabel', () => {
+  const target = { kind: 'url', label: 'Browser', source: 'about:blank', url: 'about:blank' } as const
+
+  it('names the tab after the page', () => {
+    expect(browserTabLabel(target, { title: 'Hacker News', url: 'https://news.ycombinator.com/' })).toBe('Hacker News')
+  })
+
+  // Chromium hands back the address as the title when the page never set one,
+  // which is a worse tab label than the host it came from.
+  it('falls back to the host when the page has no title of its own', () => {
+    expect(browserTabLabel(target, { title: '', url: 'https://www.example.com/a/b' })).toBe('example.com')
+    expect(browserTabLabel(target, { title: 'https://example.com/a', url: 'https://example.com/a' })).toBe(
+      'example.com'
+    )
+  })
+
+  it('falls back to the surface when there is no page and no host', () => {
+    expect(browserTabLabel(target)).toBe('Browser')
+    expect(browserTabLabel(target, { title: '', url: 'about:blank' })).toBe('Browser')
+  })
+
+  // A tab restored from storage has reported nothing yet, so its target is all
+  // there is to name it by.
+  it('names an unreported tab from its target', () => {
+    expect(browserTabLabel({ ...target, url: 'https://github.com/nous' })).toBe('github.com')
+  })
+})
+
+describe('browserTabExternalUrl', () => {
+  const openBrowser = (url: string) => {
+    openPreview({ kind: 'url', label: 'Browser', source: url, url }, 'explicit-link')
+
+    return $previewTabs.get().find(tab => tab.target.kind === 'url')!.id
+  }
+
+  it('hands the live page to the OS browser, not the address the tab was opened with', () => {
+    const tabId = openBrowser('https://example.com')
+
+    noteBrowserPage(tabId, { title: 'Hacker News', url: 'https://news.ycombinator.com/' })
+
+    expect(browserTabExternalUrl(tabId)).toBe('https://news.ycombinator.com/')
+  })
+
+  it('falls back to the target when the tab has not reported a page yet', () => {
+    expect(browserTabExternalUrl(openBrowser('https://github.com/nous'))).toBe('https://github.com/nous')
+  })
+
+  it('refuses about:blank and other non-pages', () => {
+    expect(browserTabExternalUrl(openBrowser('about:blank'))).toBeNull()
+  })
+
+  it('is null for a file peek', () => {
+    openPreview(fileTarget('/tmp/a.ts'), 'file-browser')
+
+    expect(browserTabExternalUrl('file:/tmp/a.ts')).toBeNull()
   })
 })
 

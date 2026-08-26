@@ -4,6 +4,7 @@ import { assistantTextPart, type ChatMessage, chatMessageText, textPart } from '
 import { normalizePersonalityValue } from '@/lib/chat-runtime'
 import { embeddedImageUrls, textWithoutEmbeddedImages } from '@/lib/embedded-images'
 import { parseErrorSurface } from '@/lib/error-surface'
+import { isMessagingSource, normalizeSessionSource } from '@/lib/session-source'
 import { reconcileApprovalModeForProfile } from '@/store/approval-mode'
 import { requestDesktopOnboardingForCredentialWarning } from '@/store/onboarding'
 import { $activeGatewayProfile, $profiles, normalizeProfileKey } from '@/store/profile'
@@ -15,6 +16,7 @@ import {
   commitWorkspaceCwdForSelectedSession,
   releaseWorkspaceCwdOwner,
   sessionMatchesStoredId,
+  setCronSessions,
   setCurrentBranch,
   setCurrentCwdTransient,
   setCurrentFastMode,
@@ -24,6 +26,8 @@ import {
   setCurrentReasoningEffort,
   setCurrentServiceTier,
   setCurrentUsage,
+  setMessagingSessions,
+  setSessionOwnerHint,
   setSessions,
   setWorkspaceCwdOwner,
   setYoloActive
@@ -1243,13 +1247,16 @@ export function upsertOptimisticSession(
   title: string | null = null,
   preview: string | null = null,
   parentSessionId: string | null = null,
-  lastActive?: number
+  lastActive?: number,
+  ownerRoute?: SessionProfileRoute
 ) {
   const now = lastActive ?? Date.now() / 1000
-  // Stamp the profile the session was just created on (= the live gateway's
-  // profile) so the scoped sidebar shows the new row immediately instead of
-  // filtering it out as "default" until the aggregator re-fetches.
-  const profileKey = normalizeProfileKey($activeGatewayProfile.get())
+  // Stamp the profile/source the session was just created on so the scoped
+  // sidebar shows the new row immediately instead of filtering it out as
+  // "default" until the aggregator re-fetches. The active gateway is only a
+  // presentation detail: a concurrent source switch can move it before this
+  // optimistic row is inserted.
+  const profileKey = normalizeProfileKey(ownerRoute?.profile ?? $activeGatewayProfile.get())
 
   const session: SessionInfo = {
     // Seed cwd so the grouped sidebar can place the new row in its repo/worktree
@@ -1271,7 +1278,12 @@ export function upsertOptimisticSession(
     source: 'tui',
     started_at: now,
     title,
-    tool_call_count: 0
+    tool_call_count: 0,
+    ...(ownerRoute?.connectionId.trim() ? { connection_id: ownerRoute.connectionId.trim() } : {})
+  }
+
+  if (ownerRoute) {
+    setSessionOwnerHint(id, ownerRoute)
   }
 
   setSessions(prev => [session, ...prev.filter(s => s.id !== id)])
@@ -1287,6 +1299,70 @@ export function patchSessionWorkspace(sessionId: string, cwd: string | undefined
 
 export function sessionShouldHaveTranscript(session: SessionInfo | undefined): boolean {
   return (session?.message_count ?? 0) > 0
+}
+
+export type ListedSessionSlice = 'cron' | 'messaging' | 'sessions'
+
+export function findListedSession(
+  storedSessionId: string
+): { session: SessionInfo; slice: ListedSessionSlice } | undefined {
+  const match = (session: SessionInfo) => sessionMatchesStoredId(session, storedSessionId)
+  const fromMessaging = $messagingSessions.get().find(match)
+
+  if (fromMessaging) {
+    return { session: fromMessaging, slice: 'messaging' }
+  }
+
+  const fromCron = $cronSessions.get().find(match)
+
+  if (fromCron) {
+    return { session: fromCron, slice: 'cron' }
+  }
+
+  const fromSessions = $sessions.get().find(match)
+
+  if (fromSessions) {
+    return { session: fromSessions, slice: 'sessions' }
+  }
+
+  return undefined
+}
+
+export function dropListedSession(storedSessionId: string): void {
+  const keep = (session: SessionInfo) => !sessionMatchesStoredId(session, storedSessionId)
+
+  setSessions(prev => prev.filter(keep))
+  setMessagingSessions(prev => prev.filter(keep))
+  setCronSessions(prev => prev.filter(keep))
+}
+
+export function restoreListedSession(session: SessionInfo, slice?: ListedSessionSlice): void {
+  const target: ListedSessionSlice =
+    slice ??
+    (isMessagingSource(session.source)
+      ? 'messaging'
+      : normalizeSessionSource(session.source) === 'cron'
+        ? 'cron'
+        : 'sessions')
+
+  const prepend = (prev: SessionInfo[]) => [
+    session,
+    ...prev.filter(existing => !sessionMatchesStoredId(existing, session.id))
+  ]
+
+  if (target === 'messaging') {
+    setMessagingSessions(prepend)
+
+    return
+  }
+
+  if (target === 'cron') {
+    setCronSessions(prepend)
+
+    return
+  }
+
+  setSessions(prepend)
 }
 
 function upsertResolvedSession(session: SessionInfo, storedSessionId: string) {

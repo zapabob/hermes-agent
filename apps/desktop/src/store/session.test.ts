@@ -15,6 +15,7 @@ vi.mock('@/hermes', () => ({
   setSessionUnreadRemote: (id: string, unread: boolean, profile?: null | string) => setUnreadRemote(id, unread, profile)
 }))
 
+import { deferred } from '../test/deferred'
 import { makeSessionInfo } from '../test/session-info'
 
 import {
@@ -27,9 +28,12 @@ import {
   _resetLegacyDiscardForTests,
   applyConfiguredDefaultProjectDir,
   commitWorkspaceCwdForSelectedSession,
+  ensureDefaultWorkspaceCwd,
+  getConfiguredDefaultProjectDir,
   getRememberedRoute,
   getRememberedSessionId,
   getSessionOwnerHint,
+  knownSessionOwner,
   knownSessionProfile,
   mergeSessionPage,
   rememberedSessionProfile,
@@ -57,6 +61,28 @@ import {
 const session = (over: Partial<SessionInfo>): SessionInfo => makeSessionInfo({ id: 'live', ...over })
 
 describe('session owner hints', () => {
+  it('preserves the registry owner recorded on a discovered session row', () => {
+    expect(
+      knownSessionOwner(
+        [session({ connection_id: 'test-amnezia', id: 'registry-session', profile: 'default' })],
+        'registry-session'
+      )
+    ).toEqual({ connectionId: 'test-amnezia', profile: 'default' })
+  })
+
+  it('preserves the exact registry owner for session-scoped RPC routing', () => {
+    const route = {
+      connectionId: 'test-amnezia',
+      mode: 'remote' as const,
+      profile: 'default',
+      targetProfile: 'default'
+    }
+
+    setSessionOwnerHint('remote-session', route)
+
+    expect(knownSessionOwner([session({ id: 'remote-session', profile: 'default' })], 'remote-session')).toEqual(route)
+  })
+
   it('keeps identical session ids separate across connection and profile owners', () => {
     const sourceA = { connectionId: 'source-a', mode: 'remote' as const, profile: 'worker', targetProfile: 'backend-a' }
     const sourceB = { connectionId: 'source-b', mode: 'remote' as const, profile: 'worker', targetProfile: 'backend-b' }
@@ -421,6 +447,57 @@ describe('workspaceCwdForNewSession', () => {
     window.localStorage.removeItem('hermes.desktop.workspace-cwd')
     window.localStorage.removeItem('hermes.desktop.workspace-cwd.remote.http%3A%2F%2Fbackend-a.default')
     window.localStorage.removeItem('hermes.desktop.workspace-cwd.remote.http%3A%2F%2Fbackend-b.default')
+    delete (window as { hermesDesktop?: unknown }).hermesDesktop
+  })
+
+  it('does not publish a delayed configured default after ownership is lost', async () => {
+    const settingsResult = deferred<{
+      defaultLabel: string
+      dir: string
+      resolvedCwd: string
+    }>()
+
+    const sanitizeWorkspaceCwd = vi.fn(async (cwd: string) => ({ cwd }))
+
+    ;(window as { hermesDesktop?: unknown }).hermesDesktop = {
+      sanitizeWorkspaceCwd,
+      settings: { getDefaultProjectDir: vi.fn(() => settingsResult.promise) }
+    }
+    applyConfiguredDefaultProjectDir('/newer/default')
+    let ownsSwitch = true
+
+    const seeding = ensureDefaultWorkspaceCwd(() => ownsSwitch)
+    ownsSwitch = false
+    settingsResult.resolve({ defaultLabel: '/stale', dir: '/stale/default', resolvedCwd: '/stale/default' })
+    await seeding
+
+    expect(getConfiguredDefaultProjectDir()).toBe('/newer/default')
+    expect($currentCwd.get()).toBe('')
+    expect(sanitizeWorkspaceCwd).not.toHaveBeenCalled()
+  })
+
+  it('does not publish a delayed sanitized cwd after ownership is lost', async () => {
+    const sanitized = deferred<{ cwd: string }>()
+
+    ;(window as { hermesDesktop?: unknown }).hermesDesktop = {
+      sanitizeWorkspaceCwd: vi.fn(() => sanitized.promise),
+      settings: {
+        getDefaultProjectDir: vi.fn(async () => ({
+          defaultLabel: '/configured',
+          dir: '/configured',
+          resolvedCwd: '/configured'
+        }))
+      }
+    }
+    let ownsSwitch = true
+
+    const seeding = ensureDefaultWorkspaceCwd(() => ownsSwitch)
+    await vi.waitFor(() => expect(getConfiguredDefaultProjectDir()).toBe('/configured'))
+    ownsSwitch = false
+    sanitized.resolve({ cwd: '/stale/sanitized' })
+    await seeding
+
+    expect($currentCwd.get()).toBe('')
   })
 
   it('prefers the configured default over the sticky remembered workspace', () => {
@@ -970,5 +1047,23 @@ describe('knownSessionProfile', () => {
     // probe, not silently route the RPC to whatever profile is on screen.
     expect(knownSessionProfile([], 'totally-unknown')).toBeUndefined()
     expect(knownSessionProfile([], null)).toBeUndefined()
+  })
+})
+
+describe('knownSessionOwner', () => {
+  it('preserves a registry connection on a same-named session row', () => {
+    expect(
+      knownSessionOwner(
+        [session({ connection_id: 'source-b', id: 'shared-session', profile: 'default' })],
+        'shared-session'
+      )
+    ).toEqual({ connectionId: 'source-b', profile: 'default' })
+  })
+
+  it('preserves a composite owner hint when the row is not listed', () => {
+    const owner = { connectionId: 'source-a', profile: 'default', targetProfile: 'backend-default' }
+    setSessionOwnerHint('hidden-session', owner)
+
+    expect(knownSessionOwner([], 'hidden-session')).toEqual(owner)
   })
 })

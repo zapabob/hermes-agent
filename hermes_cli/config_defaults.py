@@ -495,6 +495,9 @@ DEFAULT_CONFIG = {
         # When on, SETUID/SETGID caps are omitted from the container since
         # no privilege drop is needed.
         "docker_run_as_host_user": False,
+        # Explicit opt-in for trusted profiles to reuse the same Docker
+        # container identity. Empty preserves the active-profile boundary.
+        "docker_shared_container_key": "",
         # Persistent shell — keep a long-lived bash shell across execute() calls
         # so cwd/env vars/shell variables survive between commands.
         # Enabled by default for non-local backends (SSH); local is always opt-in
@@ -531,6 +534,22 @@ DEFAULT_CONFIG = {
         #           is also excluded from the keyless ring)
         #   unset — auto: keyed when the API key is present, else the ring
         "provider_tier": {},
+        # TTL result caching for web_search + web_extract. Repeat searches
+        # (same query, same provider) within the TTL are served from an
+        # in-process memo; repeat extracts of the same URL are served from
+        # the cache/web full-text store. Concurrent identical searches
+        # (parallel subagents) coalesce into one vendor request. Only
+        # successful responses are cached.
+        "cache_enabled": True,
+        "cache_ttl_minutes": 20,
+        # Hosts whose pages must always be fetched live, never from the
+        # extract cache — sites you're actively developing but testing over
+        # the public internet (staging deploys, tunnel URLs, preview
+        # builds). Entries match exactly, as "*.wildcard", or as a domain
+        # suffix ("mysite.dev" also covers "preview.mysite.dev").
+        # localhost/private-IP URLs are always exempt automatically.
+        #   cache_exempt_hosts: ["mysite.vercel.app", "*.ngrok-free.app"]
+        "cache_exempt_hosts": [],
     },
 
     "browser": {
@@ -547,6 +566,7 @@ DEFAULT_CONFIG = {
         "backend": "",
         "inactivity_timeout": 120,
         "command_timeout": 30,  # Timeout for browser commands in seconds (screenshot, navigate, etc.)
+        "snapshot_threshold": 15000,  # Max chars before snapshot truncate-and-store (min 1000)
         "record_sessions": False,  # Auto-record browser sessions as WebM videos
         "headed": False,  # Local mode: launch Chromium with a visible window (also skips per-turn cleanup so the window persists between turns; idle reaper still applies)
         "allow_private_urls": False,  # Allow navigating to private/internal IPs (localhost, 192.168.x.x, etc.)
@@ -747,6 +767,9 @@ DEFAULT_CONFIG = {
 
     "compression": {
         "enabled": True,
+        "checkpoint_required": False, # Fail closed before lossy compaction unless an
+                                      # active memory provider confirms checkpoint API
+                                      # compatibility and completes the checkpoint.
         "progress_notices": False,    # opt-in (#52995): when True, routine compression
                                       # progress statuses (compacting/preflight/pre-API/
                                       # idle/retry) are delivered to chat gateway
@@ -1075,15 +1098,11 @@ DEFAULT_CONFIG = {
             "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
             "download_timeout": 30,  # seconds — image HTTP download timeout; increase for slow connections
         },
-        "web_extract": {
-            "provider": "auto",
-            "model": "",
-            "base_url": "",
-            "api_key": "",
-            "timeout": 360,        # seconds (6min) — per-attempt LLM summarization timeout; increase for slow local models
-            "extra_body": {},
-            "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
-        },
+        # Note: web_extract no longer uses an auxiliary LLM — pages are
+        # truncate-and-stored with a read_file pointer (no summarization),
+        # and browser snapshots follow the same pattern. The old
+        # ``auxiliary.web_extract.*`` block was removed here. Existing
+        # values in user config.yaml files are harmless leftovers and ignored.
         "compression": {
             "provider": "auto",
             "model": "",
@@ -2075,6 +2094,16 @@ DEFAULT_CONFIG = {
         # Flip to true only if you trust delegated work to run dangerous cmds
         # without human review (cron pipelines, batch automation, etc.).
         "subagent_auto_approve": False,
+        # Background processes started by subagents (task_id "sa-...") route
+        # their notify_on_complete / watch_pattern notifications to the PARENT
+        # conversation (children consume their own waits; anything outliving
+        # the child needs a durable consumer). By default those parent-facing
+        # notifications are SUPPRESSED — the child's consolidated delegation
+        # result is the deliverable, and "npm ci finished" walls mid-chat are
+        # noise. Async-delegation results themselves are NEVER suppressed.
+        # Set to true to restore delivery of child process notifications
+        # (with subagent attribution lines).
+        "surface_child_process_notifications": False,
     },
 
     # Ephemeral prefill messages file — JSON list of {role, content} dicts
@@ -2860,6 +2889,10 @@ DEFAULT_CONFIG = {
             #     model knows which domains are reachable; individual tools
             #     discoverable through tool_search only.
             # "auto"/"on" — activate when at least one deferrable tool exists.
+            #   Today "auto" is an alias of "on"; it stays the default so a
+            #   future budget-gated mode (inline schemas when they fit, defer
+            #   only when they don't) can land on "auto" without changing
+            #   behavior for anyone who pinned "on" or "off" explicitly.
             # "off" — disable entirely. Tools-array assembly is a pass-through.
             "enabled": "auto",
             # Listing budget as a percentage of the active model's context
@@ -2867,10 +2900,11 @@ DEFAULT_CONFIG = {
             # listing_max_tokens). Range 0..100.
             "threshold_pct": 5,
             # When the model calls tool_search without a ``limit`` argument,
-            # how many hits to return. Range 1..max_search_limit.
+            # how many hits to return PER QUERY. Range 1..max_search_limit.
             "search_default_limit": 5,
-            # Hard upper bound the model can request via ``limit``. Range 1..50.
-            "max_search_limit": 20,
+            # Hard upper bound the model can request via ``limit`` (per
+            # query). Range 1..50.
+            "max_search_limit": 25,
             # Skills-style catalog listing embedded in the tool_search bridge
             # description: every deferred tool's name + first sentence of its
             # description (≤60 chars), grouped by MCP server / toolset. Keeps
@@ -3754,6 +3788,15 @@ DEFAULT_CONFIG = {
         # explicit ozone backend, or GPU workaround flags. A list of strings;
         # a single string is also accepted and shell-split.
         "electron_flags": [],
+        # Linux Ozone backend hint, bridged to ELECTRON_OZONE_PLATFORM_HINT
+        # at launch (an explicit env var still wins). "auto" is Chromium's
+        # default — Wayland on a Wayland session, X11 otherwise.
+        # Set "x11" to run under XWayland when a compositor ignores
+        # always-on-top for native Wayland clients (COSMIC, issue #84011).
+        # That also lands the HUD on the solid-window input path, because
+        # setIgnoreMouseEvents is a one-way door on X11.
+        # "wayland" forces a native Wayland surface.
+        "ozone_platform_hint": "auto",
         # GPU hardware acceleration policy for the desktop app:
         #   "auto"  - let the app detect remote displays (SSH/VNC/RDP) and
         #             disable GPU only then (default; current behavior).
@@ -3815,7 +3858,7 @@ DEFAULT_CONFIG = {
     },
 
     # Config schema version - bump this when adding new required fields
-    "_config_version": 38,
+    "_config_version": 39,
 }
 
 # Optional environment variables that enhance functionality

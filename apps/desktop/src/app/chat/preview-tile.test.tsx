@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { group } from '@/components/pane-shell/tree/model'
 import { $activeTreeGroup, $layoutTree, closeTreePane, watchContributedPanes } from '@/components/pane-shell/tree/store'
 import { registry } from '@/contrib/registry'
-import { $previewTabs, closeRightRailTab, openPreview, previewTabId, type PreviewTarget } from '@/store/preview'
+import { $previewTabs, closeRightRailTab, newBrowserTab, openPreview, type PreviewTarget } from '@/store/preview'
 
 import { watchPreviewTiles } from './preview-tile'
 import { previewConsoleState } from './right-rail/preview-console-store'
@@ -65,13 +65,14 @@ describe('preview tiles', () => {
     const second = 'https://second.example.test'
 
     openPreview(urlTarget(first), 'explicit-link')
+    newBrowserTab()
     openPreview(urlTarget(second), 'explicit-link')
 
     const tabs = $previewTabs.get()
     expect(tabs.map(tab => tab.target.url)).toEqual([first, second])
 
-    const firstId = previewTabId(tabs[0].target)
-    const secondId = previewTabId(tabs[1].target)
+    const firstId = tabs[0].id
+    const secondId = tabs[1].id
     expectDock(`preview-tile:${firstId}`, 'workspace')
     expectDock(`preview-tile:${secondId}`, `preview-tile:${firstId}`)
 
@@ -80,14 +81,15 @@ describe('preview tiles', () => {
 
     expect($previewTabs.get().map(tab => tab.target.url)).toEqual([second])
     expect(previewConsoleState(firstId)).not.toBe(originalConsole)
-    expectDock(`preview-tile:${previewTabId($previewTabs.get()[0].target)}`, 'workspace')
+    expectDock(`preview-tile:${$previewTabs.get()[0].id}`, 'workspace')
 
+    newBrowserTab()
     openPreview(urlTarget(first), 'explicit-link')
     const reopened = $previewTabs.get()
-    const reopenedFirstId = previewTabId(reopened[1].target)
+    const reopenedFirstId = reopened[1].id
 
     expect(reopened.map(tab => tab.target.url)).toEqual([second, first])
-    expectDock(`preview-tile:${previewTabId(reopened[0].target)}`, 'workspace')
-    expectDock(`preview-tile:${reopenedFirstId}`, `preview-tile:${previewTabId(reopened[0].target)}`)
+    expectDock(`preview-tile:${reopened[0].id}`, 'workspace')
+    expectDock(`preview-tile:${reopenedFirstId}`, `preview-tile:${reopened[0].id}`)
   })
 })

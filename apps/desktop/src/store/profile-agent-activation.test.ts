@@ -193,3 +193,119 @@ describe('ensureGatewayAgent shares the gatewaySwitch mutex with profile switche
     expect($activeGatewayProfile.get()).toBe('worker')
   })
 })
+
+describe('ensureGatewayAgent commit hook (beforeActivate) — the Sessions switcher door (#93937)', () => {
+  it('runs the hook inside the serialized section, right before the activation; a declined hook activates nothing', async () => {
+    const profileGate = deferred()
+    const order: string[] = []
+
+    ensureGatewayForProfile.mockImplementation(async (profile: string) => {
+      order.push(`profile:${profile}`)
+      await profileGate.promise
+    })
+    ensureGatewayForAgent.mockImplementation(async (_connectionId, profile) => {
+      order.push(`agent:${profile}`)
+
+      return true
+    })
+    getConnection.mockResolvedValue(localConn({ profile: 'worker' }))
+    getConnectionFor.mockResolvedValue(agentConn())
+
+    const profileSwitch = ensureGatewayProfile('worker')
+    await Promise.resolve()
+
+    const declined = ensureGatewayAgent('homelab', 'research', {
+      beforeActivate: () => {
+        order.push('hook:declined')
+
+        return false
+      }
+    })
+
+    await Promise.resolve()
+    // The hook waits for its turn — it must see the world AFTER the earlier
+    // switch published, never before.
+    expect(order).toEqual(['profile:worker'])
+
+    profileGate.resolve()
+    await profileSwitch
+    await declined
+
+    expect(order).toEqual(['profile:worker', 'hook:declined'])
+    expect(ensureGatewayForAgent).not.toHaveBeenCalled()
+    expect(getConnectionFor).not.toHaveBeenCalled()
+    expect($activeGatewayProfile.get()).toBe('worker')
+
+    // An accepted hook runs synchronously before the activation starts.
+    await ensureGatewayAgent('homelab', 'research', {
+      beforeActivate: () => {
+        order.push('hook:accepted')
+
+        return true
+      }
+    })
+
+    expect(order).toEqual(['profile:worker', 'hook:declined', 'hook:accepted', 'agent:research'])
+    expect($activeGatewayProfile.get()).toBe('research')
+    expect($connection.get()?.profile).toBe('research')
+  })
+
+  it('a descriptor lookup that never answers is bounded, fails open, and releases the mutex', async () => {
+    vi.useFakeTimers()
+
+    try {
+      getConnectionFor.mockImplementationOnce(() => new Promise<HermesConnection>(() => undefined))
+
+      const activation = ensureGatewayAgent('homelab', 'research')
+      await vi.advanceTimersByTimeAsync(20_000)
+      await activation
+
+      // Activated; the previous descriptor is kept (fail open), not nulled.
+      expect($activeGatewayProfile.get()).toBe('research')
+      expect($connection.get()?.mode).toBe('local')
+
+      // The next switch is not stuck behind the stalled lookup.
+      getConnectionFor.mockResolvedValue(agentConn({ profile: 'writer' }))
+      await ensureGatewayAgent('homelab', 'writer')
+
+      expect($activeGatewayProfile.get()).toBe('writer')
+      expect($connection.get()?.profile).toBe('writer')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('an aborted activation releases the mutex and cannot publish when its work settles later', async () => {
+    const activationGate = deferred()
+    const controller = new AbortController()
+
+    ensureGatewayForAgent.mockImplementationOnce(async () => {
+      await activationGate.promise
+
+      return true
+    })
+    getConnectionFor.mockImplementation(async ({ profile }) => agentConn({ profile: profile ?? 'default' }))
+
+    const abandoned = ensureGatewayAgent('homelab', 'research', { signal: controller.signal })
+    await vi.waitFor(() => expect(ensureGatewayForAgent).toHaveBeenCalledTimes(1))
+
+    controller.abort()
+
+    try {
+      const winner = ensureGatewayAgent('homelab', 'writer')
+      await vi.waitFor(() => expect(ensureGatewayForAgent).toHaveBeenCalledTimes(2))
+      await winner
+
+      expect($activeGatewayProfile.get()).toBe('writer')
+      expect($connection.get()?.profile).toBe('writer')
+    } finally {
+      activationGate.resolve()
+      await abandoned
+    }
+
+    // The detached activation completed after cancellation but did not regain
+    // ownership and overwrite the newer source/profile publication.
+    expect($activeGatewayProfile.get()).toBe('writer')
+    expect($connection.get()?.profile).toBe('writer')
+  })
+})

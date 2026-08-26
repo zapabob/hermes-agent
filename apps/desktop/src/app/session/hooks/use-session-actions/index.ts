@@ -2,16 +2,24 @@ import { useStore } from '@nanostores/react'
 import { type MutableRefObject, useCallback, useEffect, useRef } from 'react'
 import type { NavigateFunction } from 'react-router'
 
+import { NO_PROJECT_ID } from '@/app/chat/sidebar/projects/workspace-groups'
 import { graftRefreshedTailOntoBackfill } from '@/app/chat/transcript-backfill'
 import { revealTreePane } from '@/components/pane-shell/tree/store'
 import { setWorkspaceScope } from '@/components/pane-shell/workspace-scope'
 import { deleteSession, getAllSessionMessages, getLatestSessionMessages, setSessionArchived } from '@/hermes'
 import { useI18n } from '@/i18n'
-import { type ChatMessage, preserveLocalAssistantErrors, toChatMessages } from '@/lib/chat-messages'
+import {
+  type ChatMessage,
+  preserveLocalAssistantErrors,
+  restorePendingClarifyToolCall,
+  settlePendingClarifyToolCall,
+  stripPendingClarifyProjectionForCache,
+  toChatMessages
+} from '@/lib/chat-messages'
 import { isMissingRpcMethod } from '@/lib/gateway-rpc'
 import { recoverInFlightTurnJournal } from '@/lib/inflight-turn-journal'
 import { setSessionYolo } from '@/lib/yolo-session'
-import { normalizeChoices, setClarifyRequest } from '@/store/clarify'
+import { $clarifyRequests } from '@/store/clarify'
 import { migrateSessionDraft } from '@/store/composer'
 import { clearQueuedPrompts, migrateQueuedPrompts } from '@/store/composer-queue'
 import { openGatewayForAgent, openGatewayForProfile, requestGatewayForAgent } from '@/store/gateway'
@@ -23,6 +31,7 @@ import {
   $gatewaySwapTarget,
   $newChatProfile,
   $newChatRoute,
+  $profiles,
   $showAllProfiles,
   type AgentProfileRoute,
   ensureGatewayAgent,
@@ -30,6 +39,7 @@ import {
   normalizeProfileKey
 } from '@/store/profile'
 import {
+  $projectScope,
   beginSessionMutation,
   endSessionMutation,
   resolveNewSessionCwd,
@@ -39,6 +49,7 @@ import {
 import { setApprovalRequest } from '@/store/prompts'
 import {
   $activeSessionStoredIdRotation,
+  $connection,
   $currentCwd,
   $currentFastMode,
   $currentModel,
@@ -68,7 +79,6 @@ import {
   setResumeExhaustedSessionId,
   setResumeFailedSessionId,
   setSelectedStoredSessionId,
-  setSessions,
   setSessionStartedAt,
   setTurnStartedAt,
   setWorkspaceCwdOwner,
@@ -101,6 +111,7 @@ import type { ClientSessionState, SidebarNavItem } from '../../../types'
 import { sessionContextDrift } from '../session-context-drift'
 import { singleFlightSessionResume } from '../use-prompt-actions/single-flight-resume'
 
+import { pendingClarifyToolPayload, restorePendingClarifyFromSnapshot } from './restore-pending-clarify'
 import {
   appendLiveSessionProjection,
   applyRuntimeInfo,
@@ -108,6 +119,8 @@ import {
   type BranchMessage,
   chatMessageArraysEquivalent,
   dedupeInflightUserAgainstTranscript,
+  dropListedSession,
+  findListedSession,
   goneSessionVerdict,
   isSessionGoneError,
   overlayConcurrentMessageChanges,
@@ -118,6 +131,7 @@ import {
   resolveResumedBusy,
   resolveSessionProfile,
   resolveStoredSession,
+  restoreListedSession,
   selectBranchMessages,
   sessionMatchesStoredId,
   sessionShouldHaveTranscript,
@@ -258,29 +272,6 @@ function restorePendingApproval(response: SessionResumeResponse, sessionId: stri
     requestId: typeof pending.request_id === 'string' ? pending.request_id : undefined,
     sessionId,
     smartDenied: pending.smart_denied === true
-  })
-
-  return true
-}
-
-function restorePendingClarify(response: SessionResumeResponse, sessionId: string): boolean {
-  // Same replay class as pending_approval: the clarify.request event was
-  // emitted while this client's transport was detached, so without the resume
-  // snapshot the question stays invisible until it times out server-side.
-  const pending = response.pending_clarify
-
-  if (!pending || typeof pending.request_id !== 'string' || typeof pending.question !== 'string') {
-    return false
-  }
-
-  const choices = normalizeChoices(pending.choices)
-
-  setClarifyRequest({
-    choices: choices.length > 0 ? choices : null,
-    multiSelect: pending.multi_select === true,
-    question: pending.question,
-    requestId: pending.request_id,
-    sessionId
   })
 
   return true
@@ -470,10 +461,13 @@ export function useSessionActions({
         // An explicit one-shot workspace target (null → detached, string → that
         // folder) wins; otherwise the live cwd, then the project-aware default
         // (resolveNewSessionCwd — a project's new session keeps its repo cwd).
+        // Home is an explicit detached scope: do not let a stale live cwd from
+        // the previously selected project leak into this new session (#84220).
         const workspaceTarget = $newChatWorkspaceTarget.get()
+        const homeScope = $projectScope.get() === NO_PROJECT_ID
 
         const cwd =
-          workspaceTarget === null
+          workspaceTarget === null || (workspaceTarget === undefined && homeScope)
             ? ''
             : typeof workspaceTarget === 'string'
               ? workspaceTarget.trim()
@@ -612,13 +606,19 @@ export function useSessionActions({
 
       try {
         // Fresh tile → the caller's workspace when one was named (the sidebar
-        // "+" on a project/worktree lane), else the resolved new-session cwd
-        // (project scope → configured default).
+        // "+" on a project/worktree lane), explicit null means Home/detached,
+        // else the resolved new-session cwd (project scope → configured default).
+        // `options?.cwd || resolve…` is wrong for Home: null is falsy and used
+        // to fall through into the last project folder while main chat was
+        // occupied (openTab path for "New session in Home").
         const capturedRoute = options?.route === undefined ? $newChatRoute.get() : options.route
         const workspaceScope = options?.workspaceScope ?? { workspaceMode: 'sessions' }
 
+        const cwd =
+          options?.cwd === null ? '' : typeof options?.cwd === 'string' ? options.cwd.trim() : resolveNewSessionCwd()
+
         const params = {
-          ...(await desktopSessionCreateParams((options?.cwd || resolveNewSessionCwd()).trim(), capturedRoute)),
+          ...(await desktopSessionCreateParams(cwd, capturedRoute)),
           ...(workspaceScope.workspaceMode === 'bots' ? { hidden: true } : {})
         }
 
@@ -792,6 +792,17 @@ export function useSessionActions({
       // resolveStoredSession finds the row by id (cheap), so an uncached pasted
       // id loads as fast as a sidebar click instead of hanging on a list scan.
       const ownerRoute = capturedOwner || getSessionOwnerHint(storedSessionId)
+      // A connection switch clears/reloads the session rows before this path
+      // runs, so an untagged row belongs to the connection that supplied the
+      // current list. Capture that source before the async metadata lookup. If
+      // we reduce it to the profile string `default`, requestForSessionProfile
+      // resolves the local default socket and sends an SSH session id to the
+      // wrong machine ("resume failed: session not found").
+      const ambientConnection = $connection.get()
+
+      const ambientConnectionId =
+        ambientConnection?.mode === 'remote' ? ambientConnection.connectionId?.trim() || '' : ''
+
       const storedForProfile = await resolveStoredSession(storedSessionId, ownerRoute)
       const sessionProfile = storedForProfile?.profile
 
@@ -799,14 +810,18 @@ export function useSessionActions({
         return
       }
 
+      const resolvedConnectionId = ownerRoute?.connectionId || storedForProfile?.connection_id || ambientConnectionId
+
       // A row spliced from a CONNECTED registry gateway (#88880) carries its
-      // owning connection — activate THAT gateway, not a same-named local
-      // profile. Rows without the tag keep the legacy profile path.
+      // owning connection. A row fetched directly after activating a registry
+      // gateway can be untagged, so retain the captured ambient connection too.
+      // Either way, route by the composite (connection, profile), never by a
+      // same-named profile alone.
       const sessionOwner: SessionOwnerScope =
         ownerRoute ||
-        (storedForProfile?.connection_id
+        (resolvedConnectionId
           ? {
-              connectionId: storedForProfile.connection_id,
+              connectionId: resolvedConnectionId,
               profile: sessionProfile || 'default'
             }
           : sessionProfile)
@@ -814,19 +829,13 @@ export function useSessionActions({
       // All-profiles / plugin navigation must not steal chrome API-home:
       // dial the owning backend without moving $activeGatewayProfile.
       if ($showAllProfiles.get()) {
-        if (ownerRoute?.connectionId || storedForProfile?.connection_id) {
-          await openGatewayForAgent(
-            ownerRoute?.connectionId || storedForProfile?.connection_id || null,
-            ownerRoute?.profile || sessionProfile || 'default'
-          )
+        if (resolvedConnectionId) {
+          await openGatewayForAgent(resolvedConnectionId, ownerRoute?.profile || sessionProfile || 'default')
         } else if (sessionProfile) {
           await openGatewayForProfile(normalizeProfileKey(sessionProfile))
         }
-      } else if (ownerRoute?.connectionId || storedForProfile?.connection_id) {
-        await ensureGatewayAgent(
-          ownerRoute?.connectionId || storedForProfile?.connection_id || null,
-          ownerRoute?.profile || sessionProfile || 'default'
-        )
+      } else if (resolvedConnectionId) {
+        await ensureGatewayAgent(resolvedConnectionId, ownerRoute?.profile || sessionProfile || 'default')
       } else {
         await ensureGatewayProfile(sessionProfile)
       }
@@ -846,12 +855,17 @@ export function useSessionActions({
       const requestForSession = <T>(method: string, params: Record<string, unknown> = {}): Promise<T> =>
         requestForSessionProfile<T>(sessionOwner, requestGateway, method, params)
 
-      const sessionRestScope = ownerRoute
+      const sessionRestScope = resolvedConnectionId
         ? {
-            connectionId: ownerRoute.connectionId,
-            profile: ownerRoute.targetProfile || ownerRoute.profile
+            connectionId: resolvedConnectionId,
+            profile: ownerRoute?.targetProfile || ownerRoute?.profile || sessionProfile || 'default'
           }
-        : sessionProfile
+        : storedForProfile?.connection_id
+          ? {
+              connectionId: storedForProfile.connection_id,
+              profile: sessionProfile || 'default'
+            }
+          : sessionProfile
 
       // Re-check after the profile-resolve / gateway-swap awaits above: the
       // cache may have changed, and takeWarmCache re-validates belongs-to and
@@ -891,16 +905,14 @@ export function useSessionActions({
           sessionStateByRuntimeIdRef.current.delete(cachedRuntimeId)
           dropSessionState(cachedRuntimeId)
         } else {
-          // Paint the warm cache immediately, but also refresh the persisted
-          // transcript in parallel. A resumed runtime carries the agent's
-          // compression projection, which can have the same row count as the
-          // stored conversation while containing different rows. Trusting that
-          // projection alone made completed prompts disappear after an app
-          // restart whenever this warm path short-circuited the cold REST
-          // prefetch. Watch mirrors stay live-only by design.
-          const persistedTranscriptPromise = isWatchWindow()
-            ? null
-            : getLatestSessionMessages(storedSessionId, sessionRestScope).catch(() => null)
+          // Paint the warm cache immediately. The persisted transcript still
+          // needs a refresh because a resumed runtime may carry only the
+          // agent's compressed projection, but that read must start after
+          // session.activate reattaches the live transport. Otherwise a turn
+          // can finish between the early REST snapshot and the reattach: its
+          // terminal events go to the detached socket while the stale snapshot
+          // leaves Desktop showing only the pre-disconnect partial answer.
+          const shouldRefreshPersistedTranscript = !isWatchWindow()
 
           setFreshDraftReady(false)
           clearNotifications()
@@ -921,6 +933,9 @@ export function useSessionActions({
 
           try {
             let activated: SessionResumeResponse | null = null
+            const activateStartedAt = Date.now() / 1000
+            const activateBaselineState = sessionStateByRuntimeIdRef.current.get(cachedRuntimeId) ?? cachedViewState
+            const clarifyRequestIdAtActivateStart = $clarifyRequests.get()[cachedRuntimeId]?.requestId
 
             try {
               activated = await requestForSession<SessionResumeResponse>('session.activate', {
@@ -959,7 +974,23 @@ export function useSessionActions({
               dropSessionState(cachedRuntimeId)
             } else {
               const pendingApproval = restorePendingApproval(activated, cachedRuntimeId)
-              const pendingClarify = restorePendingClarify(activated, cachedRuntimeId)
+
+              const pendingClarifyState = restorePendingClarifyFromSnapshot(
+                activated,
+                cachedRuntimeId,
+                activateStartedAt,
+                clarifyRequestIdAtActivateStart
+              )
+
+              const pendingClarify = pendingClarifyState.request
+
+              const clarifyAuthoritativelyAbsent =
+                pendingClarifyState.authoritativeAbsent && !$clarifyRequests.get()[cachedRuntimeId]
+
+              const staleClarifyAtActivateStart = clarifyAuthoritativelyAbsent
+                ? Boolean(settlePendingClarifyToolCall(cachedViewState.messages, {}, false).streamId)
+                : false
+
               const runtimeInfo = applyRuntimeInfo(activated.info)
 
               // `omit_messages` means the response carries NO transcript, not
@@ -979,15 +1010,68 @@ export function useSessionActions({
               // #70449: never let the activate snapshot's stale running:false
               // rewind a turn that started while the RPC was in flight — read
               // the freshest cache entry, not the pre-await cachedViewState.
-              const running = resolveResumedBusy(
-                activated.running ?? cachedViewState.busy,
-                Boolean(sessionStateByRuntimeIdRef.current.get(cachedRuntimeId)?.busy)
+              const latestCachedState = sessionStateByRuntimeIdRef.current.get(cachedRuntimeId)
+
+              const busyChangedWhileActivating = Boolean(
+                latestCachedState?.busy &&
+                (latestCachedState.turnStartedAt !== activateBaselineState.turnStartedAt ||
+                  (latestCachedState.turnLive && !activateBaselineState.turnLive))
               )
+
+              const running =
+                (pendingClarifyState.cleared || staleClarifyAtActivateStart) &&
+                activated.running === false &&
+                !busyChangedWhileActivating
+                  ? false
+                  : resolveResumedBusy(activated.running ?? cachedViewState.busy, Boolean(latestCachedState?.busy))
 
               const activatedTurnStartedAt =
                 typeof activated.turn_started_at === 'number' && activated.turn_started_at > 0
                   ? activated.turn_started_at * 1000
                   : null
+
+              // Settle the activation snapshot before transcript hydration.
+              // Once the attached transport reports a later terminal event,
+              // that live state is authoritative and must not be overwritten
+              // by the older `running` value after the REST request resolves.
+              const activatedLivenessState = updateSessionState(
+                cachedRuntimeId,
+                state => ({
+                  ...state,
+                  ...(runtimeInfo ?? {}),
+                  busy: running,
+                  awaitingResponse: running && !pendingClarify,
+                  // Resumed onto an already-running turn — that IS backend
+                  // proof the turn is live (no message.start will replay).
+                  turnLive: state.turnLive || running,
+                  needsInput:
+                    pendingApproval ||
+                    Boolean(pendingClarify) ||
+                    (clarifyAuthoritativelyAbsent ? false : state.needsInput),
+                  // Adopting someone else's turn: we'll stream its reply
+                  // without ever having received its prompt, so the settle
+                  // path must not take the "I saw it all" shortcut.
+                  adoptedRunningTurn: state.adoptedRunningTurn || running,
+                  turnStartedAt: running ? (activatedTurnStartedAt ?? state.turnStartedAt ?? Date.now()) : null
+                }),
+                storedSessionId
+              )
+
+              busyRef.current = running
+              setBusy(running)
+              setAwaitingResponse(running && !pendingClarify)
+              syncSessionStateToView(cachedRuntimeId, activatedLivenessState)
+
+              // session.activate is the ordering barrier for reconnect recovery:
+              // it atomically rebinds a running turn before returning. If the
+              // turn is already terminal, this post-barrier REST read sees its
+              // durable final row; if it is still running, later deltas/finish
+              // events arrive on the newly attached transport. Hydration below
+              // reconciles only messages, so those events also retain liveness
+              // authority while the request is pending.
+              const persistedTranscriptPromise = shouldRefreshPersistedTranscript
+                ? getLatestSessionMessages(storedSessionId, sessionRestScope).catch(() => null)
+                : null
 
               // The persisted REST transcript is the display authority: a live
               // runtime may carry only the agent's compressed context projection,
@@ -1054,34 +1138,55 @@ export function useSessionActions({
                 )
               }
 
+              const pendingClarifyProjection = pendingClarify
+                ? restorePendingClarifyToolCall(activatedMessages, pendingClarifyToolPayload(pendingClarify))
+                : null
+
+              const clearedClarifyProjection = clarifyAuthoritativelyAbsent
+                ? settlePendingClarifyToolCall(
+                    activatedMessages,
+                    pendingClarifyState.cleared ? pendingClarifyToolPayload(pendingClarifyState.cleared) : {},
+                    running
+                  )
+                : null
+
+              const visibleActivatedMessages =
+                pendingClarifyProjection?.messages ?? clearedClarifyProjection?.messages ?? activatedMessages
+
               const activatedState = updateSessionState(
                 cachedRuntimeId,
                 state => ({
                   ...state,
-                  ...(runtimeInfo ?? {}),
-                  messages: activatedMessages,
-                  busy: running,
-                  awaitingResponse: running,
-                  // Resumed onto an already-running turn — that IS backend
-                  // proof the turn is live (no message.start will replay).
-                  turnLive: state.turnLive || running,
-                  needsInput: pendingApproval || pendingClarify || state.needsInput,
-                  // Adopting someone else's turn: we'll stream its reply
-                  // without ever having received its prompt, so the settle
-                  // path must not take the "I saw it all" shortcut.
-                  adoptedRunningTurn: state.adoptedRunningTurn || running,
-                  turnStartedAt: running ? (activatedTurnStartedAt ?? state.turnStartedAt ?? Date.now()) : null
+                  messages: visibleActivatedMessages,
+                  ...(pendingClarifyProjection
+                    ? {
+                        awaitingResponse: false,
+                        sawAssistantPayload: true,
+                        streamId: pendingClarifyProjection.streamId
+                      }
+                    : {}),
+                  ...(clearedClarifyProjection
+                    ? {
+                        streamId: state.busy ? (clearedClarifyProjection.streamId ?? state.streamId) : null
+                      }
+                    : {})
                 }),
                 storedSessionId
               )
 
-              busyRef.current = running
-              setBusy(running)
-              setAwaitingResponse(running)
               syncSessionStateToView(cachedRuntimeId, activatedState)
-              // Durable tail refresh — same post-reconcile contract as the
-              // cold path's save below.
-              saveTranscriptTail(storedSessionId, activatedState.messages)
+              // Cache backend transcript truth only. The pending/running bit and
+              // any synthetic clarify row are a live resume projection and must
+              // not survive after the server-side request expires.
+              saveTranscriptTail(
+                storedSessionId,
+                stripPendingClarifyProjectionForCache(
+                  activatedMessages,
+                  pendingClarify?.requestId ??
+                    pendingClarifyState.cleared?.requestId ??
+                    $clarifyRequests.get()[cachedRuntimeId]?.requestId
+                )
+              )
 
               return
             }
@@ -1196,6 +1301,7 @@ export function useSessionActions({
         const prefetchPromise = watchWindow ? null : getLatestSessionMessages(storedSessionId, sessionRestScope)
 
         let resumeRuntimeBaselineMessages: ChatMessage[] = []
+        const resumeStartedAt = Date.now() / 1000
 
         const resumePromise = singleFlightSessionResume(storedSessionId, () =>
           requestForSession<SessionResumeResponse>('session.resume', {
@@ -1385,7 +1491,12 @@ export function useSessionActions({
         setActiveSessionId(resumed.session_id)
         activeSessionIdRef.current = resumed.session_id
         const pendingApproval = restorePendingApproval(resumed, resumed.session_id)
-        const pendingClarify = restorePendingClarify(resumed, resumed.session_id)
+        const pendingClarifyState = restorePendingClarifyFromSnapshot(resumed, resumed.session_id, resumeStartedAt)
+        const pendingClarify = pendingClarifyState.request
+
+        const clarifyAuthoritativelyAbsent =
+          pendingClarifyState.authoritativeAbsent && !$clarifyRequests.get()[resumed.session_id]
+
         const runtimeInfo = applyRuntimeInfo(resumed.info)
 
         patchSessionWorkspace(storedSessionId, runtimeInfo?.cwd)
@@ -1398,17 +1509,33 @@ export function useSessionActions({
             ? resumed.turn_started_at * 1000
             : null
 
+        const pendingClarifyProjection = pendingClarify
+          ? restorePendingClarifyToolCall(messagesForView, pendingClarifyToolPayload(pendingClarify))
+          : null
+
+        const clearedClarifyProjection = clarifyAuthoritativelyAbsent
+          ? settlePendingClarifyToolCall(
+              messagesForView,
+              pendingClarifyState.cleared ? pendingClarifyToolPayload(pendingClarifyState.cleared) : {},
+              resumedRunning
+            )
+          : null
+
+        const visibleMessagesForView =
+          pendingClarifyProjection?.messages ?? clearedClarifyProjection?.messages ?? messagesForView
+
         updateSessionState(
           resumed.session_id,
           state => ({
             ...state,
             ...(runtimeInfo ?? {}),
-            messages: messagesForView,
+            messages: visibleMessagesForView,
             busy: resumedRunning,
             awaitingResponse: resumedRunning && !recoveredInFlightTail,
             // Backend reported this turn running at resume time — live proof.
             turnLive: state.turnLive || resumedRunning,
-            needsInput: pendingApproval || pendingClarify || state.needsInput,
+            needsInput:
+              pendingApproval || Boolean(pendingClarify) || (clarifyAuthoritativelyAbsent ? false : state.needsInput),
             adoptedRunningTurn: state.adoptedRunningTurn || resumedRunning,
             ...(inFlightRecovery.applied
               ? {
@@ -1420,7 +1547,19 @@ export function useSessionActions({
                 }
               : {
                   turnStartedAt: resumedRunning && resumedTurnStartedAt !== null ? resumedTurnStartedAt : null
-                })
+                }),
+            ...(pendingClarifyProjection
+              ? {
+                  awaitingResponse: false,
+                  sawAssistantPayload: true,
+                  streamId: pendingClarifyProjection.streamId
+                }
+              : {}),
+            ...(clearedClarifyProjection
+              ? {
+                  streamId: resumedRunning ? (clearedClarifyProjection.streamId ?? state.streamId) : null
+                }
+              : {})
           }),
           storedSessionId
         )
@@ -1429,15 +1568,21 @@ export function useSessionActions({
         // Commit the final, already-reconciled transcript now so resume has one
         // additive DOM build instead of an eager prefetch build plus a later
         // runtime projection build.
-        if (!chatMessageArraysEquivalent($messages.get(), messagesForView)) {
-          setMessages(messagesForView)
+        if (!chatMessageArraysEquivalent($messages.get(), visibleMessagesForView)) {
+          setMessages(visibleMessagesForView)
         }
 
-        // Refresh the durable tail cache with the authoritative transcript so
-        // the NEXT wake of this session paints instantly (fresh launch,
-        // reaped backend). Post-reconcile only — never persist an optimistic
-        // or in-flight-recovered projection ahead of backend truth.
-        saveTranscriptTail(storedSessionId, messagesForView)
+        // Refresh the durable tail cache with backend transcript truth only;
+        // the live pending clarify projection expires with the server request.
+        saveTranscriptTail(
+          storedSessionId,
+          stripPendingClarifyProjectionForCache(
+            messagesForView,
+            pendingClarify?.requestId ??
+              pendingClarifyState.cleared?.requestId ??
+              $clarifyRequests.get()[resumed.session_id]?.requestId
+          )
+        )
       } catch (err) {
         if (!isCurrentResume()) {
           return
@@ -1820,14 +1965,34 @@ export function useSessionActions({
     async (storedSessionId: string) => {
       clearNotifications()
 
-      // The row may live in the main list OR the archived view's own store
-      // (archived rows are excluded from $sessions by design). Resolve from
-      // both so deleting from the Archived filter evicts the row instead of
-      // leaving a ghost that resumes into a dead id (infinite spinner).
-      const removedFromMain = $sessions.get().find(session => sessionMatchesStoredId(session, storedSessionId))
+      // The row may live in the main list, the messaging/cron sidebar slices,
+      // OR the archived view's own store (archived rows are excluded from
+      // $sessions by design). Resolve from all of them so deleting a
+      // messaging/cron row (or from the Archived filter) evicts the row
+      // instead of leaving a ghost that resumes into a dead id.
+      const listed = findListedSession(storedSessionId)
 
       const removed =
-        removedFromMain ?? $archivedSessions.get().find(session => sessionMatchesStoredId(session, storedSessionId))
+        listed?.session ?? $archivedSessions.get().find(session => sessionMatchesStoredId(session, storedSessionId))
+
+      // Messaging/cron rows frequently arrive without an inline profile; fall
+      // back to the stored-session ownership lookup so their DELETE routes to
+      // the owning profile instead of the ambient one.
+      const stampedProfile = removed?.profile?.trim()
+      const profile = stampedProfile || (await resolveSessionProfile(storedSessionId))
+
+      // Listed profile-less row + multiple profiles + unresolved owner:
+      // never fall through to the primary backend (fake already_absent).
+      if (
+        listed &&
+        !stampedProfile &&
+        !profile?.trim() &&
+        $profiles.get().filter(item => item.name.trim()).length > 1
+      ) {
+        notifyError(new Error('Session ownership could not be resolved'), copy.deleteFailed)
+
+        return
+      }
 
       const wasSelected = selectedStoredSessionId === storedSessionId
       const closingRuntimeId = wasSelected ? activeSessionId : null
@@ -1839,7 +2004,7 @@ export function useSessionActions({
             connectionId: removed.connection_id,
             profile: removed.profile || 'default'
           }
-        : removed?.profile
+        : profile
 
       const previousArchived = $archivedSessions.get()
       // Pins are keyed on the durable lineage-root id; the stored id may be the
@@ -1847,7 +2012,7 @@ export function useSessionActions({
       const removedPinId = removed ? sessionPinId(removed) : storedSessionId
       const removedIds = [storedSessionId, removed?.id, removed?._lineage_root_id]
 
-      setSessions(prev => prev.filter(session => !sessionMatchesStoredId(session, storedSessionId)))
+      dropListedSession(storedSessionId)
       $archivedSessions.set(previousArchived.filter(session => !sessionMatchesStoredId(session, storedSessionId)))
       // Evict from the project tree's optimistic layer too (the backend snapshot
       // still lists it until its next refresh), so grouped + flat views drop the
@@ -1875,7 +2040,7 @@ export function useSessionActions({
         dropTranscriptTail(storedSessionId)
         // Only after the RPC lands — the optimistic eviction above can roll
         // back, and a rolled-back row must keep its watermark/marker.
-        forgetSessionUnread(removedIds, removed?.profile)
+        forgetSessionUnread(removedIds, profile)
         clearQueuedPrompts(storedSessionId)
 
         if (closingRuntimeId) {
@@ -1894,8 +2059,8 @@ export function useSessionActions({
           dropSessionState(tiledRuntimeId)
         }
       } catch (err) {
-        if (removedFromMain) {
-          setSessions(prev => [removedFromMain, ...prev])
+        if (listed?.session) {
+          restoreListedSession(listed.session, listed.slice)
         }
 
         // Restore the archived-view row too (no-op when it wasn't archived).
@@ -1908,7 +2073,7 @@ export function useSessionActions({
           setFreshDraftReady(false)
           setSelectedStoredSessionId(storedSessionId)
           selectedStoredSessionIdRef.current = storedSessionId
-          const stored = $sessions.get().find(session => sessionMatchesStoredId(session, storedSessionId))
+          const stored = findListedSession(storedSessionId)?.session
 
           if (stored) {
             applyStoredUsage(stored)
@@ -1949,7 +2114,22 @@ export function useSessionActions({
     async (storedSessionId: string) => {
       clearNotifications()
 
-      const archived = $sessions.get().find(session => sessionMatchesStoredId(session, storedSessionId))
+      const listed = findListedSession(storedSessionId)
+      const archived = listed?.session
+      const stampedProfile = archived?.profile?.trim()
+      const profile = stampedProfile || (await resolveSessionProfile(storedSessionId))
+
+      if (
+        listed &&
+        !stampedProfile &&
+        !profile?.trim() &&
+        $profiles.get().filter(item => item.name.trim()).length > 1
+      ) {
+        notifyError(new Error('Session ownership could not be resolved'), copy.archiveFailed)
+
+        return
+      }
+
       const wasSelected = selectedStoredSessionId === storedSessionId
       const previousPinned = $pinnedSessionIds.get()
       // Pins are keyed on the durable lineage-root id; the stored id may be the
@@ -1957,8 +2137,8 @@ export function useSessionActions({
       const archivedPinId = archived ? sessionPinId(archived) : storedSessionId
       const archivedIds = [storedSessionId, archived?.id, archived?._lineage_root_id]
 
-      // Soft-hide: drop from the sidebar immediately, keep the data.
-      setSessions(prev => prev.filter(session => !sessionMatchesStoredId(session, storedSessionId)))
+      // Soft-hide: drop from every sidebar slice immediately, keep the data.
+      dropListedSession(storedSessionId)
       tombstoneSessions(archivedIds)
       beginSessionMutation(archivedIds)
       $pinnedSessionIds.set(previousPinned.filter(id => id !== storedSessionId && id !== archivedPinId))
@@ -1968,10 +2148,10 @@ export function useSessionActions({
       }
 
       try {
-        await setSessionArchived(storedSessionId, true, archived?.profile)
+        await setSessionArchived(storedSessionId, true, profile)
         // Archived rows never reach the sidebar, so their persisted unread can
         // only rot. Dropped after the RPC so a failed archive keeps it.
-        forgetSessionUnread(archivedIds, archived?.profile)
+        forgetSessionUnread(archivedIds, profile)
         // An archived session is hidden from the sidebar; its tile must go too.
         const tiledRuntimeId = runtimeIdByStoredSessionIdRef.current.get(storedSessionId)
         closeSessionTile(storedSessionId)
@@ -1985,7 +2165,7 @@ export function useSessionActions({
         notify({ durationMs: 2_000, kind: 'success', message: copy.archived })
       } catch (err) {
         if (archived) {
-          setSessions(prev => [archived, ...prev.filter(session => !sessionMatchesStoredId(session, storedSessionId))])
+          restoreListedSession(archived, listed?.slice)
         }
 
         untombstoneSessions(archivedIds)
