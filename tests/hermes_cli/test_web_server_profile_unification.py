@@ -107,6 +107,34 @@ class TestProfileScopedEnv:
 
 class TestProfileScopedMcp:
 
+    def test_mcp_test_never_starts_interactive_oauth(
+        self, client, isolated_profiles, monkeypatch
+    ):
+        import hermes_cli.mcp_config as mcp_config
+        import tools.mcp_oauth as mcp_oauth
+
+        (isolated_profiles["worker_beta"] / "config.yaml").write_text(
+            "mcp_servers:\n  oauth-srv:\n    url: http://x/sse\n    auth: oauth\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(mcp_oauth.sys.stdin, "isatty", lambda: True)
+        interactive_states = []
+
+        def fake_probe(name, config, connect_timeout=30, details=None):
+            interactive_states.append(mcp_oauth._is_interactive())
+            return [("tool-a", "desc")]
+
+        monkeypatch.setattr(mcp_config, "_probe_single_server", fake_probe)
+        monkeypatch.setattr(mcp_config, "_oauth_tokens_present", lambda name: True)
+
+        response = client.post(
+            "/api/mcp/servers/oauth-srv/test", params={"profile": "worker_beta"}
+        )
+
+        assert response.status_code == 200
+        assert response.json()["ok"] is True
+        assert interactive_states == [False]
+
     def test_mcp_bearer_secret_is_profile_scoped(self, client, isolated_profiles):
         secret = "worker-only-secret"
         response = client.post(
