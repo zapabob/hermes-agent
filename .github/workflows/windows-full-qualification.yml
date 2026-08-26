@@ -1,0 +1,64 @@
+name: Scheduled full Windows qualification
+
+on:
+  schedule:
+    - cron: "0 18 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUTF8: "1"
+
+jobs:
+  python-full:
+    name: Full native Windows Python suite
+    runs-on: windows-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          version: "0.9.28"
+          enable-cache: true
+      - run: uv python install 3.11
+      - run: uv sync --locked --python 3.11 --extra all --extra dev
+      - name: Full non-integration Python qualification
+        env:
+          HERMES_TEST_WORKERS: "8"
+          HERMES_TEST_FILE_RETRIES: "1"
+        run: uv run --no-sync python scripts/run_tests_parallel.py --paths tests -q
+
+  desktop-full:
+    name: Full native Windows Desktop suite
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.22.0
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm --workspace apps/desktop run typecheck
+      - run: npm --workspace apps/desktop run lint
+      - run: npm --workspace apps/desktop test
+      - run: npm --workspace apps/desktop run build
+
+  watchdog-live:
+    name: Native Windows watchdog qualification
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: scripts/windows/watchdog-go/go.mod
+          cache-dependency-path: scripts/windows/watchdog-go/go.sum
+      - working-directory: scripts/windows/watchdog-go
+        run: go test ./...
+      - working-directory: scripts/windows/watchdog-go
+        run: go vet ./...
+      - working-directory: scripts/windows/watchdog-go
+        run: go build -trimpath -o hermes-watchdog.exe .
