@@ -1,6 +1,4 @@
 import { isMissingRestEndpoint } from '@/lib/gateway-rpc'
-import { maybeBackfillLegacySessionOwners } from '@/lib/legacy-session-owner-backfill'
-import { stampRowsWithOwningConnection } from '@/lib/session-owner-stamp'
 import { recordTranscriptTail } from '@/store/transcript-tail'
 import type {
   PaginatedSessions,
@@ -39,17 +37,16 @@ function sessionScopeQuery(scope?: ProfileScope): string {
  * correctly know nothing about this Desktop-local registry id. Preserve an
  * explicit owner from a multi-source response; otherwise stamp the active
  * non-local source so a later resume cannot fall back to a same-named local
- * profile. Delegates to the canonical row-stamp helper so this stays the ONE
- * write shape for connection_id on backend-returned rows.
+ * profile.
  */
 function stampActiveConnectionOwner(sessions: SessionInfo[]): SessionInfo[] {
-  // Durable half of the same ownership contract (#94724): enumeration under
-  // registry topology triggers the one-shot server-side owner backfill for
-  // the serving store when its owner is a single match. Fire-and-forget;
-  // idempotent server-side; never blocks or fails the list that triggered it.
-  maybeBackfillLegacySessionOwners()
+  const connectionId = getApiRequestConnection()?.trim()
 
-  return stampRowsWithOwningConnection(sessions, getApiRequestConnection())
+  if (!connectionId || connectionId === 'local') {
+    return sessions
+  }
+
+  return sessions.map(session => (session.connection_id ? session : { ...session, connection_id: connectionId }))
 }
 
 /**
@@ -422,43 +419,6 @@ export function getLatestSessionMessages(id: string, profile?: ProfileScope): Pr
 
     return page
   })
-}
-
-/**
- * READ-ONLY stored-transcript lookup that never routes a live session
- * (#94724 no-owner recovery). Tries the ambient/primary store first, then
- * probes every registered NON-local connection by id — a REST read of a
- * backend's own state.db is side-effect free (a miss is a plain 404, no
- * session is minted or resumed anywhere), so probing across backends is safe
- * where live routing would be a guess. Returns null when no reachable
- * backend holds the transcript.
- */
-export async function fetchStoredTranscriptAcrossBackends(id: string): Promise<SessionMessagesResponse | null> {
-  try {
-    return await getLatestSessionMessages(id)
-  } catch {
-    // Not on the ambient store — probe the registered backends below.
-  }
-
-  const { $connectionsRegistry } = await import('@/store/connection-registry-state')
-
-  const connections = ($connectionsRegistry.get()?.connections ?? []) as Array<{ id?: string }>
-
-  for (const connection of connections) {
-    const connectionId = connection.id?.trim()
-
-    if (!connectionId || connectionId === 'local' || connectionId === getApiRequestConnection()) {
-      continue
-    }
-
-    try {
-      return await getLatestSessionMessages(id, { connectionId, profile: 'default' })
-    } catch {
-      // Not on this backend (or it is unreachable); try the next.
-    }
-  }
-
-  return null
 }
 
 /**
