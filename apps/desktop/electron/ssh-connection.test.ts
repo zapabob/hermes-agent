@@ -346,7 +346,10 @@ test('open() evicts a wedged master (check passes, exec hangs) and dials fresh',
     return { code: 0 }
   })
 
-  const conn = new SshConnection({ host: 'box', user: 'me' }, { spawnFn, controlDir: '/tmp/d', connectTimeoutMs: 50, mux: true })
+  const conn = new SshConnection(
+    { host: 'box', user: 'me' },
+    { spawnFn, controlDir: '/tmp/d', connectTimeoutMs: 50, mux: true }
+  )
 
   await conn.open()
   assert.deepEqual(
