@@ -31,6 +31,11 @@ def test_required_tier_one_jobs_exist() -> None:
     }
 
 
+def test_policy_lane_fetches_frozen_upstream_history() -> None:
+    checkout = _workflow(WORKFLOW)["jobs"]["downstream-policy"]["steps"][0]
+    assert checkout["with"]["fetch-depth"] == 0
+
+
 def test_native_jobs_really_run_on_windows() -> None:
     jobs = _workflow(WORKFLOW)["jobs"]
     assert jobs["windows-native-python"]["runs-on"] == "windows-latest"

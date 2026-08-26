@@ -490,10 +490,14 @@ test('writeSecretFileAtomic cannot be redirected through a symlink planted at th
     writeSecretFileAtomic(target, 'tok-live-42')
 
     assert.equal(fs.readFileSync(victim, 'utf8'), 'original', 'the symlink target was not written through')
-    assert.equal(modeOf(victim), 0o644, 'the victim file was not chmodded either')
+
+    if (supportsPosixCredentialModes) {
+      assert.equal(modeOf(victim), 0o644, 'the victim file was not chmodded either')
+    }
+
     assert.equal(fs.readFileSync(target, 'utf8'), 'tok-live-42')
     assert.equal(fs.lstatSync(target).isSymbolicLink(), false, 'the target is a real file, not the planted link')
-    assert.equal(modeOf(target), SECRET_FILE_MODE)
+    assertOwnerOnlyMode(target)
   })
 })
 
@@ -589,8 +593,18 @@ test('tightenSecretFileMode refuses to chmod a symlink instead of following it t
       throw error
     }
 
-    assert.equal(tightenSecretFileMode(target), false, 'reports "not tightened" rather than acting on the link')
-    assert.equal(modeOf(victim), 0o644, 'the symlink target keeps its own mode')
+    assert.equal(
+      tightenSecretFileMode(target),
+      supportsPosixCredentialModes ? false : true,
+      supportsPosixCredentialModes
+        ? 'POSIX reports that a symlink was not tightened'
+        : 'Windows leaves ACL-backed credential paths alone'
+    )
+    assert.equal(fs.readFileSync(victim, 'utf8'), 'not mine', 'the symlink target content is untouched')
+
+    if (supportsPosixCredentialModes) {
+      assert.equal(modeOf(victim), 0o644, 'the symlink target keeps its own mode')
+    }
   })
 })
 
