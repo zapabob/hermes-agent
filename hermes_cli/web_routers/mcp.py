@@ -179,6 +179,8 @@ async def test_mcp_server(name: str, profile: Optional[str] = None):
     needs_oauth_token = servers[name].get("auth") == "oauth"
 
     def _probe_scoped():
+        from tools.mcp_oauth import suppress_interactive_oauth
+
         # Home-only scope (contextvar), NOT _profile_scope. A probe blocks for
         # as long as the server takes to spawn/connect — a stdio `npx` cold
         # start is many seconds — and _profile_scope holds a process-global
@@ -189,7 +191,7 @@ async def test_mcp_server(name: str, profile: Optional[str] = None):
         # override for .env interpolation + OAuth token resolution, which the
         # contextvar provides (copied into this to_thread worker; and
         # _run_on_mcp_loop re-wraps it onto the MCP event-loop thread).
-        with _config_profile_scope(profile):
+        with _config_profile_scope(profile), suppress_interactive_oauth():
             tools = _probe_single_server(name, servers[name], details=details)
             token_present = _oauth_tokens_present(name) if needs_oauth_token else True
             return tools, token_present
