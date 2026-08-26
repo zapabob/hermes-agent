@@ -446,7 +446,6 @@ test('shouldReloadAfterFailedLoad surfaces a visible error once the budget is ex
 
 test('installWindowRendererLifecycle auto-reloads main-frame load failures when enabled', async () => {
   const win = makeFakeWindow()
-
   const { logs, options } = makeOptions(win, 'main', {
     reloadOnFailedLoad: true,
     reloadWindowMs: 60_000,
@@ -504,7 +503,6 @@ test('installWindowRendererLifecycle surfaces the error page after the reload bu
 
 test('load-failure reloads share the crash-loop budget with render-process-gone', async () => {
   const win = makeFakeWindow()
-
   const { options } = makeOptions(win, 'main', {
     reloadOnFailedLoad: true,
     reloadWindowMs: 60_000,
@@ -527,7 +525,6 @@ test('load-failure reloads share the crash-loop budget with render-process-gone'
 
 test('ERR_ABORTED does not consume the load-failure budget', async () => {
   const win = makeFakeWindow()
-
   const { options } = makeOptions(win, 'main', {
     reloadOnFailedLoad: true,
     reloadWindowMs: 60_000,

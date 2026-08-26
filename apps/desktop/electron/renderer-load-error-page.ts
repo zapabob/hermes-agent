@@ -42,6 +42,7 @@ export interface RendererLoadErrorDetails {
   reloadUrl?: string
 }
 
+<<<<<<< HEAD
 /**
  * Escape a ``JSON.stringify`` result for embedding inside an inline
  * ``<script>`` element.  JSON does not escape ``<``, ``>``, ``&`` (nor
@@ -62,6 +63,10 @@ function reloadButtonJs(details: RendererLoadErrorDetails): string {
   const target = details.reloadUrl
     ? `location.replace(${escapeInlineScriptJson(JSON.stringify(details.reloadUrl))})`
     : 'location.reload()'
+=======
+function reloadButtonJs(details: RendererLoadErrorDetails): string {
+  const target = details.reloadUrl ? `location.replace(${JSON.stringify(details.reloadUrl)})` : 'location.reload()'
+>>>>>>> 4bc84d0499 (fix(desktop): replace white screen after update with visible error + auto-reload (#95575))
 
   return (
     '<button id="reload" type="button">Reload</button>\n' +
@@ -101,7 +106,10 @@ function missingAssetsList(missingAssets?: string[]): string {
 export function buildRendererLoadErrorPage(details: RendererLoadErrorDetails = {}): string {
   const code =
     details.errorCode === undefined || details.errorCode === null ? '' : ` (${escapeHtml(details.errorCode)})`
+<<<<<<< HEAD
 
+=======
+>>>>>>> 4bc84d0499 (fix(desktop): replace white screen after update with visible error + auto-reload (#95575))
   const title = 'Hermes couldn\u2019t start the desktop UI'
   const description = escapeHtml(details.errorDescription || 'The desktop renderer failed to load.')
   const url = details.url ? `<p><code>${escapeHtml(details.url)}</code></p>` : ''
