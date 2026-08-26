@@ -201,3 +201,27 @@ def test_windows_restart_scripts_fall_back_to_netstat_for_listener_discovery(
     assert "netstat.exe -ano -p tcp" in script
     assert "[int]::TryParse" in script
     assert "memory-graph" in script
+
+
+@pytest.mark.parametrize(
+    ("script_name", "root_variable"),
+    [
+        ("start-hermes-desktop.ps1", "$HermesRoot"),
+        ("Start-HermesDesktopBackendWatchdog.ps1", "$RepoRoot"),
+    ],
+)
+def test_windows_desktop_launchers_prefer_canonical_repo_package(
+    script_name: str,
+    root_variable: str,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = (root / "scripts" / "windows" / script_name).read_text(encoding="utf-8")
+    repo_candidate = (
+        f'Join-Path {root_variable} "apps\\desktop\\release\\win-unpacked\\Hermes.exe"'
+    )
+    managed_candidate = (
+        'Join-Path $env:LOCALAPPDATA "hermes\\hermes-agent\\apps\\desktop\\release\\'
+        'win-unpacked\\Hermes.exe"'
+    )
+
+    assert script.index(repo_candidate) < script.index(managed_candidate)

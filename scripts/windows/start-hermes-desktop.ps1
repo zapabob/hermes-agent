@@ -44,10 +44,11 @@ foreach ($proc in $staleDesktopProcesses) {
     Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
 }
 
-# Resolve packaged EXE (LOCALAPPDATA install takes priority over repo release dir).
-$PackagedExe = Join-Path $env:LOCALAPPDATA "hermes\hermes-agent\apps\desktop\release\win-unpacked\Hermes.exe"
+# Resolve packaged EXE from the canonical checkout first.  LOCALAPPDATA is
+# only a recovery fallback when the explicit HermesRoot has no packaged app.
+$PackagedExe = Join-Path $HermesRoot "apps\desktop\release\win-unpacked\Hermes.exe"
 if (-not (Test-Path -LiteralPath $PackagedExe)) {
-    $PackagedExe = Join-Path $HermesRoot "apps\desktop\release\win-unpacked\Hermes.exe"
+    $PackagedExe = Join-Path $env:LOCALAPPDATA "hermes\hermes-agent\apps\desktop\release\win-unpacked\Hermes.exe"
 }
 
 # Guard: skip if a packaged Hermes.exe is already running from the resolved path.

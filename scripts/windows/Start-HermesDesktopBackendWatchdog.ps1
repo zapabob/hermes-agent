@@ -37,9 +37,9 @@ $WatchdogDataDir = Join-Path $env:LOCALAPPDATA "HermesWatchdog"
 $ManifestPath = Join-Path $WatchdogDataDir "desktop-backend.json"
 $DesktopLogPath = Join-Path $LogDir "desktop.log"
 
-$PackagedExe = Join-Path $env:LOCALAPPDATA "hermes\hermes-agent\apps\desktop\release\win-unpacked\Hermes.exe"
+$PackagedExe = Join-Path $RepoRoot "apps\desktop\release\win-unpacked\Hermes.exe"
 if (-not (Test-Path -LiteralPath $PackagedExe)) {
-    $PackagedExe = Join-Path $RepoRoot "apps\desktop\release\win-unpacked\Hermes.exe"
+    $PackagedExe = Join-Path $env:LOCALAPPDATA "hermes\hermes-agent\apps\desktop\release\win-unpacked\Hermes.exe"
 }
 
 # Stack-owned listeners — never reap; skip when scanning ephemeral Desktop serve.
