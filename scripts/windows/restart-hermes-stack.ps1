@@ -55,11 +55,35 @@ function Write-Step([string]$Message) {
 
 function Stop-PortListener {
     param([int]$Port, [string]$NamePattern = ".*")
-    $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $conn) { return }
-    $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+    $ownerPid = 0
+    try {
+        $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop | Select-Object -First 1
+        if ($conn) { $ownerPid = [int]$conn.OwningProcess }
+    }
+    catch {
+        Write-Step ("Get-NetTCPConnection failed for port {0}; using netstat fallback" -f $Port)
+    }
+
+    if ($ownerPid -le 0) {
+        try {
+            foreach ($line in (& netstat.exe -ano -p tcp 2>$null)) {
+                if ($line -notmatch 'LISTENING') { continue }
+                if ($line -notmatch (":{0}\s+" -f $Port)) { continue }
+                $parts = ($line -split '\s+') | Where-Object { $_ }
+                $candidate = 0
+                if ([int]::TryParse($parts[-1], [ref]$candidate) -and $candidate -gt 0) {
+                    $ownerPid = $candidate
+                    break
+                }
+            }
+        }
+        catch {}
+    }
+
+    if ($ownerPid -le 0) { return }
+    $proc = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
     if (-not $proc) { return }
-    if ($proc.Name -match "python|hermes|llama|node" -or $proc.ProcessName -match "python|hermes|llama|node") {
+    if ($proc.Name -match "python|hermes|llama|node|memory-graph" -or $proc.ProcessName -match "python|hermes|llama|node|memory-graph") {
         Write-Step "Stopping $Port pid=$($proc.Id) name=$($proc.Name)"
         Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 2

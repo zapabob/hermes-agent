@@ -184,3 +184,20 @@ def test_windows_restart_scripts_build_packaged_desktop(script_name: str) -> Non
     assert "pnpm run pack" in script
     assert "npm run pack" in script
     assert "@hermes/desktop" not in script
+
+
+@pytest.mark.parametrize(
+    "script_name",
+    ["Restart-HermesFullStack.ps1", "restart-hermes-stack.ps1"],
+)
+def test_windows_restart_scripts_fall_back_to_netstat_for_listener_discovery(
+    script_name: str,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = (root / "scripts" / "windows" / script_name).read_text(encoding="utf-8")
+
+    assert "Get-NetTCPConnection" in script
+    assert "-ErrorAction Stop" in script
+    assert "netstat.exe -ano -p tcp" in script
+    assert "[int]::TryParse" in script
+    assert "memory-graph" in script
