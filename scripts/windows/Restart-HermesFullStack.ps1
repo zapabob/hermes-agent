@@ -125,6 +125,7 @@ if (-not $SkipDesktopRebuild) {
         else {
             npm install
         }
+        if ($LASTEXITCODE -ne 0) { throw "Desktop dependency install failed" }
     }
     finally {
         Pop-Location
@@ -135,14 +136,15 @@ if (-not $SkipDesktopRebuild) {
         Push-Location -LiteralPath $desktopDir
         try {
             if (Get-Command corepack -ErrorAction SilentlyContinue) {
-                corepack pnpm --filter @hermes/desktop build
+                corepack pnpm run pack
             }
             elseif (Get-Command pnpm -ErrorAction SilentlyContinue) {
-                pnpm --filter @hermes/desktop build
+                pnpm run pack
             }
             else {
-                npm run build
+                npm run pack
             }
+            if ($LASTEXITCODE -ne 0) { throw "Desktop pack failed" }
         }
         finally {
             Pop-Location

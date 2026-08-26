@@ -58,7 +58,7 @@ Get-Process Hermes, electron, hermes -ErrorAction SilentlyContinue | ForEach-Obj
 Start-Sleep -Seconds 2
 
 if (-not $SkipDesktopRebuild) {
-    Write-Step "corepack pnpm install (repo root) + apps/desktop build"
+    Write-Step "corepack pnpm install (repo root) + apps/desktop pack"
     Push-Location -LiteralPath $RepoRoot
     try {
         if (Get-Command corepack -ErrorAction SilentlyContinue) {
@@ -76,13 +76,13 @@ if (-not $SkipDesktopRebuild) {
     Push-Location -LiteralPath $desktop
     try {
         if (Get-Command corepack -ErrorAction SilentlyContinue) {
-            corepack pnpm --filter @hermes/desktop build
+            corepack pnpm run pack
         } elseif (Get-Command pnpm -ErrorAction SilentlyContinue) {
-            pnpm --filter @hermes/desktop build
+            pnpm run pack
         } else {
-            npm run build
+            npm run pack
         }
-        if ($LASTEXITCODE -ne 0) { throw "build failed" }
+        if ($LASTEXITCODE -ne 0) { throw "Desktop pack failed" }
     } finally {
         Pop-Location
     }

@@ -171,3 +171,16 @@ def test_feature_manifest_is_schema_valid_and_has_real_paths() -> None:
 def test_no_top_level_platform_package_exists() -> None:
     root = Path(__file__).resolve().parents[2]
     assert not (root / "platform").exists()
+
+
+@pytest.mark.parametrize(
+    "script_name",
+    ["Restart-HermesFullStack.ps1", "Restart-HermesDesktopAndLlama.ps1"],
+)
+def test_windows_restart_scripts_build_packaged_desktop(script_name: str) -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = (root / "scripts" / "windows" / script_name).read_text(encoding="utf-8")
+
+    assert "pnpm run pack" in script
+    assert "npm run pack" in script
+    assert "@hermes/desktop" not in script
