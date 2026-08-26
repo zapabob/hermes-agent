@@ -1,0 +1,254 @@
+{
+  "definitions": {
+    "coupling_1": "test, docs, workflow, or generated documentation path",
+    "coupling_2": "other runtime or source path",
+    "coupling_3": "path is named by CARRY.yaml",
+    "cs": "count of upstream-owned files directly modified",
+    "cwc": "sum(upstream frequency * patch size * semantic coupling)",
+    "excluded": [
+      "_docs/carry-surface-20260826.json",
+      "_docs/carry-surface-20260826.md"
+    ],
+    "loc": "added plus deleted lines from frozen upstream to checkout",
+    "upstream_owned": "path exists in the frozen upstream tree",
+    "utr": "upstream-owned fork LOC divided by all fork-specific LOC"
+  },
+  "merge_base_sha": "ddbd928ee4e881f0c7b3536a00355647c6559fe2",
+  "schema_version": 1,
+  "snapshot_sha": "1fe0f2f3ac9748ce799272eb93bee2937b5ab802",
+  "summary": {
+    "all_fork_specific_loc": 426276,
+    "carry_surface_files": 924,
+    "cwc": 149883,
+    "fork_owned_loc": 309093,
+    "upstream_owned_fork_loc": 117183,
+    "utr": 0.274899
+  },
+  "top_carry_risks": [
+    {
+      "added": 297,
+      "cwc": 56331,
+      "deleted": 272,
+      "patch_size": 569,
+      "path": "apps/desktop/electron/main.ts",
+      "semantic_coupling": 3,
+      "upstream_frequency": 33
+    },
+    {
+      "added": 2006,
+      "cwc": 17208,
+      "deleted": 862,
+      "patch_size": 2868,
+      "path": "cli.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 3
+    },
+    {
+      "added": 1023,
+      "cwc": 9976,
+      "deleted": 224,
+      "patch_size": 1247,
+      "path": "hermes_cli/web_server.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 4
+    },
+    {
+      "added": 225,
+      "cwc": 8148,
+      "deleted": 66,
+      "patch_size": 291,
+      "path": "hermes_cli/main.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 14
+    },
+    {
+      "added": 279,
+      "cwc": 6300,
+      "deleted": 141,
+      "patch_size": 420,
+      "path": "tools/terminal_tool.py",
+      "semantic_coupling": 3,
+      "upstream_frequency": 5
+    },
+    {
+      "added": 163,
+      "cwc": 4368,
+      "deleted": 5,
+      "patch_size": 168,
+      "path": "gateway/run.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 13
+    },
+    {
+      "added": 759,
+      "cwc": 4192,
+      "deleted": 289,
+      "patch_size": 1048,
+      "path": "agent/auxiliary_client.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 2
+    },
+    {
+      "added": 232,
+      "cwc": 3804,
+      "deleted": 85,
+      "patch_size": 317,
+      "path": "agent/agent_init.py",
+      "semantic_coupling": 3,
+      "upstream_frequency": 4
+    },
+    {
+      "added": 146,
+      "cwc": 3552,
+      "deleted": 2,
+      "patch_size": 148,
+      "path": "hermes_cli/config_defaults.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 12
+    },
+    {
+      "added": 691,
+      "cwc": 2814,
+      "deleted": 716,
+      "patch_size": 1407,
+      "path": "uv.lock",
+      "semantic_coupling": 2,
+      "upstream_frequency": 1
+    },
+    {
+      "added": 1025,
+      "cwc": 1903,
+      "deleted": 878,
+      "patch_size": 1903,
+      "path": "tests/test_tui_gateway_server.py",
+      "semantic_coupling": 1,
+      "upstream_frequency": 1
+    },
+    {
+      "added": 204,
+      "cwc": 1888,
+      "deleted": 32,
+      "patch_size": 236,
+      "path": "cron/scheduler.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 4
+    },
+    {
+      "added": 668,
+      "cwc": 1790,
+      "deleted": 227,
+      "patch_size": 895,
+      "path": "hermes_cli/auth.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 1
+    },
+    {
+      "added": 60,
+      "cwc": 1708,
+      "deleted": 1,
+      "patch_size": 61,
+      "path": "apps/desktop/src/store/gateway.ts",
+      "semantic_coupling": 2,
+      "upstream_frequency": 14
+    },
+    {
+      "added": 71,
+      "cwc": 1530,
+      "deleted": 14,
+      "patch_size": 85,
+      "path": "apps/desktop/src/plugins/hermes-bots/plugin.js",
+      "semantic_coupling": 2,
+      "upstream_frequency": 9
+    },
+    {
+      "added": 261,
+      "cwc": 1424,
+      "deleted": 95,
+      "patch_size": 356,
+      "path": "tui_gateway/server.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 2
+    },
+    {
+      "added": 71,
+      "cwc": 1296,
+      "deleted": 1,
+      "patch_size": 72,
+      "path": "apps/desktop/src/global.d.ts",
+      "semantic_coupling": 2,
+      "upstream_frequency": 9
+    },
+    {
+      "added": 23,
+      "cwc": 1292,
+      "deleted": 11,
+      "patch_size": 34,
+      "path": "apps/desktop/src/app/gateway/hooks/use-gateway-boot.ts",
+      "semantic_coupling": 2,
+      "upstream_frequency": 19
+    },
+    {
+      "added": 104,
+      "cwc": 1104,
+      "deleted": 34,
+      "patch_size": 138,
+      "path": "agent/memory_manager.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 4
+    },
+    {
+      "added": 58,
+      "cwc": 1040,
+      "deleted": 7,
+      "patch_size": 65,
+      "path": "hermes_cli/tools_config.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 8
+    },
+    {
+      "added": 80,
+      "cwc": 1020,
+      "deleted": 5,
+      "patch_size": 85,
+      "path": "hermes_cli/doctor.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 6
+    },
+    {
+      "added": 222,
+      "cwc": 932,
+      "deleted": 11,
+      "patch_size": 233,
+      "path": "tools/web_tools.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 2
+    },
+    {
+      "added": 50,
+      "cwc": 852,
+      "deleted": 21,
+      "patch_size": 71,
+      "path": "gateway/platforms/base.py",
+      "semantic_coupling": 3,
+      "upstream_frequency": 4
+    },
+    {
+      "added": 273,
+      "cwc": 764,
+      "deleted": 109,
+      "patch_size": 382,
+      "path": "tools/file_tools.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 1
+    },
+    {
+      "added": 75,
+      "cwc": 750,
+      "deleted": 0,
+      "patch_size": 75,
+      "path": "cli-config.yaml.example",
+      "semantic_coupling": 2,
+      "upstream_frequency": 5
+    }
+  ]
+}

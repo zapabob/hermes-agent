@@ -1,13 +1,13 @@
 # Hermes Desktop ☤
 
 <p align="center">
-  <a href="https://github.com/NousResearch/hermes-agent/releases"><img src="https://img.shields.io/badge/Download-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-FFD700?style=for-the-badge" alt="Download"></a>
-  <a href="https://hermes-agent.nousresearch.com/docs/"><img src="https://img.shields.io/badge/Docs-hermes--agent.nousresearch.com-FFD700?style=for-the-badge" alt="Documentation"></a>
+  <a href="https://github.com/zapabob/hermes-agent-windows#11-installation"><img src="https://img.shields.io/badge/Build-Windows%20from%20source-FFD700?style=for-the-badge" alt="Build from source"></a>
+  <a href="https://hermes-agent.nousresearch.com/docs/"><img src="https://img.shields.io/badge/Docs-Upstream-FFD700?style=for-the-badge" alt="Upstream documentation"></a>
   <a href="https://discord.gg/NousResearch"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
-  <a href="https://github.com/NousResearch/hermes-agent/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
+  <a href="https://github.com/zapabob/hermes-agent-windows/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
 </p>
 
-**The native desktop app for [Hermes Agent](../../README.md) — the self-improving AI agent from [Nous Research](https://nousresearch.com).** Same agent, same skills, same memory as the CLI and gateway, in a polished native window — chat with streaming tool output, side-by-side previews, a file browser, voice, and settings, no terminal required. Available for **macOS, Windows, and Linux**.
+This directory contains the Desktop surface for the unofficial [Hermes Agent Windows Workstation downstream](../../README.md). It preserves the upstream Hermes Desktop architecture while qualifying native Windows as Tier 1. It is not affiliated with or endorsed by Nous Research.
 
 <table>
 <tr><td><b>Chat with the full agent</b></td><td>Streaming responses, live tool activity, structured tool summaries, and the same conversation history as every other Hermes surface.</td></tr>
@@ -32,9 +32,9 @@ hermes desktop
 
 It builds and launches the GUI against your existing install — same config, keys, sessions, and skills. If Desktop cannot find a usable runtime or saved remote connection, first launch lets you connect to an existing Hermes gateway or install Hermes locally. Local onboarding then walks you through choosing a provider and model.
 
-### Prebuilt installers
+### Downstream source build
 
-Prebuilt installers are built and distributed via [the Hermes Desktop website.](https://hermes-agent.nousresearch.com/).
+This downstream currently has no verified fork-specific binary installer. Follow the [source installation procedure](../../README.md#11-installation) so the running Desktop is built from the same reviewed checkout.
 
 ---
 
@@ -50,7 +50,7 @@ hermes update
 
 ## Requirements
 
-The installer handles everything for you (Python 3.11+, a portable Git, ripgrep).
+The source build requirements and exact package-manager commands are maintained in the [downstream installation section](../../README.md#11-installation).
 
 ---
 
@@ -233,9 +233,9 @@ Remove-Item -Recurse -Force "$env:LOCALAPPDATA\hermes\hermes-agent\venv"
 
 ## Community
 
-- 💬 [Discord](https://discord.gg/NousResearch)
-- 📖 [Documentation](https://hermes-agent.nousresearch.com/docs/)
-- 🐛 [Issues](https://github.com/NousResearch/hermes-agent/issues)
+- 💬 [Upstream Nous Research Discord](https://discord.gg/NousResearch)
+- 📖 [Upstream documentation](https://hermes-agent.nousresearch.com/docs/)
+- 🐛 [Downstream issues](https://github.com/zapabob/hermes-agent-windows/issues)
 
 ---
 

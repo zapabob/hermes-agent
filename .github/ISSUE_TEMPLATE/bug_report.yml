@@ -9,7 +9,7 @@ body:
         Thanks for reporting a bug! Please fill out the sections below so we can reproduce and fix it quickly.
 
         **Before submitting**, please:
-        - [ ] Search [existing issues](https://github.com/NousResearch/hermes-agent/issues) to avoid duplicates
+        - [ ] Search [existing issues](https://github.com/zapabob/hermes-agent-windows/issues) to avoid duplicates
         - [ ] Update to the latest version (`hermes update`) and confirm the bug still exists
         - [ ] Run `hermes debug share` and paste the links below (see Debug Report section)
 

@@ -11,7 +11,7 @@ OUT = ROOT / "output" / "hermes-comparison-20260727"
 OUT.mkdir(parents=True, exist_ok=True)
 
 slides = [
-    ("Hermes Agent\n比較動画", "NousResearch/hermes-agent  vs  zapabob/hermes-agent", "比較対象は各リポジトリの最新取得コミット"),
+    ("Hermes Agent\n比較動画", "NousResearch/hermes-agent  vs  zapabob/hermes-agent-windows", "比較対象は各リポジトリの記録済みコミット"),
     ("上流版: NousResearch", "標準のHermes Agent基盤", "CLI / Gateway / Desktop / Browser / Skills\nシンプルで追従しやすい上流実装"),
     ("fork版: zapabob", "個人環境向けの拡張レイヤー", "TTS・X投稿・記憶・VRChat・Windows運用\n外部ツールとローカル自動化を統合"),
     ("違いの核心", "基盤  vs  統合", "上流版: 安定した標準基盤\nfork版: 使う環境に合わせた自動化と運用拡張"),
@@ -21,7 +21,7 @@ slides = [
 
 commits = {
     "NousResearch/hermes-agent": "339d968689a3b91c5f537d7198ff28abde32ab3b",
-    "zapabob/hermes-agent": "e1c6cf36fcc419923520720a2a05720a0282174f",
+    "zapabob/hermes-agent-windows": "e1c6cf36fcc419923520720a2a05720a0282174f",
 }
 
 def font(size: int, bold: bool = False):
@@ -50,7 +50,7 @@ for i, (title, subtitle, body) in enumerate(slides, 1):
     draw.text((120, 510), subtitle, font=font(40), fill=(196, 181, 253))
     for n, line in enumerate(body.split("\\n")):
         draw.text((120, 610 + n*64), line, font=font(38), fill=(224, 231, 255))
-    draw.text((120, 980), "NousResearch/hermes-agent  ×  zapabob/hermes-agent", font=font(24), fill=(148, 163, 184))
+    draw.text((120, 980), "NousResearch/hermes-agent  ×  zapabob/hermes-agent-windows", font=font(24), fill=(148, 163, 184))
     draw.text((1770, 980), f"{i:02d}/06", font=font(24), fill=(148, 163, 184), anchor="ra")
     im.save(OUT / f"slide-{i:02d}.png")
 

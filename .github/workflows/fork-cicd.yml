@@ -33,6 +33,8 @@ jobs:
       - run: uv sync --locked --python 3.11 --extra dev
       - name: Validate policy, feature, carry, and snapshot ledgers
         run: uv run --no-sync python scripts/downstream/validate_policy.py
+      - name: Validate carry-surface metrics
+        run: uv run --no-sync python scripts/downstream/carry_metrics.py --check
       - name: Validate required CI structure
         run: uv run --no-sync python -m pytest tests/downstream/test_ci_contracts.py -q
       - name: Enforce compatibility boundary layout

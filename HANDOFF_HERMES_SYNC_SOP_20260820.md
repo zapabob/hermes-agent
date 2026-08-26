@@ -130,17 +130,17 @@ PR72の完全Desktop E2E: 未実行
 
 ~~~powershell
 $sha = git rev-parse HEAD
-gh run list -R zapabob/hermes-agent --workflow ci.yaml --branch main --commit $sha --limit 30 --json databaseId,status,conclusion,headSha,url,workflowName
+gh run list -R zapabob/hermes-agent-windows --workflow fork-cicd.yml --branch main --commit $sha --limit 30 --json databaseId,status,conclusion,headSha,url,workflowName
 ~~~
 
 runが見つかったら、IDごとに結果とheadShaを照合する。
 
 ~~~powershell
-gh run view -R zapabob/hermes-agent <run-id> --json status,conclusion,headSha,url,jobs
-gh run watch -R zapabob/hermes-agent <run-id> --exit-status
+gh run view -R zapabob/hermes-agent-windows <run-id> --json status,conclusion,headSha,url,jobs
+gh run watch -R zapabob/hermes-agent-windows <run-id> --exit-status
 ~~~
 
-ci.yamlはworkflow_dispatchを持たないため、gh workflow run ci.yaml --ref mainを使わない。push/mainまたはPRの自然発火を待ち、必要ならGitHub側のrerunを明示的に扱う。CI、Nix、Docker、Publish/E2E、review commentなど必須チェックを別々に確認し、単一の成功runだけでオールグリーンと宣言しない。
+fork-cicd.ymlはworkflow_dispatchを持つため、改名後の再検証では gh workflow run fork-cicd.yml -R zapabob/hermes-agent-windows --ref main を使える。Windows native、Linux regression、Desktop、security/lockを別々に確認し、単一jobの成功だけでオールグリーンと宣言しない。
 
 ## 6. CIの確認時点スナップショット
 

@@ -666,8 +666,8 @@ export const en: Translations = {
       versionUnavailable: 'Version unavailable',
       bundleOutOfSync: 'App build out of date',
       bundleOutOfSyncDesc:
-        'The Hermes runtime was updated, but the desktop app itself is still an older build — new interface features (like Bot Mode) will be missing until it updates. Run the update below to rebuild the app. If that doesn\u2019t clear this warning, reinstall from the latest desktop installer.',
-      bundleOutOfSyncAction: 'Get the installer',
+        'The Hermes runtime was updated, but the desktop app itself is still an older build — new interface features (like Bot Mode) will be missing until it updates. Run the update below to rebuild the app. If that doesn\u2019t clear this warning, follow the downstream source-install instructions.',
+      bundleOutOfSyncAction: 'View source-install instructions',
       updates: 'Updates',
       checkNow: 'Check now',
       checking: 'Checking…',

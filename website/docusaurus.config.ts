@@ -80,7 +80,7 @@ const config: Config = {
         docs: {
           routeBasePath: '/',  // Docs at the root of /docs/
           sidebarPath: './sidebars.ts',
-          editUrl: 'https://github.com/NousResearch/hermes-agent/edit/main/website/',
+          editUrl: 'https://github.com/zapabob/hermes-agent-windows/edit/main/website/',
         },
         blog: false,
         theme: {
@@ -145,11 +145,11 @@ const config: Config = {
         },
         {
           href: 'https://hermes-agent.nousresearch.com',
-          label: 'Home',
+          label: 'Upstream Site',
           position: 'right',
         },
         {
-          href: 'https://github.com/NousResearch/hermes-agent',
+          href: 'https://github.com/zapabob/hermes-agent-windows',
           label: 'GitHub',
           position: 'right',
         },
@@ -176,20 +176,20 @@ const config: Config = {
           title: 'Community',
           items: [
             { label: 'Discord', href: 'https://discord.gg/NousResearch' },
-            { label: 'GitHub Issues', href: 'https://github.com/NousResearch/hermes-agent/issues' },
+            { label: 'Downstream Issues', href: 'https://github.com/zapabob/hermes-agent-windows/issues' },
             { label: 'Skills Hub', href: 'https://agentskills.io' },
           ],
         },
         {
           title: 'More',
           items: [
-            { label: 'Desktop Download', href: 'https://hermes-agent.nousresearch.com/' },
-            { label: 'GitHub', href: 'https://github.com/NousResearch/hermes-agent' },
+            { label: 'Upstream Desktop', href: 'https://hermes-agent.nousresearch.com/' },
+            { label: 'GitHub', href: 'https://github.com/zapabob/hermes-agent-windows' },
             { label: 'Nous Research', href: 'https://nousresearch.com' },
           ],
         },
       ],
-      copyright: `Built by <a href="https://nousresearch.com">Nous Research</a> · MIT License · ${new Date().getFullYear()}`,
+      copyright: `Unofficial downstream based on Hermes Agent by <a href="https://nousresearch.com">Nous Research</a> · MIT License · ${new Date().getFullYear()}`,
     },
     prism: {
       theme: prismThemes.github,

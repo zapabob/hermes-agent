@@ -1,6 +1,6 @@
 # Fork Guide for AI Agents
 
-You are in **zapabob/hermes-agent**, an engineering fork of NousResearch/hermes-agent.
+You are in **zapabob/hermes-agent-windows**, an engineering fork of NousResearch/hermes-agent.
 Read this file when the task touches **local-only** behaviour, upstream sync, or
 Windows operations.
 

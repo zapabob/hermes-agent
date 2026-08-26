@@ -711,8 +711,8 @@ export const ja = defineLocale({
       versionUnavailable: 'バージョンを取得できません',
       bundleOutOfSync: 'アプリのビルドが古くなっています',
       bundleOutOfSyncDesc:
-        'Hermes ランタイムは更新されましたが、デスクトップアプリ自体は古いビルドのままです。アプリを更新するまで、新しいインターフェース機能(Bot Mode など)は表示されません。下の更新を実行してアプリを再ビルドしてください。それでもこの警告が消えない場合は、最新のデスクトップインストーラーから再インストールしてください。',
-      bundleOutOfSyncAction: 'インストーラーを入手',
+        'Hermes ランタイムは更新されましたが、デスクトップアプリ自体は古いビルドのままです。アプリを更新するまで、新しいインターフェース機能(Bot Mode など)は表示されません。下の更新を実行してアプリを再ビルドしてください。それでもこの警告が消えない場合は、downstream のソース導入手順に従ってください。',
+      bundleOutOfSyncAction: 'ソース導入手順を見る',
       updates: '更新',
       checkNow: '今すぐ確認',
       checking: '確認中…',

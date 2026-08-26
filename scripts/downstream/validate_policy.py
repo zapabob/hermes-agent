@@ -40,6 +40,9 @@ _REQUIRED_FILES = (
     ".codex/UPSTREAM_POLICY.md",
     ".codex/UPSTREAM_SNAPSHOT.json",
     "DOWNSTREAM_POLICY.md",
+    "_docs/carry-surface-20260826.json",
+    "_docs/carry-surface-20260826.md",
+    "_docs/repository-rename-20260826.md",
     "FEATURES.yaml",
     "CARRY.yaml",
 )

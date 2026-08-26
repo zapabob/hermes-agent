@@ -21,8 +21,8 @@ import {
 import { ListRow, SectionHeading, SettingsContent } from './primitives'
 import { UninstallSection } from './uninstall-section'
 
-const RELEASE_NOTES_URL = 'https://github.com/NousResearch/hermes-agent/releases'
-const INSTALLER_URL = 'https://hermes-agent.nousresearch.com/'
+const RELEASE_NOTES_URL = 'https://github.com/zapabob/hermes-agent-windows/releases'
+const SOURCE_INSTALL_URL = 'https://github.com/zapabob/hermes-agent-windows#11-installation'
 
 function relativeTime(ms: number | undefined, a: Translations['settings']['about']) {
   if (!ms) {
@@ -116,10 +116,10 @@ export function AboutSettings() {
                 <p className="mt-1 text-xs text-muted-foreground">{a.bundleOutOfSyncDesc}</p>
                 <Button asChild className="mt-2" size="sm" variant="textStrong">
                   <a
-                    href={INSTALLER_URL}
+                    href={SOURCE_INSTALL_URL}
                     onClick={event => {
                       event.preventDefault()
-                      void window.hermesDesktop?.openExternal?.(INSTALLER_URL)
+                      void window.hermesDesktop?.openExternal?.(SOURCE_INSTALL_URL)
                     }}
                     rel="noreferrer"
                     target="_blank"

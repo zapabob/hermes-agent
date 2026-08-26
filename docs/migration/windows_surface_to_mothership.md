@@ -67,7 +67,7 @@ C:\Users\<user>\.hermes\migration\
 Clone or update the repo:
 
 ```powershell
-git clone https://github.com/zapabob/hermes-agent.git "C:\Users\butte\OneDrive\ドキュメント\New project\hermes-agent"
+git clone https://github.com/zapabob/hermes-agent-windows.git "C:\Users\butte\OneDrive\ドキュメント\New project\hermes-agent"
 cd "C:\Users\butte\OneDrive\ドキュメント\New project\hermes-agent"
 git pull --ff-only origin main
 ```
