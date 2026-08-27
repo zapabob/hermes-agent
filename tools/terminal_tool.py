@@ -3009,6 +3009,21 @@ def terminal_tool(
                     cwd, env_type, remapped,
                 )
             cwd = remapped
+        if env_type == "local":
+            from downstream.security.execution_gate import preflight_command
+
+            gate = preflight_command(command, cwd)
+            if not gate["allowed"]:
+                blocked = gate["blocked"][0]
+                return tool_error(
+                    "Security Center blocked a malicious execution candidate: "
+                    f"{blocked['path']} ({blocked['verdict']}, score {blocked['score']})."
+                )
+            if gate["warnings"]:
+                logger.warning(
+                    "Security Center execution preflight returned non-clean evidence: %s",
+                    json.dumps(gate["warnings"], ensure_ascii=False),
+                )
         default_timeout = config["timeout"]
 
         # Validate an explicit timeout before it flows into deadline math.

@@ -14871,6 +14871,131 @@ async def run_security_audit():
     return {"ok": True, "pid": proc.pid, "name": "security-audit"}
 
 
+class SecurityScanRequest(BaseModel):
+    path: Optional[str] = None
+    scope: Literal["custom", "quick", "full"] = "custom"
+    quarantine: bool = True
+    confirmed: bool = False
+
+
+class SecurityMutationRequest(BaseModel):
+    confirmed: bool = False
+
+
+class SecurityWatchRequest(BaseModel):
+    action: Literal["enable", "disable"]
+    confirmed: bool = False
+
+
+class SecurityRestoreRequest(BaseModel):
+    destination: Optional[str] = None
+    force: bool = False
+    confirmed: bool = False
+
+
+def _security_service():
+    from downstream.security.service import SecurityService
+
+    return SecurityService()
+
+
+@app.get("/api/security/status")
+async def security_status():
+    return await asyncio.to_thread(lambda: _security_service().status())
+
+
+@app.post("/api/security/scan")
+async def security_scan(body: SecurityScanRequest):
+    if body.quarantine and not body.confirmed:
+        raise HTTPException(status_code=409, detail="confirmed=true is required when quarantine is enabled")
+
+    def _run():
+        service = _security_service()
+        if body.scope == "quick":
+            paths = service.quick_paths()
+        elif body.scope == "full":
+            paths = service.full_paths()
+        else:
+            if not body.path:
+                raise ValueError("path is required for a custom scan")
+            paths = [Path(body.path)]
+        return {"results": [item.to_dict() for item in service.scan_paths(paths, quarantine=body.quarantine)]}
+
+    try:
+        return await asyncio.to_thread(_run)
+    except (FileNotFoundError, PermissionError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/security/update")
+async def security_update(body: SecurityMutationRequest):
+    if not body.confirmed:
+        raise HTTPException(status_code=409, detail="confirmed=true is required")
+    return await asyncio.to_thread(lambda: _security_service().update())
+
+
+@app.post("/api/security/watch")
+async def security_watch(body: SecurityWatchRequest):
+    if not body.confirmed:
+        raise HTTPException(status_code=409, detail="confirmed=true is required")
+
+    def _run():
+        from downstream.security.cli import _watch_disable, _watch_enable
+
+        service = _security_service()
+        return _watch_enable(service) if body.action == "enable" else _watch_disable(service)
+
+    return await asyncio.to_thread(_run)
+
+
+@app.get("/api/security/quarantine")
+async def security_quarantine_list():
+    return {"items": await asyncio.to_thread(lambda: _security_service().store.status_rows("quarantine_items", 200))}
+
+
+@app.get("/api/security/quarantine/{item_id}")
+async def security_quarantine_inspect(item_id: str):
+    try:
+        return await asyncio.to_thread(lambda: _security_service().vault.inspect(item_id))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Quarantine item not found") from exc
+
+
+@app.post("/api/security/quarantine/{item_id}/restore")
+async def security_quarantine_restore(item_id: str, body: SecurityRestoreRequest):
+    if not body.confirmed:
+        raise HTTPException(status_code=409, detail="confirmed=true is required")
+
+    def _run():
+        service = _security_service()
+        destination = Path(body.destination).resolve() if body.destination else None
+        restored = service.vault.restore(
+            item_id,
+            lambda path: service.scan_file(path, quarantine=False, use_cache=False),
+            destination,
+            body.force,
+        )
+        return {"ok": True, "path": str(restored)}
+
+    try:
+        return await asyncio.to_thread(_run)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Quarantine item not found") from exc
+    except (FileExistsError, PermissionError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.delete("/api/security/quarantine/{item_id}")
+async def security_quarantine_delete(item_id: str, confirmed: bool = Query(False)):
+    if not confirmed:
+        raise HTTPException(status_code=409, detail="confirmed=true is required")
+    try:
+        await asyncio.to_thread(lambda: _security_service().vault.delete(item_id))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Quarantine item not found") from exc
+    return {"ok": True, "id": item_id, "deleted": True}
+
+
 def _dashboard_backup_dir() -> Path:
     return get_hermes_home() / "backups"
 

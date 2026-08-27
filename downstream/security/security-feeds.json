@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "feeds": [
+    {
+      "id": "clamav-official",
+      "kind": "clamav-cvd",
+      "enabled_by_default": true,
+      "updater": "freshclam",
+      "content_upload": false
+    },
+    {
+      "id": "local-yara-core",
+      "kind": "yara-rules",
+      "enabled_by_default": true,
+      "path": "feeds/yara",
+      "content_upload": false
+    },
+    {
+      "id": "local-hash-reputation",
+      "kind": "sha256-reputation",
+      "enabled_by_default": true,
+      "path": "security.db",
+      "content_upload": false
+    }
+  ]
+}

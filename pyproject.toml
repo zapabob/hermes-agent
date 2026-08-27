@@ -243,6 +243,7 @@ vision = []
 # any existing requests for the `pty` extra resolve cleanly
 # without pulling in extra packages.
 pty = []
+security = ["yara-python==4.5.4"]
 # CVE-2026-48710 (BadHost): Starlette is pulled transitively by mcp's
 # sse-starlette / HTTP-SSE stack (and by fastapi in the `web` extra). Before
 # 1.0.1, a malformed Host header makes `request.url.path` desync from the path
@@ -367,6 +368,7 @@ all = [
   "hermes-agent[acp]",
   "hermes-agent[google]",
   "hermes-agent[web]",
+  "hermes-agent[security]",
   "hermes-agent[youtube]",
 ]
 
@@ -445,7 +447,7 @@ py-modules = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["agent", "agent.*", "tools", "tools.*", "hermes_cli", "hermes_cli.*", "gateway", "gateway.*", "tui_gateway", "tui_gateway.*", "cron", "cron.*", "acp_adapter", "plugins", "plugins.*", "providers", "providers.*"]
+include = ["agent", "agent.*", "tools", "tools.*", "hermes_cli", "hermes_cli.*", "gateway", "gateway.*", "tui_gateway", "tui_gateway.*", "cron", "cron.*", "acp_adapter", "plugins", "plugins.*", "providers", "providers.*", "downstream", "downstream.*"]
 
 [tool.setuptools.package-data]
 hermes_cli = ["observability/schemas/*.json", "data/*.json"]
@@ -459,6 +461,7 @@ gateway = ["assets/**/*"]
 # sealed wheels with the plugin Python modules; without this declaration the
 # wheel contains adapters but discovery finds zero bundled plugins.
 plugins = ["**/plugin.yaml", "**/plugin.yml"]
+downstream = ["security/*.json", "security/rules/*.yar"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

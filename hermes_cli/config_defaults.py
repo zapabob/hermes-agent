@@ -2620,6 +2620,15 @@ DEFAULT_CONFIG = {
         # for restricted networks, audited environments, or air-gapped
         # systems where any runtime install is unacceptable.
         "allow_lazy_installs": True,
+        "malware": {
+            "enabled": True,
+            "execution_gate": True,
+            "auto_quarantine": True,
+            "scanner_timeout": 30,
+            "update_timeout": 300,
+            "max_workers": 4,
+            "watch_interval": 30,
+        },
     },
 
     "cron": {
