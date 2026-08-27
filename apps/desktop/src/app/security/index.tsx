@@ -69,6 +69,7 @@ function formatEvidence(serialized: string): string {
 
     const record =
       value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null
+
     const findings = Array.isArray(value) ? value : Array.isArray(record?.findings) ? record.findings : []
 
     const labels = findings.flatMap(item => {
@@ -209,9 +210,11 @@ export function SecurityView({
   )
 
   const engines = useMemo(() => Object.entries(status?.engines ?? {}), [status?.engines])
+
   const scannerReady = engines.some(
     ([name, version]) => ['clamav', 'yara'].includes(name) && toneForEngine(version) === 'good'
   )
+
   const protectionReady = Boolean(status?.enabled && scannerReady)
 
   if (!status && !error) {
