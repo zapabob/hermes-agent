@@ -9811,6 +9811,8 @@ def _login_nous(args, pconfig: ProviderConfig) -> None:
                 get_pricing_for_provider,
                 check_nous_free_tier,
                 partition_nous_models_by_tier,
+                nous_policy_allowed_ids,
+                restrict_to_nous_policy,
                 union_with_portal_free_recommendations,
                 union_with_portal_paid_recommendations,
             )
@@ -9868,6 +9870,14 @@ def _login_nous(args, pconfig: ProviderConfig) -> None:
                         pricing,
                         _portal_for_recs,
                     )
+                # The curated list and the Portal's recommendations are both
+                # unauthenticated, so neither knows what the org may reach.
+                # Narrow both lists to the policy before they are shown.
+                _policy_allowed = nous_policy_allowed_ids()
+                model_ids = restrict_to_nous_policy(model_ids, _policy_allowed)
+                unavailable_models = restrict_to_nous_policy(
+                    unavailable_models, _policy_allowed,
+                )
             _portal = auth_state.get("portal_base_url", "")
             if model_ids:
                 print(
