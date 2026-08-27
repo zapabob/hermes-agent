@@ -46,6 +46,7 @@ import {
 } from './backend-claim'
 import { dashboardFallbackArgs, sourceDeclaresServe } from './backend-command'
 import { createBackendConnectionState } from './backend-connection-state'
+import { BackendDialClaims } from './backend-dial-claim'
 import { buildDesktopBackendEnv, hermesManagedNodePathEntries, normalizeHermesHomeRoot } from './backend-env'
 import { isReauthRequiredError, makeUnsignedOauthError, waitForHermesReady } from './backend-health'
 import { backendCommandMatches, createBackendOwnership, createBackendShutdownCoordinator } from './backend-ownership'
@@ -1356,8 +1357,13 @@ function registerMediaProtocol() {
 
       return resolvedPath
     },
+    // Claim-guarded (#90812): a media stream load can race a renderer's own
+    // reconnect dial for the same (connectionId, profile) scope; coalescing
+    // here avoids bootstrapping a second SSH tunnel / remote dashboard.
     resolveRemoteConnection: ({ connectionId, profile }) =>
-      connectionId ? ensureRegistryBackend(connectionId, profile) : ensureBackend(profile)
+      backendDialClaims.run(backendScopeKey(connectionId, profile), () =>
+        connectionId ? ensureRegistryBackend(connectionId, profile) : ensureBackend(profile)
+      )
   })
 
   protocol.handle(MEDIA_PROTOCOL, handler)
@@ -1368,6 +1374,12 @@ const backendConnectionState = createBackendConnectionState<ReturnType<typeof sp
 const remoteLiveness = new RemoteLivenessTracker()
 const remoteRevalidation = new RemoteRevalidationCoordinator()
 const registryDispatchRevalidation = new RemoteRevalidationCoordinator()
+// Single-owner reconnect/dial claim (#90812): reconnectGateway()'s in-flight
+// lock is per-renderer, so two windows racing one wake can both invoke the
+// backend ensure IPC and double-dial a pooled SSH backend. Main owns backend
+// lifecycles, so concurrent dials for one (connectionId, profile) scope
+// coalesce here — the second caller awaits the first spawn's result.
+const backendDialClaims = new BackendDialClaims()
 // True while connection-config:apply soft-rehomes the primary — suppresses the
 // backend-exit toast so an intentional kill doesn't look like a crash.
 let softRehomeInProgress = false
@@ -9593,11 +9605,18 @@ function activeSshTerminalTarget(webContentsId?: number) {
 async function ensureTerminalBackend(webContentsId: number) {
   const windowRoute = windowConnectionRoutes.get(webContentsId)
 
+  // Claim-guarded (#90812): opening a terminal pane can race a renderer's own
+  // reconnect dial for the same (connectionId, profile) scope; coalescing
+  // here avoids bootstrapping a second SSH tunnel / remote dashboard.
   if (windowRoute?.registryScoped && windowRoute.connectionId) {
-    return ensureRegistryBackend(windowRoute.connectionId, windowRoute.profile)
+    return backendDialClaims.run(backendScopeKey(windowRoute.connectionId, windowRoute.profile), () =>
+      ensureRegistryBackend(windowRoute.connectionId, windowRoute.profile)
+    )
   }
 
-  return ensureBackend(windowRoute?.profile ?? primaryProfileKey())
+  const profile = windowRoute?.profile ?? primaryProfileKey()
+
+  return backendDialClaims.run(backendScopeKey(null, profile), () => ensureBackend(profile))
 }
 
 // Loopback reach for the browser pane. Scoped to the SSH connection that
@@ -13128,7 +13147,12 @@ function createWindow() {
 }
 
 ipcMain.handle('hermes:connection', async (_event, profile) => {
-  const connection = await ensureBackend(profile)
+  // Coalesce concurrent renderer dials for one profile scope (#90812): the
+  // renderer-side reconnect lock is per-window, so two windows waking at once
+  // both land here. The claim key mirrors ensureBackend()'s own profile
+  // normalization so every spelling of the primary coalesces onto one dial.
+  const profileKey = profile && String(profile).trim() ? String(profile).trim() : primaryProfileKey()
+  const connection = await backendDialClaims.run(backendScopeKey(null, profileKey), () => ensureBackend(profile))
   const connectionId = resolvedConnectionId(readDesktopConnectionsRegistry(), connection)
 
   return connectionId ? { ...connection, connectionId } : connection
@@ -13142,7 +13166,10 @@ ipcMain.handle('hermes:connection:for', async (_event, payload) => {
   const { connectionId, profile } = payload && typeof payload === 'object' ? (payload as any) : ({} as any)
   const registry = readDesktopConnectionsRegistry()
   const id = String(connectionId || '').trim() || registry.primary
-  const connection = await ensureRegistryBackend(id, profile)
+  // Same single-owner claim as 'hermes:connection', keyed by the composite
+  // (connectionId, profile) scope (#90812): concurrent registry dials for one
+  // scope share the first spawn instead of bootstrapping duplicate remotes.
+  const connection = await backendDialClaims.run(backendScopeKey(id, profile), () => ensureRegistryBackend(id, profile))
 
   return { ...connection, connectionId: id, registryScoped: true }
 })
@@ -13896,8 +13923,15 @@ async function enumerateRegistryAgentSources(registry = readDesktopConnectionsRe
             }
           }
 
+          // Claim-guarded (#90812): this ~5s roster poll can race a renderer's
+          // own reconnect dial for the same connection; coalescing avoids
+          // bootstrapping a second SSH tunnel / remote dashboard.
           const descriptor: any = await withEnumerationDeadline(
-            Promise.resolve(ensureRegistryBackend(connection.id, null))
+            Promise.resolve(
+              backendDialClaims.run(backendScopeKey(connection.id, null), () =>
+                ensureRegistryBackend(connection.id, null)
+              )
+            )
           )
 
           const body: any = await getJsonForBackend(descriptor, '/api/profiles', { timeoutMs: 8_000 })
@@ -14051,7 +14085,9 @@ ipcMain.handle('hermes:connections:update-all', async (_event, payload) => {
             return { ...base, ok: result?.ok !== false, detail: result?.message || 'update started' }
           }
 
-          const descriptor: any = await ensureRegistryBackend(connection.id, null)
+          const descriptor: any = await backendDialClaims.run(backendScopeKey(connection.id, null), () =>
+            ensureRegistryBackend(connection.id, null)
+          )
 
           const body: any = await postJsonForBackend(descriptor, '/api/hermes/update', {}, { timeoutMs: 15_000 })
 
@@ -14688,7 +14724,13 @@ async function dispatchRegistryApiRequest(
   routeProfile = request?.profile,
   requestProfile = request?.profile
 ) {
-  const connection: any = await ensureRegistryBackend(registryConnectionId, routeProfile)
+  // Claim-guarded (#90812): every registry-scoped REST call funnels through
+  // here, so it can race a renderer's own WS reconnect dial for the same
+  // (connectionId, profile) scope; coalescing avoids bootstrapping a second
+  // SSH tunnel / remote dashboard.
+  const connection: any = await backendDialClaims.run(backendScopeKey(registryConnectionId, routeProfile), () =>
+    ensureRegistryBackend(registryConnectionId, routeProfile)
+  )
 
   const requestPath = pathForRegistryBackendRequest(request.path, requestProfile, connection)
 
