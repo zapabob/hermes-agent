@@ -83,6 +83,34 @@ jobs:
         run: uv run --no-sync ruff check .
       - name: Windows footgun scan
         run: uv run --no-sync python scripts/check-windows-footguns.py --all
+      - name: Install ClamAV for workstation malware qualification
+        run: |
+          choco install clamav -y --no-progress
+          $packageTools = Join-Path $env:ChocolateyInstall 'lib\clamav\tools'
+          $clamRoot = Get-ChildItem -LiteralPath $packageTools -Directory |
+            Where-Object { $_.Name -like 'clamav-*.win.x64' } |
+            Sort-Object Name |
+            Select-Object -Last 1 -ExpandProperty FullName
+          if (-not $clamRoot) {
+            throw 'ClamAV package directory was not found'
+          }
+          if (-not (Test-Path -LiteralPath (Join-Path $clamRoot 'clamscan.exe'))) {
+            throw 'ClamAV installation did not provide clamscan.exe'
+          }
+          $env:Path = "$clamRoot;$env:Path"
+          $sample = Join-Path $clamRoot 'conf_examples\freshclam.conf.sample'
+          $config = Join-Path $clamRoot 'freshclam.conf'
+          $database = Join-Path $clamRoot 'database'
+          New-Item -ItemType Directory -Force -Path $database | Out-Null
+          $content = Get-Content -Raw -LiteralPath $sample
+          $content = [regex]::Replace($content, '(?m)^Example\s*$', '# Example')
+          $content += "`nDatabaseDirectory `"$database`"`nCVDCertsDirectory `"$(Join-Path $clamRoot 'certs')`"`n"
+          Set-Content -LiteralPath $config -Value $content -Encoding utf8
+          & (Join-Path $clamRoot 'freshclam.exe') --config-file=$config --datadir=$database
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "PATH=$clamRoot;$env:PATH" >> $env:GITHUB_ENV
+          "CLAMAV_DATABASE_DIR=$database" >> $env:GITHUB_ENV
+          "HERMES_REQUIRE_CLAMAV=1" >> $env:GITHUB_ENV
       - name: Cross-platform and native Windows contracts
         run: >-
           uv run --no-sync python -m pytest
@@ -102,6 +130,8 @@ jobs:
           tests/test_hermes_state_wal_fallback.py
           tests/hermes_cli/test_fallback_chain.py
           tests/gateway/test_local_model_connection_reply.py
+          tests/security/test_security_center.py
+          tests/security/test_security_api.py
           -q
 
   windows-native-desktop:
@@ -132,6 +162,8 @@ jobs:
         run: npm --workspace apps/desktop run lint
       - name: Desktop platform and Electron child-process tests
         run: npm --workspace apps/desktop run test:desktop:platforms
+      - name: Security Center UI tests
+        run: npm --workspace apps/desktop run test:ui -- src/app/security/index.test.tsx
       - name: Desktop build smoke
         run: npm --workspace apps/desktop run build
 
