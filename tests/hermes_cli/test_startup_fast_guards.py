@@ -22,6 +22,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from downstream import UPSTREAM_SNAPSHOT_SHA
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Modules that must NEVER be imported by the fast path. Each one either
@@ -86,7 +88,7 @@ def test_fast_version_parity_off_termux(tmp_path):
     for field in (
         "Hermes Agent v",
         "Distribution: Hermes Agent Windows Workstation Edition 0.20.5-win.1",
-        "Frozen upstream: 1fe0f2f3ac97",
+        f"Frozen upstream: {UPSTREAM_SNAPSHOT_SHA[:12]}",
         "Downstream revision:",
         "Update channel: stable",
         "Install directory:",
