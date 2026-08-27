@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 
-from agent.context_compressor import SUMMARY_PREFIX
+from agent.context_compressor import SUMMARY_PREFIX, _DB_PERSISTED_MARKER
 from agent.conversation_compression import COMPACTION_DONE_STATUS, COMPACTION_STATUS
 from run_agent import AIAgent
 import run_agent
@@ -479,7 +479,7 @@ class TestPreflightCompression:
         # summary-first before the next API call).
         assert compressed == [
             {"role": "user", "content": f"{SUMMARY_PREFIX}\nPrevious conversation"},
-            {"role": "user", "content": "hello"},
+            {"role": "user", "content": "hello", _DB_PERSISTED_MARKER: True},
         ]
         # Post-#98426 the commit boundary ALWAYS runs the live builder;
         # its output differs from the cached prompt here, so the rebuilt
@@ -687,7 +687,7 @@ class TestPreflightCompression:
             mock_compress.return_value = (
                 [
                     {"role": "user", "content": f"{SUMMARY_PREFIX}\nPrevious conversation"},
-                    {"role": "user", "content": "hello"},
+                    {"role": "user", "content": "hello", _DB_PERSISTED_MARKER: True},
                 ],
                 "new system prompt",
             )
