@@ -76,7 +76,11 @@ def test_release_bundle_contains_required_identity_hashes_and_truthful_signing(
 
     on_disk = json.loads((output / "release-manifest.json").read_text(encoding="utf-8"))
     assert on_disk == manifest
-    sums = (output / "SHA256SUMS.txt").read_text(encoding="utf-8")
+    sums_path = output / "SHA256SUMS.txt"
+    sums_bytes = sums_path.read_bytes()
+    assert b"\r" not in sums_bytes
+    assert sums_bytes.endswith(b"\n")
+    sums = sums_bytes.decode("utf-8")
     assert artifacts["installer"]["name"] in sums
     assert artifacts["portable"]["name"] in sums
     notes = (output / "RELEASE_NOTES.md").read_text(encoding="utf-8")

@@ -138,7 +138,7 @@ def generate_release_bundle(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     sums = "".join(f"{item['sha256']}  {item['name']}\n" for item in artifacts)
-    (output_dir / "SHA256SUMS.txt").write_text(sums, encoding="utf-8")
+    (output_dir / "SHA256SUMS.txt").write_bytes(sums.encode("utf-8"))
     (output_dir / "RELEASE_NOTES.md").write_text(
         build_release_notes(manifest, Path(__file__).resolve().parents[2]),
         encoding="utf-8",
