@@ -73,6 +73,7 @@ import {
   $sessionResumeRequest,
   $sessions,
   knownSessionOwner,
+  ownerLookupSessionRows,
   sessionMatchesStoredId,
   sessionPinId,
   setAwaitingResponse,
@@ -358,7 +359,7 @@ export function ContribWiring({ children }: { children: ReactNode }) {
 
       let owner: SessionOwnerScope =
         (routingSessionId ? sessionTileOwnerRoute(routingSessionId) : undefined) ??
-        knownSessionOwner($sessions.get(), routingSessionId)
+        knownSessionOwner(ownerLookupSessionRows(), routingSessionId)
 
       if (!owner && routingSessionId) {
         // Unknown owner for a REAL session: probe across profiles (REST, not the

@@ -21,7 +21,9 @@ import { makeSessionInfo } from '../test/session-info'
 import {
   $activeSessionId,
   $connection,
+  $cronSessions,
   $currentCwd,
+  $messagingSessions,
   $selectedStoredSessionId,
   $sessions,
   $unreadFinishedSessionIds,
@@ -36,6 +38,7 @@ import {
   knownSessionOwner,
   knownSessionProfile,
   mergeSessionPage,
+  ownerLookupSessionRows,
   rememberedSessionProfile,
   resolveComposerSessionKey,
   sessionBelongsToProfile,
@@ -108,6 +111,26 @@ describe('session owner hints', () => {
     const scope = { connectionId: 'bounded-source', profile: 'worker' }
     expect(getSessionOwnerHint('bounded-0', scope)).toBeUndefined()
     expect(getSessionOwnerHint('bounded-256', scope)).toMatchObject({ connectionId: 'bounded-source' })
+  })
+})
+
+describe('ownerLookupSessionRows', () => {
+  afterEach(() => {
+    $sessions.set([])
+    $cronSessions.set([])
+    $messagingSessions.set([])
+  })
+
+  it('includes recents, cron, and messaging rows for owner routing', () => {
+    $sessions.set([session({ id: 'recent', profile: 'default' })])
+    $cronSessions.set([session({ connection_id: 'cron-source', id: 'cron', profile: 'worker' })])
+    $messagingSessions.set([session({ connection_id: 'message-source', id: 'message', profile: 'default' })])
+
+    expect(ownerLookupSessionRows().map(row => row.id)).toEqual(['recent', 'cron', 'message'])
+    expect(knownSessionOwner(ownerLookupSessionRows(), 'cron')).toEqual({
+      connectionId: 'cron-source',
+      profile: 'worker'
+    })
   })
 })
 
