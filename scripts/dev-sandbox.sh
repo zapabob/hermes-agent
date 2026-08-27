@@ -6,9 +6,9 @@
 # the user+network namespaces with `unshare` (see the namespace plan further
 # down), then re-execs into scripts/sandbox/stage2-run.sh, which adds the
 # mount/pid namespaces with bubblewrap and runs the payload. Its only writable
-# filesystem is SANDBOX_ROOT. HTTP(S) goes to a local static MITM proxy;
-# github.com SSH uses a sandbox-local git-upload-pack shim; neither transport
-# can reach the host network.
+# filesystem is SANDBOX_ROOT. Fixture HTTP(S) goes to a local static MITM proxy;
+# external HTTP(S) uses the private rootless network; github.com SSH uses a
+# sandbox-local git-upload-pack shim.
 
 set -euo pipefail
 
@@ -77,10 +77,12 @@ one. Both are worth testing; they differ in more than paths (root also relocates
 uv's Python to /usr/local/share for world-readability).
 
 The fake web server signs certificates with a CA trusted only inside this
-sandbox. HTTP_PROXY/HTTPS_PROXY send fixture URLs there first; other HTTP(S)
-requests pass through the sandbox's rootless outbound network. SSH to github.com
-runs a sandbox-local upload-pack shim, never your SSH config, agent,
-known-hosts file, or authorized keys.
+sandbox. The install shortcut fetches the canonical installer fixture through
+that server, then gives the installer and its dependency managers direct HTTPS
+through the sandbox's rootless outbound network. Generic --http-root commands
+retain the all-HTTP(S) proxy for fixture testing. SSH to github.com runs a
+sandbox-local upload-pack shim, never your SSH config, agent, known-hosts file,
+or authorized keys.
 
 Fake github main always comes from this folder. If it has staged, unstaged, or
 non-ignored untracked changes, the sandbox warns and creates a temporary local
@@ -174,6 +176,11 @@ fi
 if [ -n "$INSTALL_REF" ] && [ -n "$INSTALLER_PATH" ]; then
   echo 'error: --from-main / --install-ref cannot be combined with --installer' >&2
   exit 1
+fi
+
+DEV_SANDBOX_GLOBAL_PROXY_ENV=true
+if [ "$INSTALL_SHORTCUT" = true ]; then
+  DEV_SANDBOX_GLOBAL_PROXY_ENV=false
 fi
 
 for dir in "$SEED_DIR" "$HTTP_ROOT"; do
@@ -275,7 +282,8 @@ if [ "$INSTALL_SHORTCUT" = true ]; then
   fi
   set -- bash -c '
     set +e
-    curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- "$@"
+    curl --proxy http://127.0.0.1:8080 --cacert /work/certs/ca.pem \
+      -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- "$@"
     install_status=$?
     if [ "$install_status" -eq 0 ] && [ -f /work/promote-main ]; then
       next_main=$(cat /work/promote-main)
@@ -480,10 +488,6 @@ INTERACTIVE=false
 if [ -t 0 ] && [ -t 1 ]; then
   INTERACTIVE=true
 fi
-NODE_DIR="${DEV_SANDBOX_NODE_DIR:-}"
-if [ -z "$NODE_DIR" ] && command -v node >/dev/null; then
-  NODE_DIR="$(dirname "$(dirname "$(command -v node)")")"
-fi
 WAYLAND_SOCKET=""
 if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -n "${WAYLAND_DISPLAY:-}" ] \
   && [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]; then
@@ -541,7 +545,7 @@ env \
   DEV_SANDBOX_INTERACTIVE="$INTERACTIVE" \
   DEV_SANDBOX_USER="$SANDBOX_USER" \
   DEV_SANDBOX_HOME="$SANDBOX_HOME" \
-  DEV_SANDBOX_NODE_DIR="$NODE_DIR" \
+  DEV_SANDBOX_GLOBAL_PROXY_ENV="$DEV_SANDBOX_GLOBAL_PROXY_ENV" \
   DEV_SANDBOX_ELECTRON_LD_LIBRARY_PATH="${DEV_SANDBOX_ELECTRON_LD_LIBRARY_PATH:-}" \
   DEV_SANDBOX_XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-}" \
   DEV_SANDBOX_WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-}" \
