@@ -1,14 +1,15 @@
-import assert from 'node:assert/strict'
-import test from 'node:test'
 import { resolve } from 'node:path'
+import { describe, expect, it } from 'vitest'
 
 import { loadDistributionIdentity } from './set-exe-identity.mjs'
 
-test('Windows executable identity comes from downstream distribution metadata', () => {
-  const distribution = loadDistributionIdentity(resolve(import.meta.dirname, '..'))
+describe('Windows executable identity', () => {
+  it('comes from downstream distribution metadata', () => {
+    const distribution = loadDistributionIdentity(resolve(import.meta.dirname, '..'))
 
-  assert.equal(distribution.id, 'hermes-agent-windows')
-  assert.equal(distribution.display_name, 'Hermes Agent Windows Workstation Edition')
-  assert.equal(distribution.version, '0.20.5-win.1')
-  assert.equal(distribution.windowsVersion, '0.20.5.1')
+    expect(distribution.id).toBe('hermes-agent-windows')
+    expect(distribution.display_name).toBe('Hermes Agent Windows Workstation Edition')
+    expect(distribution.version).toBe('0.20.5-win.1')
+    expect(distribution.windowsVersion).toBe('0.20.5.1')
+  })
 })

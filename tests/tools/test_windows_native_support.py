@@ -349,7 +349,9 @@ class TestReadmeNoLongerSaysWindowsUnsupported:
         root = Path(__file__).resolve().parents[2]
         source = (root / "README.md").read_text(encoding="utf-8")
         assert "git clone https://github.com/zapabob/hermes-agent-windows.git" in source
-        assert "no verified fork-specific binary installer" in source
+        assert "The Windows release workflow produces a per-user NSIS installer" in source
+        assert "https://github.com/zapabob/hermes-agent-windows/releases" in source
+        assert "no verified fork-specific binary installer" not in source
 
 
 # ---------------------------------------------------------------------------
