@@ -413,6 +413,30 @@ class TestWebServerEndpoints:
         assert response.json()["sessions"] == []
         assert response.json()["total"] == 0
 
+    def test_get_session_detail_includes_sidebar_preview(self):
+        """Cold route hydration must not replace the sidebar preview with null."""
+        from hermes_constants import get_hermes_home
+        from hermes_state import SessionDB
+
+        db = SessionDB(db_path=get_hermes_home() / "state.db")
+        try:
+            db.create_session("detail-preview", source="desktop")
+            db.append_message(
+                "detail-preview",
+                role="user",
+                content="Persist this caption beside an attached image",
+            )
+        finally:
+            db.close()
+
+        response = self.client.get("/api/sessions/detail-preview")
+
+        assert response.status_code == 200
+        assert response.json()["preview"] == (
+            "Persist this caption beside an attached image"
+        )
+        assert response.json()["last_active"] > 0
+
     @pytest.mark.parametrize(
         "missing_column", ["archived", "pinned", "last_activity_at"]
     )

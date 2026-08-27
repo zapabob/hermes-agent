@@ -558,7 +558,13 @@ async def get_session_detail(session_id: str, profile: Optional[str] = None):
     db = _open_session_db_for_profile(profile, read_only=True)
     try:
         sid = db.resolve_session_id(session_id)
-        session = db.get_session(sid) if sid else None
+        # The desktop may hydrate this row directly during a cold route resume,
+        # before the sidebar page has loaded. Return the same display projection
+        # as list_sessions_rich so that optimistic insertion keeps the preview
+        # fallback instead of rendering an "Untitled session" row.
+        session = (
+            db.get_session_rich_row(sid, compact_rows=True) if sid else None
+        )
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
         # Always stamp the owning profile — the serving profile is known even
