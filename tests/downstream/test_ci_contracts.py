@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/fork-cicd.yml"
 SCHEDULED = ROOT / ".github/workflows/windows-full-qualification.yml"
 RELEASE = ROOT / ".github/workflows/windows-release.yml"
+SANDBOX_STAGE2 = ROOT / "scripts/sandbox/stage2-run.sh"
 
 
 def _workflow(path: Path) -> dict:
@@ -117,3 +118,11 @@ def test_release_builds_never_implicitly_publish_from_electron_builder() -> None
     ]
     assert len(builder_commands) == 2
     assert all("--publish never" in command for command in builder_commands)
+
+
+def test_sandbox_node_trusts_the_local_mitm_ca() -> None:
+    stage2 = SANDBOX_STAGE2.read_text(encoding="utf-8")
+
+    assert "--setenv NODE_EXTRA_CA_CERTS /work/certs/ca.pem" in stage2
+    assert "--setenv NODE_EXTRA_CA_CERTS /work/certs/real-ca.pem" not in stage2
+    assert "python3 /work/proxy.py /work/http /work/certs /work/certs/real-ca.pem" in stage2
