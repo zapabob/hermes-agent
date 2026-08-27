@@ -21,6 +21,15 @@ import {
 const SCRIPT_NAME = process.platform === 'win32' ? 'install.ps1' : 'install.sh'
 const ZERO_COMMIT = '0000000000000000000000000000000000000000'
 
+const DOWNSTREAM_REPOSITORY_ARGS = [
+  '-RepositoryUrlHttps',
+  'https://github.com/zapabob/hermes-agent-windows.git',
+  '-RepositoryUrlSsh',
+  'git@github.com:zapabob/hermes-agent-windows.git',
+  '-RepositoryArchiveBase',
+  'https://github.com/zapabob/hermes-agent-windows/archive'
+]
+
 function mkTmpHome() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-bootstrap-test-'))
 }
@@ -84,7 +93,13 @@ test('existing checkout detection requires git metadata', () => {
 test('fresh bootstrap args include the packaged commit pin', () => {
   const installStamp = { commit: 'a'.repeat(40), branch: 'main' }
 
-  assert.deepEqual(buildPinArgs(installStamp), ['-Commit', installStamp.commit, '-Branch', 'main'])
+  assert.deepEqual(buildPinArgs(installStamp), [
+    ...DOWNSTREAM_REPOSITORY_ARGS,
+    '-Commit',
+    installStamp.commit,
+    '-Branch',
+    'main'
+  ])
   assert.deepEqual(
     buildPosixPinArgs({
       installStamp,
@@ -98,7 +113,11 @@ test('fresh bootstrap args include the packaged commit pin', () => {
 test('existing-checkout bootstrap args keep branch but skip the packaged commit pin', () => {
   const installStamp = { commit: 'a'.repeat(40), branch: 'main' }
 
-  assert.deepEqual(buildPinArgs(installStamp, { pinCommit: false }), ['-Branch', 'main'])
+  assert.deepEqual(buildPinArgs(installStamp, { pinCommit: false }), [
+    ...DOWNSTREAM_REPOSITORY_ARGS,
+    '-Branch',
+    'main'
+  ])
   assert.deepEqual(
     buildPosixPinArgs({
       installStamp,
@@ -120,7 +139,7 @@ test('fallback install stamps use an unpinned branch ref', () => {
     pinned: false
   })
   // Must NOT pass -Commit / --commit for the all-zero placeholder.
-  assert.deepEqual(buildPinArgs(stamp), ['-Branch', 'main'])
+  assert.deepEqual(buildPinArgs(stamp), [...DOWNSTREAM_REPOSITORY_ARGS, '-Branch', 'main'])
   assert.deepEqual(
     buildPosixPinArgs({
       installStamp: stamp,

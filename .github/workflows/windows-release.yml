@@ -1,0 +1,213 @@
+name: Windows downstream release
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - "v*.*.*-win.*"
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel for a non-publishing qualification run.
+        required: true
+        type: choice
+        default: preview
+        options: [preview, stable]
+      baseline-ref:
+        description: Commit or downstream tag used as the installed upgrade baseline.
+        required: false
+        type: string
+        default: "8447bf369a0977b0dadf5c78896e194001dd1584"
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHONUTF8: "1"
+  UV_VERSION: "0.9.28"
+  BASELINE_FALLBACK_SHA: "8447bf369a0977b0dadf5c78896e194001dd1584"
+
+jobs:
+  build-qualify-release:
+    name: Build, qualify, and publish Windows artifacts
+    runs-on: windows-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.22.0
+          cache: npm
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: scripts/windows/watchdog-go/go.mod
+          cache-dependency-path: scripts/windows/watchdog-go/go.sum
+
+      - name: Install locked dependencies
+        shell: pwsh
+        run: |
+          uv python install 3.11
+          uv sync --locked --python 3.11 --extra all --extra dev
+          npm ci --no-audit --no-fund
+
+      - id: channel
+        name: Resolve release channel and tag contract
+        shell: pwsh
+        run: |
+          $distribution = Get-Content -LiteralPath downstream/distribution.json -Raw | ConvertFrom-Json
+          $channel = if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $expectedTag = "v$($distribution.version)"
+            if ($env:GITHUB_REF_NAME -ne $expectedTag) {
+              throw "Release tag $env:GITHUB_REF_NAME does not match $expectedTag"
+            }
+            'stable'
+          } elseif ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            '${{ inputs.channel }}'
+          } else {
+            'preview'
+          }
+          "channel=$channel" >> $env:GITHUB_OUTPUT
+
+      - name: Build current installer and portable archive
+        shell: pwsh
+        run: |
+          npm --workspace apps/desktop run build
+          npm --workspace apps/desktop run builder -- --win nsis zip
+
+      - id: current
+        name: Resolve current artifacts
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -LiteralPath apps/desktop/release -Filter '*.exe' -File |
+            Where-Object { $_.Name -notlike '*uninstaller*' } | Select-Object -First 1
+          $portable = Get-ChildItem -LiteralPath apps/desktop/release -Filter '*.zip' -File |
+            Select-Object -First 1
+          if (-not $installer -or -not $portable) { throw 'Installer and portable artifacts are required' }
+          "installer=$($installer.FullName)" >> $env:GITHUB_OUTPUT
+          "portable=$($portable.FullName)" >> $env:GITHUB_OUTPUT
+
+      - id: baseline
+        name: Resolve upgrade baseline
+        shell: pwsh
+        run: |
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch' -and '${{ inputs.baseline-ref }}') {
+            $baseline = '${{ inputs.baseline-ref }}'
+          } elseif ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $baseline = git tag --merged HEAD --list 'v*.*.*-win.*' --sort=-v:refname |
+              Where-Object { $_ -ne $env:GITHUB_REF_NAME } | Select-Object -First 1
+            if (-not $baseline) { $baseline = $env:BASELINE_FALLBACK_SHA }
+          } else {
+            $baseline = '${{ github.event.before }}'
+            if (-not $baseline -or $baseline -match '^0+$') { $baseline = $env:BASELINE_FALLBACK_SHA }
+          }
+          git cat-file -e "$baseline^{commit}"
+          if ($LASTEXITCODE -ne 0) { throw "Upgrade baseline is not available: $baseline" }
+          $sha = (git rev-parse "$baseline^{commit}").Trim()
+          "ref=$baseline" >> $env:GITHUB_OUTPUT
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+
+      - id: previous
+        name: Build upgrade baseline installer
+        shell: pwsh
+        run: |
+          $baselineRoot = Join-Path $env:RUNNER_TEMP 'hermes-upgrade-baseline'
+          $baselineOutput = Join-Path $env:RUNNER_TEMP 'hermes-upgrade-baseline-output'
+          git worktree add --detach $baselineRoot '${{ steps.baseline.outputs.sha }}'
+          Push-Location $baselineRoot
+          try {
+            npm ci --no-audit --no-fund
+            npm --workspace apps/desktop run build
+            npm --workspace apps/desktop run builder -- --win nsis --config.directories.output=$baselineOutput
+          } finally {
+            Pop-Location
+          }
+          $installer = Get-ChildItem -LiteralPath $baselineOutput -Filter '*.exe' -File |
+            Where-Object { $_.Name -notlike '*uninstaller*' } | Select-Object -First 1
+          if (-not $installer) { throw 'Upgrade baseline installer was not built' }
+          "installer=$($installer.FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: Run Windows qualification
+        shell: pwsh
+        run: |
+          & scripts/windows/Test-HermesWindowsQualification.ps1 `
+            -OutputDirectory (Join-Path $env:RUNNER_TEMP 'windows-qualification') `
+            -InstallerPath '${{ steps.current.outputs.installer }}' `
+            -PortablePath '${{ steps.current.outputs.portable }}' `
+            -PreviousInstallerPath '${{ steps.previous.outputs.installer }}' `
+            -Scope ci
+
+      - id: signing
+        name: Record Authenticode status
+        shell: pwsh
+        run: |
+          $signature = Get-AuthenticodeSignature -LiteralPath '${{ steps.current.outputs.installer }}'
+          $signed = ($signature.Status -eq 'Valid').ToString().ToLowerInvariant()
+          "signed=$signed" >> $env:GITHUB_OUTPUT
+          "status=$($signature.Status)" >> $env:GITHUB_OUTPUT
+          Write-Host "Installer Authenticode status: $($signature.Status)"
+
+      - name: Attest executable and portable provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: |
+            ${{ steps.current.outputs.installer }}
+            ${{ steps.current.outputs.portable }}
+
+      - name: Generate canonical release bundle
+        shell: pwsh
+        run: |
+          $bundle = Join-Path $env:RUNNER_TEMP 'windows-release-bundle'
+          uv run --no-sync python scripts/downstream/generate_release_manifest.py `
+            --installer '${{ steps.current.outputs.installer }}' `
+            --portable '${{ steps.current.outputs.portable }}' `
+            --qualification (Join-Path $env:RUNNER_TEMP 'windows-qualification/windows-qualification.json') `
+            --output-dir $bundle `
+            --channel '${{ steps.channel.outputs.channel }}' `
+            --downstream-sha '${{ github.sha }}' `
+            --installer-signed '${{ steps.signing.outputs.signed }}' `
+            --attestation-status generated
+          Copy-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'windows-qualification') `
+            -Destination (Join-Path $bundle 'qualification') -Recurse
+          [ordered]@{
+            schema_version = 1
+            baseline_ref = '${{ steps.baseline.outputs.ref }}'
+            baseline_sha = '${{ steps.baseline.outputs.sha }}'
+            released_downstream_sha = '${{ github.sha }}'
+          } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $bundle 'upgrade-baseline.json') -Encoding utf8
+
+      - name: Upload qualified release bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: windows-release-${{ github.sha }}
+          path: ${{ runner.temp }}/windows-release-bundle
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish tag release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $bundle = Join-Path $env:RUNNER_TEMP 'windows-release-bundle'
+          $assets = @(
+            Get-ChildItem -LiteralPath $bundle -File -Recurse |
+              Select-Object -ExpandProperty FullName
+          )
+          gh release create $env:GITHUB_REF_NAME @assets `
+            --verify-tag `
+            --title "Hermes Agent Windows Workstation Edition $env:GITHUB_REF_NAME" `
+            --notes-file (Join-Path $bundle 'RELEASE_NOTES.md')

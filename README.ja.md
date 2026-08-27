@@ -17,6 +17,25 @@ Nous Research との提携関係はなく、同社による承認も受けてい
 
 [![Windows Workstation Tier-1 CI](https://github.com/zapabob/hermes-agent-windows/actions/workflows/fork-cicd.yml/badge.svg)](https://github.com/zapabob/hermes-agent-windows/actions/workflows/fork-cicd.yml)
 
+Windows 11 AI ワークステーション向けに、Windows ネイティブで継続的に認定する
+Hermes のダウンストリーム・ディストリビューションです。
+
+- Python、Electron、Go、upstream API 互換、regression、security lock の Windows Tier-1 CI
+- 非管理者・空白入り path を含む installer、portable、旧版からの upgrade E2E
+- 移動しない upstream snapshot `1fe0f2f3ac9748ce799272eb93bee2937b5ab802`
+- 公式 provider/memory seam 上の local llama.cpp/GGUF と embedding lifecycle
+- Desktop/backend と任意 embedding を限定的に復旧する外部 Go watchdog
+- GPU のない hosted CI と分離した consumer NVIDIA workstation の実機証拠
+
+release candidate は `0.20.5-win.1`、対応 channel は `stable` と `preview` です。
+認定済み成果物は対応 tag からのみ
+[ダウンストリーム Releases](https://github.com/zapabob/hermes-agent-windows/releases)
+へ公開します。最初の stable asset が存在するまでは source route を使用し、先行した
+direct download button は表示しません。
+[Windows 導入ガイド](docs/windows/INSTALL.md)、
+[release policy](docs/windows/RELEASE_POLICY.md)、
+[公式 upstream](https://github.com/NousResearch/hermes-agent)も参照してください。
+
 ## 1. 製品の位置づけ
 
 Hermes Agent Windows Workstation Edition は、常時稼働するローカル AI
@@ -134,14 +153,21 @@ generation は、外部 account への公開や変更を許可するものでは
 
 ## 11. インストール
 
-現在、このリポジトリでは fork 固有の検証済み binary installer を案内していません。
-PowerShell で source からインストールしてください。
+Windows release workflow は、ユーザー単位の NSIS installer と portable ZIP を作成し、
+stable tag で公開する前に clean install、起動、upgrade E2E を実行します。公開済みの
+成果物は
+[ダウンストリーム Releases](https://github.com/zapabob/hermes-agent-windows/releases)
+からのみ取得し、`SHA256SUMS.txt` を確認してください。現在の candidate は
+`release-manifest.json` に別の記録がない限り unsigned です。手順の正本は
+[docs/windows/INSTALL.md](docs/windows/INSTALL.md) です。
+
+source/development route は PowerShell から引き続き利用できます。
 
 ```powershell
 git clone https://github.com/zapabob/hermes-agent-windows.git
 Set-Location hermes-agent-windows
-uv sync --all-extras
-uv run hermes --help
+uv sync --locked --all-extras
+uv run hermes --version
 uv run hermes setup
 ```
 

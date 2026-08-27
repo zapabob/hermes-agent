@@ -88,6 +88,7 @@ jobs:
             --route '${{ inputs.route }}' \
             --install-ref '${{ inputs.install-ref }}'
         env:
+          HERMES_DEV_SANDBOX_UPSTREAM: https://github.com/${{ github.repository }}.git
           # Outside the workspace on purpose: the script creates this directory
           # up front, and an untracked dir inside the repo makes the worktree
           # dirty -- which dev-sandbox reacts to by snapshotting the working

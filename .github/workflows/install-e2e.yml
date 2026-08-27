@@ -7,9 +7,6 @@ name: Install & Update E2E
 # scripts/dev-sandbox.sh, then applies one update route and requires the
 # checkout to land on this commit with a working `hermes`.
 #
-# The starting versions are chosen at runtime from the official upstream's
-# release tags (scripts/sandbox/pick-release-tags.sh): newest, oldest, and a
-# spread between.  This fork deliberately carries no release tags of its own.
 # A hardcoded list would stop covering the newest release the day after it
 # ships, and would pin an "oldest" that nobody still runs.
 #
@@ -44,8 +41,7 @@ on:
   push:
     tags:
       # Release tags only: the repo also carries backup/* and one-off tags.
-      - 'v[0-9]+.[0-9]+.[0-9]+'
-      - 'v[0-9]+.[0-9]+.[0-9]+.[0-9]+'
+      - 'v*.*.*-win.*'
 
 permissions:
   contents: read
@@ -64,24 +60,17 @@ jobs:
     outputs:
       tags: ${{ steps.pick.outputs.tags }}
     steps:
-      # This job only reads tag names and runs one script, so avoid blobs and
-      # unrelated paths.  The fork has no release tags; fetch the official
-      # upstream tags explicitly below instead of relying on checkout's
-      # origin-only tag behavior.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          filter: blob:none
-          sparse-checkout: scripts/sandbox/pick-release-tags.sh
-          sparse-checkout-cone-mode: false
-      - name: Fetch upstream release tags
-        run: |
-          set -euo pipefail
-          git fetch --force --no-tags https://github.com/NousResearch/hermes-agent.git \
-            '+refs/tags/v*:refs/tags/v*'
+          fetch-depth: 0
       - id: pick
         run: |
           set -euo pipefail
-          tags="$(scripts/sandbox/pick-release-tags.sh --count '${{ inputs.tag-count || 5 }}')"
+          if git tag --list 'v*.*.*-win.*' | grep -q .; then
+            tags="$(scripts/sandbox/pick-release-tags.sh --count '${{ inputs.tag-count || 5 }}')"
+          else
+            tags='["8447bf369a0977b0dadf5c78896e194001dd1584"]'
+          fi
           echo "Testing updates from: $tags"
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
 

@@ -17,6 +17,23 @@ Hermes Agent 的 Windows 优先下游发行版。
 
 [![Windows Workstation Tier-1 CI](https://github.com/zapabob/hermes-agent-windows/actions/workflows/fork-cicd.yml/badge.svg)](https://github.com/zapabob/hermes-agent-windows/actions/workflows/fork-cicd.yml)
 
+面向 Windows 11 AI 工作站、在 Windows 原生环境持续验证的 Hermes 下游发行版。
+
+- Python、Electron、Go、upstream API 兼容、regression 与 security lock 的 Windows Tier-1 CI
+- 覆盖非管理员与含空格 path 的 installer、portable、旧版 upgrade E2E
+- 固定 upstream snapshot `1fe0f2f3ac9748ce799272eb93bee2937b5ab802`，不使用移动基线
+- 通过官方 provider/memory seam 连接 local llama.cpp/GGUF 与 embedding lifecycle
+- 由外部 Go watchdog 对 Desktop/backend 及可选 embedding 执行有限恢复
+- consumer NVIDIA workstation 实机证据与无 GPU 的 hosted CI 分开记录
+
+release candidate 为 `0.20.5-win.1`，支持 `stable` 与 `preview` channel。
+通过验证的产物只从对应 tag 发布到
+[下游 Releases](https://github.com/zapabob/hermes-agent-windows/releases)。
+在首个 stable asset 实际存在前，请使用 source route，不提前展示 direct download button。
+另见 [Windows 安装指南](docs/windows/INSTALL.md)、
+[release policy](docs/windows/RELEASE_POLICY.md) 与
+[官方 upstream](https://github.com/NousResearch/hermes-agent)。
+
 ## 1. 产品定位
 
 Hermes Agent Windows Workstation Edition 是面向持久运行的本地 AI 工作站、功能完整的
@@ -122,14 +139,20 @@ TTS contract，而不会把 core 改造成 VR 或 voice 专用 runtime。
 
 ## 11. 安装
 
-本仓库目前没有对外提供经过验证的 fork 专用 binary installer。请在 PowerShell 中从
-source 安装：
+Windows release workflow 会生成用户级 NSIS installer 与 portable ZIP，并在 stable
+tag 发布前执行 clean install、启动与 upgrade E2E。只从
+[下游 Releases](https://github.com/zapabob/hermes-agent-windows/releases)
+获取已发布产物，并核对 `SHA256SUMS.txt`。除非 `release-manifest.json` 另有记录，
+当前 candidate 按 unsigned 处理。完整步骤见
+[docs/windows/INSTALL.md](docs/windows/INSTALL.md)。
+
+source/development route 仍可在 PowerShell 中使用：
 
 ```powershell
 git clone https://github.com/zapabob/hermes-agent-windows.git
 Set-Location hermes-agent-windows
-uv sync --all-extras
-uv run hermes --help
+uv sync --locked --all-extras
+uv run hermes --version
 uv run hermes setup
 ```
 

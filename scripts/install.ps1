@@ -5,7 +5,7 @@
 # Uses uv for fast Python provisioning and package management.
 #
 # Usage:
-#   iex (irm https://hermes-agent.nousresearch.com/install.ps1)
+#   iex (irm https://raw.githubusercontent.com/zapabob/hermes-agent-windows/main/scripts/install.ps1)
 #
 # Or download and run with options:
 #   .\install.ps1 -NoVenv -SkipSetup
@@ -17,6 +17,9 @@ param(
     [switch]$SkipSetup,
     [switch]$SkipComputerUse,
     [string]$Branch = "main",
+    [string]$RepositoryUrlHttps = "",
+    [string]$RepositoryUrlSsh = "",
+    [string]$RepositoryArchiveBase = "",
     # -Commit and -Tag are higher-precedence variants of -Branch for users
     # who need reproducible installs (desktop installer pinning, CI, release
     # bundles).  When set, the repository stage clones $Branch (faster than
@@ -383,8 +386,56 @@ $script:ResolvedPathReport = @{
 # Configuration
 # ============================================================================
 
-$RepoUrlSsh = "git@github.com:NousResearch/hermes-agent.git"
-$RepoUrlHttps = "https://github.com/NousResearch/hermes-agent.git"
+$distributionRepository = $null
+$distributionMetadataPath = Join-Path (Split-Path -Parent $PSScriptRoot) "downstream\distribution.json"
+$distributionMetadataUri = "https://raw.githubusercontent.com/zapabob/hermes-agent-windows/main/downstream/distribution.json"
+if (Test-Path -LiteralPath $distributionMetadataPath) {
+    try {
+        $distributionMetadata = Get-Content -LiteralPath $distributionMetadataPath -Raw | ConvertFrom-Json
+        $distributionRepository = $distributionMetadata.repository
+    } catch {
+        throw "Invalid distribution metadata at ${distributionMetadataPath}: $_"
+    }
+}
+if (-not $distributionRepository -and (
+    -not $RepositoryUrlHttps -or
+    -not $RepositoryUrlSsh -or
+    -not $RepositoryArchiveBase
+)) {
+    try {
+        $distributionMetadata = Invoke-RestMethod -Uri $distributionMetadataUri -TimeoutSec 30
+        if ($distributionMetadata.id -ne "hermes-agent-windows") {
+            throw "unexpected distribution id"
+        }
+        $distributionRepository = $distributionMetadata.repository
+    } catch {
+        throw "Downstream distribution metadata is unavailable: $_"
+    }
+}
+
+$RepoUrlSsh = if ($RepositoryUrlSsh) {
+    $RepositoryUrlSsh
+} elseif ($distributionRepository) {
+    $distributionRepository.ssh
+} else {
+    throw "Downstream SSH repository authority is unavailable"
+}
+$RepoUrlHttps = if ($RepositoryUrlHttps) {
+    $RepositoryUrlHttps
+} elseif ($distributionRepository) {
+    $distributionRepository.https
+} else {
+    throw "Downstream HTTPS repository authority is unavailable"
+}
+$RepoArchiveBase = if ($RepositoryArchiveBase) {
+    $RepositoryArchiveBase.TrimEnd('/')
+} elseif ($distributionRepository) {
+    $distributionRepository.archive_base.TrimEnd('/')
+} else {
+    throw "Downstream archive authority is unavailable"
+}
+$script:ResolvedPathReport.repository_https = $RepoUrlHttps
+$script:ResolvedPathReport.repository_archive_base = $RepoArchiveBase
 $PythonVersion = "3.11"
 # Minor versions the installer accepts when the requested $PythonVersion isn't
 # available, in preference order.  uv discovers both uv-managed and system
@@ -2281,13 +2332,13 @@ function Install-Repository {
                 # for.  GitHub supports archive URLs for commits, tags, and
                 # branches; we honour Commit > Tag > Branch.
                 if ($Commit) {
-                    $zipUrl = "https://github.com/NousResearch/hermes-agent/archive/$Commit.zip"
+                    $zipUrl = "$RepoArchiveBase/$Commit.zip"
                     $zipLabel = $Commit
                 } elseif ($Tag) {
-                    $zipUrl = "https://github.com/NousResearch/hermes-agent/archive/refs/tags/$Tag.zip"
+                    $zipUrl = "$RepoArchiveBase/refs/tags/$Tag.zip"
                     $zipLabel = $Tag
                 } else {
-                    $zipUrl = "https://github.com/NousResearch/hermes-agent/archive/refs/heads/$Branch.zip"
+                    $zipUrl = "$RepoArchiveBase/refs/heads/$Branch.zip"
                     $zipLabel = $Branch
                 }
                 $zipPath = "$env:TEMP\hermes-agent-$zipLabel.zip"
@@ -4893,7 +4944,7 @@ try {
     Write-Err "Installation failed: $_"
     Write-Host ""
     Write-Info "If the error is unclear, try downloading and running the script directly:"
-    Write-Host "  Invoke-WebRequest -Uri 'https://hermes-agent.nousresearch.com/install.ps1' -OutFile install.ps1" -ForegroundColor Yellow
+    Write-Host "  Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/zapabob/hermes-agent-windows/main/scripts/install.ps1' -OutFile install.ps1" -ForegroundColor Yellow
     Write-Host "  .\install.ps1" -ForegroundColor Yellow
     Write-Host ""
 }

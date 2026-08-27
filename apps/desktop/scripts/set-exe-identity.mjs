@@ -36,7 +36,7 @@
 // otherwise-good build (worst case: stock icon, not a broken app).
 
 import { resolve, join } from 'node:path'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 
 import { rcedit } from 'rcedit'
 
@@ -45,6 +45,19 @@ import { isMain } from './utils.mjs'
 // Stamp the Hermes icon + identity onto `exe`. Resolves on success, throws on
 // failure. `desktopRoot` defaults to this script's package root so the icon and
 // the rcedit dependency resolve regardless of cwd.
+function loadDistributionIdentity(desktopRoot) {
+  const metadataPath = resolve(desktopRoot, '../..', 'downstream', 'distribution.json')
+  const distribution = JSON.parse(readFileSync(metadataPath, 'utf8'))
+  const match = /^(\d+)\.(\d+)\.(\d+)-win\.(\d+)$/.exec(distribution.version)
+  if (!match) {
+    throw new Error(`unsupported distribution version: ${distribution.version}`)
+  }
+  return {
+    ...distribution,
+    windowsVersion: match.slice(1).join('.')
+  }
+}
+
 async function stampExeIdentity(exe, desktopRoot = resolve(import.meta.dirname, '..')) {
   if (!exe || !existsSync(exe)) {
     throw new Error(`target exe not found: ${exe}`)
@@ -55,24 +68,30 @@ async function stampExeIdentity(exe, desktopRoot = resolve(import.meta.dirname, 
   if (!existsSync(icon)) {
     throw new Error(`icon not found: ${icon}`)
   }
+  const distribution = loadDistributionIdentity(desktopRoot)
 
   console.log(`[set-exe-identity] stamping ${exe}`)
   console.log(`[set-exe-identity] icon: ${icon}`)
 
   await rcedit(exe, {
     icon,
+    'file-version': distribution.windowsVersion,
+    'product-version': distribution.windowsVersion,
     'version-string': {
-      ProductName: 'Hermes',
-      FileDescription: 'Hermes',
-      CompanyName: 'Nous Research',
-      LegalCopyright: 'Copyright (c) 2026 Nous Research'
+      ProductName: distribution.display_name,
+      FileDescription: distribution.display_name,
+      CompanyName: 'zapabob and Hermes Agent contributors',
+      LegalCopyright: 'Copyright (c) 2026 zapabob and Hermes Agent contributors',
+      InternalName: distribution.id,
+      OriginalFilename: 'Hermes.exe',
+      SpecialBuild: distribution.version
     }
   })
 
   console.log('[set-exe-identity] done — Hermes icon + identity stamped')
 }
 
-export { stampExeIdentity }
+export { loadDistributionIdentity, stampExeIdentity }
 
 // CLI entry point: `node scripts/set-exe-identity.mjs <exe>`.
 if (isMain(import.meta.url)) {

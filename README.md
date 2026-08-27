@@ -17,6 +17,25 @@ Original Hermes Agent is developed by Nous Research and licensed under MIT.
 
 [![Windows Workstation Tier-1 CI](https://github.com/zapabob/hermes-agent-windows/actions/workflows/fork-cicd.yml/badge.svg)](https://github.com/zapabob/hermes-agent-windows/actions/workflows/fork-cicd.yml)
 
+Windows-first, locally qualified Hermes distribution for Windows 11 AI
+workstations.
+
+- Native Windows Tier-1 CI for Python, Electron, Go, upstream API compatibility, regressions, and security locks.
+- Qualified installer, portable, and prior-version upgrade paths with spaces and non-admin operation.
+- Frozen upstream snapshot `1fe0f2f3ac9748ce799272eb93bee2937b5ab802`, never a moving release baseline.
+- Local llama.cpp/GGUF and embedding lifecycles through official provider and memory seams.
+- External Go watchdog for bounded Desktop/backend and optional embedding recovery.
+- Consumer NVIDIA workstation evidence kept separate from GPU-free hosted CI.
+
+Release candidate: `0.20.5-win.1`. Supported channels: `stable` and `preview`.
+Qualified artifacts are published only from the matching version tag on the
+[downstream Releases page](https://github.com/zapabob/hermes-agent-windows/releases).
+Until the first stable asset is present there, use the source route below; no
+direct download button is advertised early. See the
+[Windows installation guide](docs/windows/INSTALL.md),
+[release policy](docs/windows/RELEASE_POLICY.md), and
+[official upstream](https://github.com/NousResearch/hermes-agent).
+
 ## 1. Product identity
 
 Hermes Agent Windows Workstation Edition is a feature-rich Windows-first
@@ -138,14 +157,21 @@ does not imply authorization to publish or mutate an external account.
 
 ## 11. Installation
 
-There is currently no verified fork-specific binary installer advertised by
-this repository. Install from source in PowerShell:
+The Windows release workflow produces a per-user NSIS installer and a portable
+ZIP, then runs clean-install, launch, and upgrade E2E before a stable tag may
+publish them. Obtain published artifacts only from the
+[downstream Releases page](https://github.com/zapabob/hermes-agent-windows/releases)
+and verify `SHA256SUMS.txt`. The current candidate is reported as unsigned
+unless its `release-manifest.json` says otherwise. Full instructions are in
+[docs/windows/INSTALL.md](docs/windows/INSTALL.md).
+
+The source/development route remains available in PowerShell:
 
 ```powershell
 git clone https://github.com/zapabob/hermes-agent-windows.git
 Set-Location hermes-agent-windows
-uv sync --all-extras
-uv run hermes --help
+uv sync --locked --all-extras
+uv run hermes --version
 uv run hermes setup
 ```
 

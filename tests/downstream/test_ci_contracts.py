@@ -8,6 +8,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/fork-cicd.yml"
 SCHEDULED = ROOT / ".github/workflows/windows-full-qualification.yml"
+RELEASE = ROOT / ".github/workflows/windows-release.yml"
 
 
 def _workflow(path: Path) -> dict:
@@ -95,7 +96,7 @@ def test_scheduled_full_windows_qualification_exists() -> None:
 
 def test_external_actions_are_commit_pinned() -> None:
     action = re.compile(r"^([^./][^@]*)@([0-9a-f]{40})$")
-    for path in (WORKFLOW, SCHEDULED):
+    for path in (WORKFLOW, SCHEDULED, RELEASE):
         for line in path.read_text(encoding="utf-8").splitlines():
             stripped = line.strip()
             if not stripped.startswith("uses:"):

@@ -203,6 +203,14 @@ def print_fast_version_info(*, check_updates: bool = True) -> None:
 
         print(f"Hermes Agent v{__version__} ({__release_date__})")
 
+    try:
+        from downstream.distribution import distribution_version_lines
+
+        for line in distribution_version_lines():
+            print(line)
+    except Exception:
+        pass
+
     print(f"Install directory: {project_root_str()}")
 
     # Install method: authoritative resolver first (code-scoped stamp →

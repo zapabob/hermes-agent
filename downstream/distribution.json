@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "id": "hermes-agent-windows",
+  "display_name": "Hermes Agent Windows Workstation Edition",
+  "version": "0.20.5-win.1",
+  "repository": {
+    "slug": "zapabob/hermes-agent-windows",
+    "web": "https://github.com/zapabob/hermes-agent-windows",
+    "https": "https://github.com/zapabob/hermes-agent-windows.git",
+    "ssh": "git@github.com:zapabob/hermes-agent-windows.git",
+    "raw_base": "https://raw.githubusercontent.com/zapabob/hermes-agent-windows",
+    "archive_base": "https://github.com/zapabob/hermes-agent-windows/archive"
+  },
+  "upstream": {
+    "slug": "NousResearch/hermes-agent",
+    "snapshot_sha": "1fe0f2f3ac9748ce799272eb93bee2937b5ab802"
+  },
+  "platform": {
+    "os": "windows",
+    "architectures": [
+      "x64"
+    ],
+    "tier": 1
+  },
+  "channels": {
+    "default": "stable",
+    "supported": [
+      "stable",
+      "preview"
+    ]
+  },
+  "update": {
+    "branch": "main",
+    "allow_upstream_sync": false
+  }
+}

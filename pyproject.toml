@@ -461,7 +461,7 @@ gateway = ["assets/**/*"]
 # sealed wheels with the plugin Python modules; without this declaration the
 # wheel contains adapters but discovery finds zero bundled plugins.
 plugins = ["**/plugin.yaml", "**/plugin.yml"]
-downstream = ["security/*.json", "security/rules/*.yar"]
+downstream = ["distribution.json", "security/*.json", "security/rules/*.yar"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

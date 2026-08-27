@@ -50,6 +50,7 @@ def test_startup_fast_import_weight():
         [sys.executable, "-c", probe],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=30,
         cwd=REPO_ROOT,
     )
@@ -69,6 +70,7 @@ def _run_version(env_overrides: dict) -> subprocess.CompletedProcess:
         [sys.executable, "-m", "hermes_cli.main", "--version"],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=60,
         cwd=REPO_ROOT,
         env=env,
@@ -81,7 +83,16 @@ def test_fast_version_parity_off_termux(tmp_path):
     result = _run_version({"HERMES_HOME": str(home), "TERMUX_VERSION": ""})
     assert result.returncode == 0, result.stderr
     out = result.stdout
-    for field in ("Hermes Agent v", "Install directory:", "Python:", "OpenAI SDK:"):
+    for field in (
+        "Hermes Agent v",
+        "Distribution: Hermes Agent Windows Workstation Edition 0.20.5-win.1",
+        "Frozen upstream: 1fe0f2f3ac97",
+        "Downstream revision:",
+        "Update channel: stable",
+        "Install directory:",
+        "Python:",
+        "OpenAI SDK:",
+    ):
         assert field in out, f"fast --version output missing {field!r}:\n{out}"
 
 

@@ -19,6 +19,27 @@ use tokio::io::AsyncWriteExt;
 
 use crate::paths;
 
+const DISTRIBUTION_JSON: &str = include_str!("../../../../downstream/distribution.json");
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct RepositoryAuthority {
+    pub https: String,
+    pub ssh: String,
+    pub raw_base: String,
+    pub archive_base: String,
+}
+
+#[derive(serde::Deserialize)]
+struct DistributionAuthority {
+    repository: RepositoryAuthority,
+}
+
+fn repository_authority() -> Result<RepositoryAuthority> {
+    let distribution: DistributionAuthority =
+        serde_json::from_str(DISTRIBUTION_JSON).context("parsing distribution.json")?;
+    Ok(distribution.repository)
+}
+
 /// Identity of the install.ps1 we'll execute. Used by both the manifest
 /// fetch and the per-stage runs.
 #[derive(Debug, Clone)]
@@ -29,6 +50,7 @@ pub struct ResolvedScript {
     /// what makes the repo stage clone the exact tested SHA.
     pub commit: Option<String>,
     pub branch: Option<String>,
+    pub repository: RepositoryAuthority,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,6 +124,7 @@ pub async fn resolve(
     pin: &Pin,
     emit_log: &impl Fn(&str),
 ) -> Result<ResolvedScript> {
+    let repository = repository_authority()?;
     // 1. Dev shortcut.
     if let Ok(repo_root) = std::env::var("HERMES_SETUP_DEV_REPO_ROOT") {
         let candidate = PathBuf::from(repo_root).join("scripts").join(kind.filename());
@@ -116,6 +139,7 @@ pub async fn resolve(
                 source: ScriptSource::DevCheckout,
                 commit: pin.commit.clone(),
                 branch: pin.branch.clone(),
+                repository,
             });
         }
     }
@@ -159,6 +183,7 @@ pub async fn resolve(
                 source: ScriptSource::Cached,
                 commit: pin.commit.clone(),
                 branch: pin.branch.clone(),
+                repository,
             });
         }
         CachePlan::Fetch { stale_ok } => {
@@ -173,7 +198,7 @@ pub async fn resolve(
                 truncate_ref(&commit_or_ref)
             ));
 
-            match download(kind, &commit_or_ref, &cached).await {
+            match download(kind, &commit_or_ref, &cached, &repository).await {
                 Ok(()) => {
                     emit_log(&format!("[bootstrap] cached to {}", cached.display()));
                     Ok(ResolvedScript {
@@ -181,6 +206,7 @@ pub async fn resolve(
                         source: ScriptSource::Downloaded,
                         commit: pin.commit.clone(),
                         branch: pin.branch.clone(),
+                        repository: repository.clone(),
                     })
                 }
                 Err(err) if stale_ok => {
@@ -197,6 +223,7 @@ pub async fn resolve(
                         source: ScriptSource::Cached,
                         commit: pin.commit.clone(),
                         branch: pin.branch.clone(),
+                        repository,
                     })
                 }
                 Err(err) => Err(err),
@@ -322,9 +349,15 @@ fn upgrade_cached_script(kind: ScriptKind, cached: &Path, emit_log: &impl Fn(&st
 /// black-holed connection (captive portal, hung proxy, silently dropped
 /// packets) never errors — the whole bootstrap would hang here instead of
 /// falling back to the cached script.
-async fn download(kind: ScriptKind, commit_or_ref: &str, dest_path: &Path) -> Result<()> {
+async fn download(
+    kind: ScriptKind,
+    commit_or_ref: &str,
+    dest_path: &Path,
+    repository: &RepositoryAuthority,
+) -> Result<()> {
     let url = format!(
-        "https://raw.githubusercontent.com/NousResearch/hermes-agent/{}/scripts/{}",
+        "{}/{}/scripts/{}",
+        repository.raw_base.trim_end_matches('/'),
         commit_or_ref,
         kind.filename()
     );
@@ -463,6 +496,20 @@ mod tests {
             cache_plan(/*immutable=*/ true, /*cached_exists=*/ false),
             CachePlan::Fetch { stale_ok: false }
         );
+    }
+
+    #[test]
+    fn repository_authority_targets_the_downstream_distribution() {
+        let repository = repository_authority().unwrap();
+        assert_eq!(
+            repository.https,
+            "https://github.com/zapabob/hermes-agent-windows.git"
+        );
+        assert_eq!(
+            repository.raw_base,
+            "https://raw.githubusercontent.com/zapabob/hermes-agent-windows"
+        );
+        assert!(!repository.raw_base.contains("NousResearch"));
     }
 
     #[test]

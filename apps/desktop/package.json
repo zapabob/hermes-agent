@@ -1,10 +1,10 @@
 {
   "name": "hermes",
-  "productName": "Hermes",
+  "productName": "Hermes Agent Windows Workstation Edition",
   "private": true,
-  "version": "0.17.0",
+  "version": "0.20.5-win.1",
   "description": "Native desktop shell for Hermes Agent.",
-  "author": "Nous Research",
+  "author": "zapabob and Nous Research contributors",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/zapabob/hermes-agent-windows.git"
@@ -40,6 +40,7 @@
     "dist:win": "npm run build && npm run builder -- --win",
     "dist:win:msi": "npm run build && npm run builder -- --win msi",
     "dist:win:nsis": "npm run build && npm run builder -- --win nsis",
+    "dist:win:portable": "npm run build && npm run builder -- --win zip",
     "dist:linux": "npm run build && npm run builder -- --linux AppImage deb rpm",
     "perf": "node scripts/perf/run.mjs",
     "update:shim": "bash ../../scripts/desktop-update/repro.sh shim",
@@ -188,8 +189,8 @@
   },
   "build": {
     "electronVersion": "41.10.3",
-    "appId": "com.nousresearch.hermes",
-    "productName": "Hermes",
+    "appId": "io.github.zapabob.hermes-agent-windows",
+    "productName": "Hermes Agent Windows Workstation Edition",
     "executableName": "Hermes",
     "protocols": [
       {
@@ -221,6 +222,10 @@
       {
         "from": "assets/icon.ico",
         "to": "icon.ico"
+      },
+      {
+        "from": "../../downstream/distribution.json",
+        "to": "distribution/distribution.json"
       }
     ],
     "asar": true,
@@ -279,10 +284,11 @@
       ]
     },
     "win": {
-      "legalTrademarks": "Hermes",
+      "legalTrademarks": "Hermes Agent Windows Workstation Edition",
       "target": [
         "nsis",
-        "msi"
+        "msi",
+        "zip"
       ],
       "signAndEditExecutable": false
     },
@@ -297,6 +303,7 @@
       ]
     },
     "nsis": {
+      "guid": "48ae4bdc-0f8d-5252-af1e-bf7c0a8c3649",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "perMachine": false,

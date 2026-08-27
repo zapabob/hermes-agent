@@ -12,6 +12,28 @@ from hermes_cli.llama_fallback_runtime import (
 )
 
 
+_LLAMA_ENV_OVERRIDES = (
+    "HERMES_LLAMA_SERVER_EXE",
+    "HERMES_LLAMA_MODEL_PATH",
+    "HERMES_LLAMA_FALLBACK_AUTOSTART",
+    "HERMES_LLAMA_GPU_PROFILE",
+    "HERMES_LLAMA_KV_PROFILE",
+    "HERMES_LLAMA_SPEC_TYPE",
+    "HERMES_LLAMA_HOST",
+    "HERMES_LLAMA_PORT",
+    "HERMES_LLAMA_CONTEXT_SIZE",
+    "HERMES_LLAMA_WAIT_SECONDS",
+    "HERMES_LLAMA_SPEC_DRAFT_N_MAX",
+    "HERMES_LLAMA_SPEC_DRAFT_P_MIN",
+)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_llama_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in _LLAMA_ENV_OVERRIDES:
+        monkeypatch.delenv(name, raising=False)
+
+
 def test_llama_cpp_configured_from_fallback_providers():
     cfg = {
         "fallback_providers": [

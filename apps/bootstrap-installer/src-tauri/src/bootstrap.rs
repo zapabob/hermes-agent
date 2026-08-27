@@ -933,6 +933,14 @@ fn build_pin_args(script: &install_script::ResolvedScript) -> Vec<String> {
         out.push("-Branch".to_string());
         out.push(b.clone());
     }
+    if cfg!(target_os = "windows") {
+        out.push("-RepositoryUrlHttps".to_string());
+        out.push(script.repository.https.clone());
+        out.push("-RepositoryUrlSsh".to_string());
+        out.push(script.repository.ssh.clone());
+        out.push("-RepositoryArchiveBase".to_string());
+        out.push(script.repository.archive_base.clone());
+    }
     out
 }
 
