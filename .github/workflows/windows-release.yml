@@ -85,7 +85,7 @@ jobs:
         shell: pwsh
         run: |
           npm --workspace apps/desktop run build
-          npm --workspace apps/desktop run builder -- --win nsis zip
+          npm --workspace apps/desktop run builder -- --win nsis zip --publish never
 
       - id: current
         name: Resolve current artifacts
@@ -130,7 +130,7 @@ jobs:
           try {
             npm ci --no-audit --no-fund
             npm --workspace apps/desktop run build
-            npm --workspace apps/desktop run builder -- --win nsis --config.directories.output=$baselineOutput
+            npm --workspace apps/desktop run builder -- --win nsis --publish never --config.directories.output=$baselineOutput
           } finally {
             Pop-Location
           }

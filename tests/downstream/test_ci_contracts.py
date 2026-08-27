@@ -105,3 +105,15 @@ def test_external_actions_are_commit_pinned() -> None:
             assert action.match(reference), (
                 f"unpinned action in {path.name}: {reference}"
             )
+
+
+def test_release_builds_never_implicitly_publish_from_electron_builder() -> None:
+    commands = _step_commands(
+        _workflow(RELEASE)["jobs"]["build-qualify-release"]
+    )
+
+    builder_commands = [
+        line.strip() for line in commands.splitlines() if "run builder --" in line
+    ]
+    assert len(builder_commands) == 2
+    assert all("--publish never" in command for command in builder_commands)
