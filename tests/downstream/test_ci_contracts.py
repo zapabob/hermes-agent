@@ -10,6 +10,8 @@ WORKFLOW = ROOT / ".github/workflows/fork-cicd.yml"
 SCHEDULED = ROOT / ".github/workflows/windows-full-qualification.yml"
 RELEASE = ROOT / ".github/workflows/windows-release.yml"
 SANDBOX_STAGE2 = ROOT / "scripts/sandbox/stage2-run.sh"
+CI = ROOT / ".github/workflows/ci.yaml"
+DETECT_ACTION = ROOT / ".github/actions/detect-changes/action.yml"
 
 
 def _workflow(path: Path) -> dict:
@@ -126,3 +128,16 @@ def test_sandbox_node_trusts_the_local_mitm_ca() -> None:
     assert "--setenv NODE_EXTRA_CA_CERTS /work/certs/ca.pem" in stage2
     assert "--setenv NODE_EXTRA_CA_CERTS /work/certs/real-ca.pem" not in stage2
     assert "python3 /work/proxy.py /work/http /work/certs /work/certs/real-ca.pem" in stage2
+
+
+def test_ci_detect_step_passes_only_declared_action_inputs() -> None:
+    workflow = _workflow(CI)
+    action = _workflow(DETECT_ACTION)
+    detect_step = next(
+        step
+        for step in workflow["jobs"]["detect"]["steps"]
+        if step.get("uses") == "./.github/actions/detect-changes"
+    )
+    passed_inputs = set(detect_step.get("with", {}))
+    assert passed_inputs == {"github-token"}
+    assert passed_inputs <= set(action.get("inputs", {}))
