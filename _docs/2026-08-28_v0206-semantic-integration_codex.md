@@ -235,3 +235,65 @@ The broader Desktop `session-tile-actions.test.ts` lane still contains an
 existing `submitText` recovery failure. Reverting the ownership change did not
 alter that failure, so it is recorded as pre-existing rather than hidden or
 rewritten during this task.
+
+
+## Task 8: transactional managed SSH updates
+
+Composed the backend engine and wiring carriers
+`6170fff19cd622422dd745819cc96f2e6d13f21e`,
+`65335549a6321811fc11fa4084d0af986590eaff`,
+`0cefc491c8f3e3d84fd69f4a9bc6f85b8d16556a`, and the final spawn correction
+`beb212dcc5444f629a84ce0d64ac332f958a0e06`. The per-connection renderer
+surface comes from `bc4eea77739c5e531b2a879e43e3b51f135fd74f`.
+
+Each managed SSH update claims the connection, journals recovery ownership,
+re-proves the remote process identity at termination, observes the remote
+update marker and correlated receipt, drains every captured scope, and fences
+publication of the replacement backend until rollback can no longer expose a
+half-updated connection. The managed lifecycle remains independent of the
+local Go watchdog.
+
+Native Windows qualification also executes the generated POSIX launcher under
+Git Bash. The two tests that execute the POSIX Python observer are skipped on
+native Windows because the host has no POSIX Python path/runtime; command
+generation and result parsing remain covered, and the remote-Windows launcher
+and observer contracts run natively.
+
+Verification:
+
+- Transaction, remote lifecycle, Windows remote lifecycle, bootstrap
+  coordinator, dial claim, and registry lanes: 225 passed, 4 skipped.
+- Managed updates renderer and settings lanes: 12 passed.
+- Electron and renderer TypeScript passed.
+- ESLint error-only lanes and staged diff checks passed.
+
+Commits:
+
+- `7312b178d0f08734cb7d4e930797aa054c83e91b`
+- `573e3bf58497f157484f706e809fc3d374ea1a3e`
+
+## Task 9: browser tool-surface compatibility audit
+
+The complete downstream tree still contains 12 files using `cua_browser_*`,
+101 files using `computer_use`, 16 files using `browser_exec`, 6 files using
+`browser_route`, and 9 files using `typed_browser`. The retained
+`computer_use` skill and system prompt explicitly teach the session-scoped
+typed-browser capability contract, while the CUA backend and authorization
+tests enforce exact binding, current refs, mutation invalidation, and explicit
+permission downgrade behavior.
+
+The OSINT plugin depends on the broader `computer_use` surface for live map and
+SPA inspection, although its current playbooks use native actions rather than
+calling the namespaced route directly. This is sufficient to reject an
+unqualified public-surface deletion during the v0.20.6 campaign.
+
+Decision: retain the existing `COMPOSE` classification for upstream carrier
+`f780cb36d883bbe4180c023fefb49fe3337e52bb` and keep the downstream
+`cua_browser_*` route until a separate migration proves equivalent session,
+authorization, and stale-ref behavior through `browser_exec`.
+
+Verification: the retained route, authorization, CUA 0.9 contract, and OSINT
+plugin lanes passed 96 tests. The neighboring `browser_exec` CLI file passed
+70 tests but failed 22 POSIX-fixture cases on native Windows and skipped 3;
+the failures invoke generated `#!/bin/sh` fixtures as Win32 executables and do
+not establish migration parity. No obsolete surface was removed.
