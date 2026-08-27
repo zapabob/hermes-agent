@@ -4266,7 +4266,9 @@ def save_env_value(key: str, value: str):
     if not _ENV_VAR_NAME_RE.match(key):
         raise ValueError(f"Invalid environment variable name: {key!r}")
     _reject_denylisted_env_var(key)
-    value = value.replace("\n", "").replace("\r", "")
+    value = value if isinstance(value, str) else str(value)
+    # Preserve one-key-per-line structure and reject embedded C terminators.
+    value = value.replace("\x00", "").replace("\n", "").replace("\r", "")
     # API keys / tokens must be ASCII — strip non-ASCII with a warning.
     value = _check_non_ascii_credential(key, value)
     ensure_hermes_home()
