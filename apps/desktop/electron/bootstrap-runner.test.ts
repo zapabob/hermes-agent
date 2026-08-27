@@ -113,11 +113,7 @@ test('fresh bootstrap args include the packaged commit pin', () => {
 test('existing-checkout bootstrap args keep branch but skip the packaged commit pin', () => {
   const installStamp = { commit: 'a'.repeat(40), branch: 'main' }
 
-  assert.deepEqual(buildPinArgs(installStamp, { pinCommit: false }), [
-    ...DOWNSTREAM_REPOSITORY_ARGS,
-    '-Branch',
-    'main'
-  ])
+  assert.deepEqual(buildPinArgs(installStamp, { pinCommit: false }), [...DOWNSTREAM_REPOSITORY_ARGS, '-Branch', 'main'])
   assert.deepEqual(
     buildPosixPinArgs({
       installStamp,

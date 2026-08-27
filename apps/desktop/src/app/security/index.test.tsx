@@ -67,24 +67,28 @@ describe('SecurityView', () => {
   it('runs an explicitly confirmed quick scan with quarantine enabled', async () => {
     render(<SecurityView />)
     fireEvent.click(await screen.findByRole('button', { name: 'Quick scan' }))
-    await waitFor(() =>
-      expect(runSecurityScan).toHaveBeenCalledWith({ scope: 'quick', quarantine: true })
-    )
+    await waitFor(() => expect(runSecurityScan).toHaveBeenCalledWith({ scope: 'quick', quarantine: true }))
   })
 
   it('shows durable scan totals, feed state, and exact detection evidence', async () => {
     getSecurityStatus.mockResolvedValue({
       ...status,
-      feeds: [{ details_json: '{}', name: 'clamav', status: 'ok', updated_at: '2026-08-27T00:00:00Z', version: 'daily-1' }],
-      recent_events: [{
-        action: 'quarantined',
-        created_at: '2026-08-27T00:00:00Z',
-        details_json: JSON.stringify({ findings: [{ name: 'Win.Test.Fixture', source: 'clamav', state: 'available' }] }),
-        event_type: 'detection',
-        id: 1,
-        subject: 'C:\\fixture.exe',
-        verdict: 'MALICIOUS'
-      }],
+      feeds: [
+        { details_json: '{}', name: 'clamav', status: 'ok', updated_at: '2026-08-27T00:00:00Z', version: 'daily-1' }
+      ],
+      recent_events: [
+        {
+          action: 'quarantined',
+          created_at: '2026-08-27T00:00:00Z',
+          details_json: JSON.stringify({
+            findings: [{ name: 'Win.Test.Fixture', source: 'clamav', state: 'available' }]
+          }),
+          event_type: 'detection',
+          id: 1,
+          subject: 'C:\\fixture.exe',
+          verdict: 'MALICIOUS'
+        }
+      ],
       summary: {
         detections: 1,
         files_scanned: 12,
