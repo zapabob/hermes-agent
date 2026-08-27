@@ -90,3 +90,35 @@ GREEN focused lanes:
 
 Combined Task 2 lane: 194 passed, 7 skipped, including two native Windows
 named-pipe control-socket tests.
+
+## Task 3: Windows real-profile browser contract
+
+Composed the production browser sequence from `830e4a29be7571860c60d40411e0c8f42511c34d`
+through the final carriers `f1d05ce7d84f04fd2304be604ba3e8ad69dad47b`,
+`931bf613b12e82a0c1ae6d016ef22651ba7291cd`, and
+`e4451ec6e5923e35dde75aabcb14944b1f15c16a`. Branch-only Windows proof
+workflow and live-test artifacts were intentionally excluded.
+
+The snapshot now fails immediately with a recognizable locked-profile state and
+never terminates the user's browser. The autoclose setting only arms an offer;
+the destructive close remains an explicit CLI action after user approval.
+Executable names and `--user-data-dir` bindings are exact, malformed or
+unreadable identity fails closed, and release is re-probed before a retry.
+
+The copied authentication store is secured through the canonical directory
+helper, excluded from backup/import, and denied to generic file reads. Stable
+browser identity is kept separate from unsupported Beta, Dev, Canary, and
+ambiguous channels.
+
+Windows-specific integration refinements preserve `HOME` semantics when testing
+POSIX targets, make the synthetic lock fixture work without symlink privileges,
+and force UTF-8 decoding for helper subprocesses.
+
+Verification:
+
+- Browser profile, resolver, routing, timeout, and credential guards: 143 passed.
+- Hardened exact/ambiguous close behavior is included in the 75-test profile lane.
+- Ruff and Python byte compilation passed for all changed Python files.
+- Desktop renderer typecheck and ESLint passed.
+- Isolated `python -m hermes_cli browser --help` exposed only the explicit
+  `close-profile` action and its destructive approval warning.
