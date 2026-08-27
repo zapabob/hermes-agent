@@ -135,3 +135,27 @@ A live sibling keeps the watcher pending. Missing PIDs, HTTP transports, missing
 respect to liveness.
 
 Verification: 8 focused tests passed; Ruff and Python byte compilation passed.
+
+## Task 5: bounded session durability and stdout READY
+
+Composed `6d4e851d80e1dfeea69899c3cbbdf529a92bc255`,
+`f2dd32d3e50cf1c90e16f4ef55d41289b1848031`,
+`42e1aa39fce37cf3640599ff3e25dd1e2bf18ae4`, and the final review carrier
+`8d95ab1b3718fb2f7887eabe3fc6fd1af17bda6b`.
+
+SIGTERM, SIGINT, and atexit paths now prepend a bounded best-effort session
+flush with a default five-second budget. The existing idle reaper owns
+incremental flush cadence and skips active turns. Persistence reuses the
+canonical marker-deduplicated session writer.
+
+Machine sentinels for READY and port conflict use fd 1 even when Python stdout
+is redirected. Delivery failures never kill an otherwise healthy backend.
+
+Windows validation removes the obsolete POSIX-only skip, invokes the Python
+handler directly where `os.kill(SIGTERM)` maps to `TerminateProcess`, and
+captures subprocess text explicitly as UTF-8.
+
+Verification: 15 focused tests passed. The real backend E2E kept stdout and
+stderr separate, observed `HERMES_BACKEND_READY` on stdout, connected to the
+announced listener, and completed well below the Desktop 90-second timeout.
+Ruff and Python byte compilation passed.
