@@ -19,6 +19,7 @@ Usage: proxy.py <fixture-root> <certs-dir> <real-ca-bundle>
 
 import os
 import pathlib
+import select
 import socket
 import ssl
 import subprocess
@@ -156,6 +157,29 @@ def relay(source, destination):
         destination.sendall(chunk)
 
 
+def host_has_fixtures(host):
+    """Return whether HTTPS for host must be intercepted for local fixtures."""
+    if not host or host in {'.', '..'} or '/' in host:
+        return False
+    return (ROOT / host).is_dir()
+
+
+def relay_tunnel(client, upstream):
+    """Relay an end-to-end CONNECT tunnel without terminating client TLS."""
+    peers = {client: upstream, upstream: client}
+    while True:
+        readable, _, _ = select.select(
+            tuple(peers), (), (), UPSTREAM_TIMEOUT_SECONDS
+        )
+        if not readable:
+            return
+        for source in readable:
+            chunk = source.recv(MAX_REQUEST_BYTES)
+            if not chunk:
+                return
+            peers[source].sendall(chunk)
+
+
 def open_https_upstream(context, host, port):
     """Open verified upstream TLS, retrying only pre-request EOF failures.
 
@@ -207,9 +231,16 @@ def forward_http(conn, host, port, request, target):
 
 
 def handle_connect(conn, target):
-    """Intercept a CONNECT tunnel, terminating TLS with a minted cert."""
+    """Serve fixture hosts via MITM and tunnel all other HTTPS end to end."""
     host, _, port_text = target.rpartition(':')
     port = int(port_text or '443')
+    if not host_has_fixtures(host):
+        with socket.create_connection(
+            (host, port), timeout=UPSTREAM_TIMEOUT_SECONDS
+        ) as upstream:
+            conn.sendall(b'HTTP/1.1 200 Connection Established\r\n\r\n')
+            relay_tunnel(conn, upstream)
+        return
     conn.sendall(b'HTTP/1.1 200 Connection Established\r\n\r\n')
     cert, key = cert_for(host)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)

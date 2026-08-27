@@ -444,6 +444,13 @@ if [ ! -f "$SANDBOX_ROOT/root/certs/ca.pem" ]; then
     exit 1
   fi
 fi
+# Fixture hosts terminate TLS at proxy.py and use the sandbox CA. Every other
+# HTTPS host is carried through a raw CONNECT tunnel and presents its public
+# certificate directly, so clients need both trust sets in one deterministic
+# bundle. Keep ca.pem separate because openssl uses it to sign fixture leaves.
+cat "$SANDBOX_ROOT/root/certs/ca.pem" \
+    "$SANDBOX_ROOT/root/certs/real-ca.pem" \
+    > "$SANDBOX_ROOT/root/certs/client-ca.pem"
 GIT_UPLOAD_PACK="$(command -v git-upload-pack)"
 sed "s|@GIT_UPLOAD_PACK@|$GIT_UPLOAD_PACK|" "$SANDBOX_ASSETS/ssh-shim.sh" \
   > "$SANDBOX_ROOT/root/usr/bin/ssh"

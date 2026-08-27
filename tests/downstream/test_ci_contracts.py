@@ -84,7 +84,10 @@ def test_security_lane_checks_all_lock_ecosystems() -> None:
     assert "uv lock --check" in commands
     assert "uv export --frozen --all-extras --no-dev --no-emit-project" in commands
     assert "Join-Path $env:RUNNER_TEMP 'hermes-audit-requirements.txt'" in commands
-    assert "pip-audit==2.10.1 pip-audit --require-hashes --disable-pip --requirement" in commands
+    assert (
+        "pip-audit==2.10.1 pip-audit --require-hashes --disable-pip --requirement"
+        in commands
+    )
     assert "npm audit" in commands
     assert "go mod verify" in commands
 
@@ -111,9 +114,7 @@ def test_external_actions_are_commit_pinned() -> None:
 
 
 def test_release_builds_never_implicitly_publish_from_electron_builder() -> None:
-    commands = _step_commands(
-        _workflow(RELEASE)["jobs"]["build-qualify-release"]
-    )
+    commands = _step_commands(_workflow(RELEASE)["jobs"]["build-qualify-release"])
 
     builder_commands = [
         line.strip() for line in commands.splitlines() if "run builder --" in line
@@ -122,12 +123,15 @@ def test_release_builds_never_implicitly_publish_from_electron_builder() -> None
     assert all("--publish never" in command for command in builder_commands)
 
 
-def test_sandbox_node_trusts_the_local_mitm_ca() -> None:
+def test_sandbox_node_trusts_fixture_and_tunneled_https_cas() -> None:
     stage2 = SANDBOX_STAGE2.read_text(encoding="utf-8")
 
-    assert "--setenv NODE_EXTRA_CA_CERTS /work/certs/ca.pem" in stage2
-    assert "--setenv NODE_EXTRA_CA_CERTS /work/certs/real-ca.pem" not in stage2
-    assert "python3 /work/proxy.py /work/http /work/certs /work/certs/real-ca.pem" in stage2
+    assert "--setenv NODE_EXTRA_CA_CERTS /work/certs/client-ca.pem" in stage2
+    assert "--setenv NODE_EXTRA_CA_CERTS /work/certs/ca.pem" not in stage2
+    assert (
+        "python3 /work/proxy.py /work/http /work/certs /work/certs/real-ca.pem"
+        in stage2
+    )
 
 
 def test_ci_detect_step_passes_only_declared_action_inputs() -> None:
