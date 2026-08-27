@@ -159,3 +159,79 @@ Verification: 15 focused tests passed. The real backend E2E kept stdout and
 stderr separate, observed `HERMES_BACKEND_READY` on stdout, connected to the
 announced listener, and completed well below the Desktop 90-second timeout.
 Ruff and Python byte compilation passed.
+
+
+## Task 6: canonical memory credential persistence
+
+The generic memory-provider setup now delegates credential writes to the
+canonical `save_env_value` path rather than editing `.env` independently.
+That writer is profile-aware, uses the existing atomic replacement boundary,
+and removes NUL plus every `splitlines()` separator before serialization.
+
+Invalid or denylisted keys are rejected independently, so one rejected entry
+does not discard unrelated valid credentials. Filesystem failures remain
+visible to the caller instead of being converted into a successful setup.
+
+Verification:
+
+- Memory setup and writer boundary: 25 passed, 1 POSIX-only skip.
+- Canonical config, export, and managed-scope lanes: 82 passed.
+- Combined Task 6 rerun: 103 passed, 1 skipped.
+- Ruff, Python byte compilation, and staged diff checks passed.
+
+Commit: `804cfd2a78979d9ea6e3957db867654278af20ef`.
+
+## Task 7: session ownership and Desktop runtime resilience
+
+This task composes the upstream session-owner campaign without reviving the
+removed dispatcher architecture or importing the later managed-SSH and
+power-resume campaigns.
+
+Legacy sessions can be backfilled with an exact owner. Remote session creation
+stamps that owner once, owner lookup spans all loaded session slices, and
+registry topology accepts only exact owner routes. Unowned historical
+transcripts remain available through a read-only recovery path; send and
+interrupt operations stay blocked until a live owned runtime is available.
+
+Transcript tails are scoped by owner profile and connection. Deletion removes
+all matching owner scopes and purges the legacy unscoped entry. Backend
+keepalive freshness tolerates the documented delayed interval. Renderer reloads
+are bounded and an escaped visible error page replaces silent load failure.
+The headless root exposes the loopback token only on its gated loopback route.
+
+Finally, a main-process dial claim serializes backend ownership by
+`(connectionId, profile)`. Renderer connection IPC, terminal, media, registry
+dispatch, roster enumeration, and connection-wide update entry points share the
+same in-flight dial instead of creating duplicate local or SSH backends.
+
+Verification:
+
+- Legacy session-owner backfill: 18 passed.
+- Remote owner stamp: 1 passed; renderer ESLint and TypeScript passed.
+- Owner lookup across slices: 85 passed; renderer ESLint and TypeScript passed.
+- Registry owner topology: 49 passed; renderer ESLint and TypeScript passed.
+- Read-only transcript recovery: 93 passed; renderer ESLint and TypeScript passed.
+- Owner-scoped transcript tails: 95 passed.
+- Delayed keepalive policy: 9 passed; Electron ESLint and TypeScript passed.
+- Bounded renderer lifecycle: 29 passed; Electron ESLint and TypeScript passed.
+- Gated headless root: 5 passed; Ruff and Python byte compilation passed.
+- Backend dial claim and registry lane: 95 passed; Electron ESLint and
+  TypeScript passed.
+
+Commits:
+
+- `8c5eaa01bb20ceb61c8e9c3cc4c690b872bb3f7a`
+- `1bbcd1b8b392ed3503942f90d97fa247c790b64c`
+- `dc1761ba87b410f84f3d3f4ff9aa6cb21652cfd6`
+- `959fa5979fc417db3998ded8ec7350c26b1eacd3`
+- `7577e232b5c2311d8e4fc6368854a43ac63a279b`
+- `315f4d01b30f6a399064bc260526f81b46a4b25a`
+- `f61a1f4f5698d68f91a6a710e422f0b2c8ba083c`
+- `8519d4c8d973499ae0b60effa34014e5e3f6615e`
+- `8b50fdc3fef65626337ccd2d4a3f2aa44a8d0ab8`
+- `f9e942c962d6056b3c94edfcdf1a59a5142b97e7`
+
+The broader Desktop `session-tile-actions.test.ts` lane still contains an
+existing `submitText` recovery failure. Reverting the ownership change did not
+alter that failure, so it is recorded as pre-existing rather than hidden or
+rewritten during this task.
