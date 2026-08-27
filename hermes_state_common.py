@@ -522,7 +522,6 @@ CREATE TABLE IF NOT EXISTS conversation_generations (
     generation INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (source, session_key)
 );
-
 -- Per-backend liveness heartbeat (#94895). Each serve / tui_gateway process
 -- registers a row at startup and refreshes ``last_heartbeat`` periodically.
 -- The startup orphan sweep (sessions.startup_orphan_reap) consults this
