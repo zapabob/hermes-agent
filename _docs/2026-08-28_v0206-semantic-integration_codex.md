@@ -41,3 +41,52 @@ Result before implementation: 1 failed, 3 passed. The failure was the missing
 `.codex/UPSTREAM_SNAPSHOT.json`.
 
 GREEN:
+
+## Task 2: Windows gateway quiesce and process ownership
+
+Composed carriers:
+
+- `03537d69dcbd5d9d5070ce6440fc066958ca398e`
+- `790e1eb6bd576261e6b9e70fcfe4fbdf17f866bb`
+- `b3e477f304e43b7ff6427c7e186bfd9e524bbff2`
+- `de2a9de7889e88ac8bdc025ae1ae48a1d6cac255`
+- `5d7ed70eef85ccac8a62cea53806440b2c605163`
+- `71823be9daea10a4b9f29f5b995468bae2601b99`
+- Final test correction `adb29d8527566c0252d2a402b8bf16c2ec6c575a`
+
+The gateway now accepts a control-socket `pause-for-update` verb and reports
+the accepted state, process ID, and drain budget. The updater requests that
+verb first, honours the greatest declared drain budget, and retains the
+existing planned-stop and force-stop fallback for older gateways.
+
+Windows SCM ownership is established from strict profile PID metadata,
+creation times, parent ancestry, a unique service host, and a second identity
+read before `sc.exe stop`. The updater stops the service, waits for both SCM
+state and the original descendant identities to disappear, and aborts before
+installation mutation when ownership is unreadable or ambiguous. Resume and
+fleet reconciliation carry verified service/profile outcomes without treating
+the bookkeeping token itself as a live runtime.
+
+The later upstream catch-up restart carrier
+`8246c4f92ad57c1c0190609e6ad5f524f35729ec` was not adopted here. It adds a
+separate updater-owned restart catch-up authority, which conflicts with this
+fork's Go-watchdog outer restart invariant. The graceful core drain and bounded
+transaction remain composed with the existing planned-stop handshake.
+
+### TDD evidence
+
+RED observations included the missing pause client, 25 SCM/ownership failures,
+3 restart-reconciliation failures, one recycled-PID false stale row, and four
+resume-token false-positive fleet expectations.
+
+GREEN focused lanes:
+
+- Control-socket pause: 3 passed, 2 skipped on native Windows transport.
+- SCM pause, ownership, cold-start, reconciliation: 96 passed, 7 skipped.
+- Strict gateway identity: 76 passed.
+- Windows restart reconciliation: 4 passed.
+- PID reuse: 6 passed.
+- Resume-token fleet semantics: 17 passed.
+
+Combined Task 2 lane: 194 passed, 7 skipped, including two native Windows
+named-pipe control-socket tests.
