@@ -36,8 +36,13 @@ def test_required_tier_one_jobs_exist() -> None:
 
 
 def test_policy_lane_fetches_frozen_upstream_history() -> None:
-    checkout = _workflow(WORKFLOW)["jobs"]["downstream-policy"]["steps"][0]
+    job = _workflow(WORKFLOW)["jobs"]["downstream-policy"]
+    checkout = job["steps"][0]
+    commands = _step_commands(job)
     assert checkout["with"]["fetch-depth"] == 0
+    assert ".codex/UPSTREAM_SNAPSHOT.json" in commands
+    assert "https://github.com/NousResearch/hermes-agent.git" in commands
+    assert "git fetch --no-tags" in commands
 
 
 def test_all_tier_one_jobs_run_natively_on_windows() -> None:
