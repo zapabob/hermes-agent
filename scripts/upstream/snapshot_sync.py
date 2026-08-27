@@ -20,6 +20,7 @@ from typing import Iterable, Sequence
 
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+CAPTURED_AT_RE = re.compile(r"^(?P<date>\d{4}-\d{2}-\d{2})T")
 EMAIL_RE = re.compile(r"\b[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\b")
 DECISIONS = {
     "ADOPT",
@@ -378,6 +379,7 @@ def _render_ledger(
 
 def _render_markdown(
     *,
+    campaign_date: str,
     captured_at: str,
     upstream_sha: str,
     downstream_sha: str,
@@ -399,7 +401,7 @@ def _render_markdown(
         for decision in sorted(DECISIONS)
     )
     intersection_list = "\n".join(f"- {path}" for path in intersections) or "- None"
-    return f"""# Upstream snapshot integration, 2026-08-26
+    return f"""# Upstream snapshot integration, {campaign_date}
 
 This report freezes the integration input. Commits newer than the recorded
 upstream SHA are outside this campaign and must not be substituted.
@@ -441,6 +443,28 @@ preserve the policy files under .codex.
 """
 
 
+def _render_snapshot(
+    *,
+    captured_at: str,
+    upstream_repo: str,
+    upstream_sha: str,
+    downstream_sha: str,
+    merge_base: str,
+) -> str:
+    payload = {
+        "captured_at": captured_at,
+        "upstream_repo": upstream_repo,
+        "upstream_ref": "frozen commit supplied by operator",
+        "upstream_head_sha": upstream_sha,
+        "downstream_start_sha": downstream_sha,
+        "merge_base_sha": merge_base,
+        "scope_note": (
+            "Commits newer than upstream_head_sha are explicitly out of scope."
+        ),
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+
+
 def _write_if_changed(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists() and path.read_text(encoding="utf-8") == content:
@@ -478,6 +502,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         })
         commits = _collect_commits(repo, merge_base, upstream_sha, fork_touched)
         captured_at = args.captured_at or "not-recorded"
+        captured_at_match = CAPTURED_AT_RE.match(captured_at)
+        if args.apply and args.captured_at and captured_at_match is None:
+            raise SnapshotSyncError(
+                "--captured-at must start with an ISO date (YYYY-MM-DD)"
+            )
+        campaign_date = (
+            captured_at_match.group("date") if captured_at_match else "not-recorded"
+        )
+        campaign_slug = campaign_date.replace("-", "")
         ledger = _render_ledger(
             captured_at=captured_at,
             upstream_repo=args.upstream_repo,
@@ -489,6 +522,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             intersections=intersections,
         )
         report = _render_markdown(
+            campaign_date=campaign_date,
             captured_at=captured_at,
             upstream_sha=upstream_sha,
             downstream_sha=downstream_sha,
@@ -496,6 +530,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             commits=commits,
             upstream_touched=upstream_touched,
             intersections=intersections,
+        )
+        snapshot = _render_snapshot(
+            captured_at=captured_at,
+            upstream_repo=args.upstream_repo,
+            upstream_sha=upstream_sha,
+            downstream_sha=downstream_sha,
+            merge_base=merge_base,
         )
         payload = {
             "upstream_head_sha": upstream_sha,
@@ -515,8 +556,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise SnapshotSyncError(
                 "--captured-at is required with --apply for deterministic output"
             )
+        _write_if_changed(repo / ".codex" / "UPSTREAM_SNAPSHOT.json", snapshot)
         _write_if_changed(repo / "UPSTREAM_ADOPTION.yaml", ledger)
-        _write_if_changed(repo / "_docs" / "upstream-integration-20260826.md", report)
+        _write_if_changed(
+            repo / "_docs" / f"upstream-integration-{campaign_slug}.md",
+            report,
+        )
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
     except SnapshotSyncError as exc:
