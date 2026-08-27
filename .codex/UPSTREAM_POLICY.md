@@ -1,13 +1,13 @@
 # Frozen upstream policy
 
 This integration campaign accepts one immutable upstream input:
-1fe0f2f3ac9748ce799272eb93bee2937b5ab802. The input was captured at
-2026-08-26 18:25 JST. Later commits on upstream/main are explicitly out of
+5fc308a70719a83cccdbba4c0e39c23f5a8239d5. The input was captured at
+2026-08-28 02:33 JST. Later commits on upstream/main are explicitly out of
 scope and must not be resolved, fetched, or substituted by automation.
 
 The recorded downstream start is
-88f659b4ef5a27dbf038fe9c6bf35b3967a277d8. The verified merge base is
-ddbd928ee4e881f0c7b3536a00355647c6559fe2.
+4198d292cc1628383522ec201d4d55002da72f4f. The verified merge base is
+1fe0f2f3ac9748ce799272eb93bee2937b5ab802.
 
 Official public contracts are the preferred integration boundary. Security,
 data-integrity, and credential-boundary fixes are adopted unless the
