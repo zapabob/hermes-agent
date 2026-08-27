@@ -22,6 +22,7 @@ set -euo pipefail
 : "${DEV_SANDBOX_INTERACTIVE:?missing DEV_SANDBOX_INTERACTIVE}"
 : "${DEV_SANDBOX_USER:?missing DEV_SANDBOX_USER}"
 : "${DEV_SANDBOX_HOME:?missing DEV_SANDBOX_HOME}"
+: "${DEV_SANDBOX_GLOBAL_PROXY_ENV:?missing DEV_SANDBOX_GLOBAL_PROXY_ENV}"
 
 # Announce our pid so stage 1 can point slirp4netns at these namespaces,
 # then hold until it reports the network is up.
@@ -47,10 +48,6 @@ if [ "$home_parent" != / ]; then
 fi
 home_mounts+=(--bind "$DEV_SANDBOX_ROOT/home" "$DEV_SANDBOX_HOME")
 
-node_env=()
-if [ -n "${DEV_SANDBOX_NODE_DIR:-}" ]; then
-  node_env+=(--setenv npm_config_nodedir "$DEV_SANDBOX_NODE_DIR")
-fi
 electron_env=()
 if [ -n "${DEV_SANDBOX_ELECTRON_LD_LIBRARY_PATH:-}" ]; then
   electron_env+=(
@@ -196,8 +193,24 @@ if [ "$DEV_SANDBOX_INTERACTIVE" = true ]; then
   dev_mounts=(--dev /dev)
 fi
 
-# Node connects to the local MITM proxy, so it must trust the sandbox CA.
-# proxy.py alone uses real-ca.pem for its separate outbound TLS connection.
+# Generic fixture tests proxy every HTTP(S) request and trust the sandbox CA.
+# Installer tests proxy only their explicit canonical-URL curl; dependency
+# managers connect directly and therefore trust the runner's real CA bundle.
+trust_ca=/work/certs/ca.pem
+proxy_env=(
+  --setenv HTTP_PROXY http://127.0.0.1:8080
+  --setenv HTTPS_PROXY http://127.0.0.1:8080
+  --setenv ALL_PROXY http://127.0.0.1:8080
+  --setenv NO_PROXY ''
+)
+if [ "$DEV_SANDBOX_GLOBAL_PROXY_ENV" = false ]; then
+  trust_ca=/work/certs/real-ca.pem
+  proxy_env=()
+elif [ "$DEV_SANDBOX_GLOBAL_PROXY_ENV" != true ]; then
+  echo "error: invalid DEV_SANDBOX_GLOBAL_PROXY_ENV: $DEV_SANDBOX_GLOBAL_PROXY_ENV" >&2
+  exit 1
+fi
+
 exec bwrap \
   --unshare-pid \
   --die-with-parent --proc /proc --tmpfs /tmp \
@@ -215,18 +228,14 @@ exec bwrap \
   --setenv HOME "$DEV_SANDBOX_HOME" \
   --setenv USER "$DEV_SANDBOX_USER" \
   --setenv LOGNAME "$DEV_SANDBOX_USER" \
-  --setenv CURL_CA_BUNDLE /work/certs/ca.pem \
-  --setenv SSL_CERT_FILE /work/certs/ca.pem \
-  --setenv GIT_SSL_CAINFO /work/certs/ca.pem \
-  --setenv NODE_EXTRA_CA_CERTS /work/certs/ca.pem \
+  --setenv CURL_CA_BUNDLE "$trust_ca" \
+  --setenv SSL_CERT_FILE "$trust_ca" \
+  --setenv GIT_SSL_CAINFO "$trust_ca" \
+  --setenv NODE_EXTRA_CA_CERTS "$trust_ca" \
   --setenv OPENSSL_CONF /work/certs/openssl.cnf \
-  --setenv HTTP_PROXY http://127.0.0.1:8080 \
-  --setenv HTTPS_PROXY http://127.0.0.1:8080 \
-  --setenv ALL_PROXY http://127.0.0.1:8080 \
-  --setenv NO_PROXY '' \
+  "${proxy_env[@]}" \
   --setenv DEV_SANDBOX_INTERACTIVE "$DEV_SANDBOX_INTERACTIVE" \
   --setenv ELECTRON_DISABLE_SANDBOX 1 \
-  "${node_env[@]}" \
   "${electron_env[@]}" \
   -- "$DEV_SANDBOX_BASH" -ceu '
     python3 /work/proxy.py /work/http /work/certs /work/certs/real-ca.pem >/work/logs/proxy.log 2>&1 &

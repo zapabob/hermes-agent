@@ -10,6 +10,7 @@ WORKFLOW = ROOT / ".github/workflows/fork-cicd.yml"
 SCHEDULED = ROOT / ".github/workflows/windows-full-qualification.yml"
 RELEASE = ROOT / ".github/workflows/windows-release.yml"
 SANDBOX_STAGE2 = ROOT / "scripts/sandbox/stage2-run.sh"
+SANDBOX_STAGE1 = ROOT / "scripts/dev-sandbox.sh"
 CI = ROOT / ".github/workflows/ci.yaml"
 DETECT_ACTION = ROOT / ".github/actions/detect-changes/action.yml"
 
@@ -122,11 +123,19 @@ def test_release_builds_never_implicitly_publish_from_electron_builder() -> None
     assert all("--publish never" in command for command in builder_commands)
 
 
-def test_sandbox_node_trusts_the_local_mitm_ca() -> None:
+def test_sandbox_installer_fixture_does_not_proxy_external_dependencies() -> None:
+    stage1 = SANDBOX_STAGE1.read_text(encoding="utf-8")
     stage2 = SANDBOX_STAGE2.read_text(encoding="utf-8")
 
-    assert "--setenv NODE_EXTRA_CA_CERTS /work/certs/ca.pem" in stage2
-    assert "--setenv NODE_EXTRA_CA_CERTS /work/certs/real-ca.pem" not in stage2
+    assert "DEV_SANDBOX_GLOBAL_PROXY_ENV=false" in stage1
+    assert "curl --proxy http://127.0.0.1:8080" in stage1
+    assert "--cacert /work/certs/ca.pem" in stage1
+    assert 'trust_ca=/work/certs/real-ca.pem' in stage2
+    assert 'proxy_env=()' in stage2
+    assert '--setenv NODE_EXTRA_CA_CERTS "$trust_ca"' in stage2
+    assert '"${proxy_env[@]}"' in stage2
+    assert "DEV_SANDBOX_NODE_DIR" not in stage1
+    assert "npm_config_nodedir" not in stage2
     assert "python3 /work/proxy.py /work/http /work/certs /work/certs/real-ca.pem" in stage2
 
 
