@@ -297,3 +297,142 @@ plugin lanes passed 96 tests. The neighboring `browser_exec` CLI file passed
 70 tests but failed 22 POSIX-fixture cases on native Windows and skipped 3;
 the failures invoke generated `#!/bin/sh` fixtures as Win32 executables and do
 not establish migration parity. No obsolete surface was removed.
+
+## Task 10: frozen boundary and release qualification
+
+The campaign remains pinned to upstream
+`5fc308a70719a83cccdbba4c0e39c23f5a8239d5`. The snapshot authority records
+that exact SHA, the downstream start, and the merge base. Carry metrics and
+downstream policy validation are current. No post-v0.20.6 upstream carrier was
+added after the freeze commit.
+
+The following post-target themes remain candidates for a separate campaign:
+state database synchronous configuration, later MCP reconnect/liveness
+follow-ups, post-release updater overlay safeguards, and later cron/process
+fixes. The browser surface reduction carrier
+`f780cb36d883bbe4180c023fefb49fe3337e52bb` is also intentionally deferred
+until downstream browser migration parity is proven.
+
+### Cold-resume correction found during surface qualification
+
+The real Electron recovery lane first exposed an isolated E2E profile that
+lacked the locked Python dependencies. After the worktree-local environment
+was synchronized, the test revealed a production defect: a newly resolved
+session could be inserted after renderer reload from the detail endpoint
+without the derived `preview` and `last_active` fields, causing its sidebar
+entry to render as `Untitled session`.
+
+The session-detail route now resolves the canonical rich row used by the
+sidebar. A route-level regression test proves the preview contract, and the
+image-attachment cold-resume E2E disables asynchronous title generation so it
+deterministically exercises that preview fallback. The correction is commit
+`e0fbbeacce5ffa997057891a28370cf3e62d40d2`.
+
+### Local qualification candidate
+
+Implementation and local surface qualification were completed at
+`268d5acedc5a96efba0c6be805bb92d1dac32a7e`. The final receipt-only commit and
+its exact GitHub Actions runs are recorded in the publication closeout below.
+
+Exact commands and observed results:
+
+```text
+./.venv/Scripts/python.exe -m compileall -q agent gateway hermes_cli tools tui_gateway downstream
+PASS
+
+./.venv/Scripts/python.exe scripts/downstream/carry_metrics.py --check
+PASS: Carry metrics are current.
+
+./.venv/Scripts/python.exe scripts/downstream/validate_policy.py
+PASS: Downstream policy validation passed.
+
+./.venv/Scripts/python.exe -m pytest tests/hermes_cli/test_web_server.py -q
+PASS: 169 passed, 5 skipped
+
+npm --workspace apps/desktop run typecheck
+PASS
+
+npm --workspace apps/desktop run lint
+PASS: 0 errors; 235 pre-existing warnings
+
+npm --workspace apps/desktop run test:unit
+PASS: 759 files passed, 1 skipped; 7981 tests passed, 9 skipped
+
+npm --workspace apps/desktop run build
+PASS: clean build stamp 268d5acedc5a
+
+npx playwright test e2e/image-attachment-resume.spec.ts --reporter=list
+PASS: 1 passed
+
+npx playwright test e2e/boot.spec.ts e2e/boot-failure.spec.ts e2e/image-attachment-resume.spec.ts e2e/unread-dot-restart.spec.ts --reporter=list
+PASS: 9 passed
+
+uv lock --check
+PASS
+
+uv export --frozen --all-extras --no-dev --no-emit-project --no-header --output-file <temporary-file>
+uvx --from pip-audit==2.10.1 pip-audit --require-hashes --disable-pip --requirement <temporary-file>
+PASS: No known vulnerabilities found
+
+npm audit --omit=dev --audit-level=high
+PASS: 0 vulnerabilities
+
+cd scripts/windows/watchdog-go && go mod verify
+PASS
+
+cd scripts/windows/watchdog-go && go vet ./...
+PASS
+
+cd scripts/windows/watchdog-go && go test ./...
+PASS
+
+cd scripts/windows/watchdog-go && go build -trimpath -o hermes-watchdog.exe .
+PASS; generated qualification binary removed
+```
+
+The combined changed-Python lanes passed 541 tests with 12 skips. The
+downstream/upstream contract lanes passed 488 tests with 3 skips. Full-repo
+Ruff passed with one existing invalid-`noqa` warning. Changed-file Ruff and
+Python byte compilation passed.
+
+### Windows surface evidence
+
+The Electron recovery suite drove actual app windows and observed normal boot,
+backend-ready handshake, dead-backend recovery UI, preload bridge readiness,
+persisted image conversation first-open and cold-reload behavior, Desktop
+relaunch, unread-state survival across restart, and durable unread clearing.
+The focused process, updater, browser, MCP, persistence, profile-ownership, and
+managed-SSH lanes cover gateway-already-running, mid-turn drain, SCM ownership,
+watchdog planned-stop behavior, PID reuse, sleep/resume keepalive tolerance,
+network interruption/reconnect, update handoff, locked Chrome profiles,
+approved close, live/dead stdio children, bounded graceful/forced persistence,
+and same-session-id profile isolation. These branches include negative
+authority assertions; they are not pass-through smoke checks.
+
+The failed boot screenshot generated during qualification belonged to the
+fresh `hermes-e2e-*` profile under the system temporary directory. It did not
+read, mutate, or delete the normal Hermes profile. The retained temporary
+sandboxes and diagnostic build log created by this campaign were removed by
+exact path after the regression was fixed.
+
+### Authority conclusions
+
+- The Go watchdog remains the only outer automatic restart authority.
+- Hermes core remains the session, profile, approval, graceful-drain, and
+  persistence authority.
+- The updater owns only the bounded update transaction and its receipt.
+- Windows process termination requires re-proven identity and fails closed on
+  ambiguous or unreadable ownership.
+- Browser profile release remains an explicit approved action.
+- Unknown MCP liveness does not become proof of child death.
+- READY remains observable on stdout, independent of redirected Python stdout.
+- Credential persistence uses the canonical profile-aware validated writer.
+
+### Publication closeout
+
+- Pull request: pending
+- Final downstream receipt SHA: pending
+- Native Windows workflow run: pending
+- Full repository workflow run: pending
+- Exact upstream snapshot SHA:
+  `5fc308a70719a83cccdbba4c0e39c23f5a8239d5`
