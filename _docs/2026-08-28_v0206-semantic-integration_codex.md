@@ -122,3 +122,16 @@ Verification:
 - Desktop renderer typecheck and ESLint passed.
 - Isolated `python -m hermes_cli browser --help` exposed only the explicit
   `close-profile` action and its destructive approval warning.
+
+## Task 4: MCP stdio aggregate liveness
+
+Composed `98fce8e52d612d9bc7e873db40a7810b534b6f8e` and
+`ef46ec03e11452eab74e261147668fb64a3d9fd3` without adding another lifecycle
+manager. The watcher now reports all-dead only when every tracked stdio PID is
+confirmed absent through `psutil.pid_exists()`.
+
+A live sibling keeps the watcher pending. Missing PIDs, HTTP transports, missing
+`psutil`, and probe exceptions remain unknown and therefore fail open with
+respect to liveness.
+
+Verification: 8 focused tests passed; Ruff and Python byte compilation passed.
