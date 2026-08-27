@@ -140,8 +140,9 @@ def close_request(request, target=None):
         method, _, version = lines[0].split(b' ', 2)
         lines[0] = b' '.join((method, target.encode(), version))
     lines = [
-        line for line in lines
-        if not line.lower().startswith(b'proxy-connection:')
+        line
+        for line in lines
+        if not line.lower().startswith((b'connection:', b'proxy-connection:'))
     ]
     lines.append(b'Connection: close')
     return b'\r\n'.join(lines) + separator + body

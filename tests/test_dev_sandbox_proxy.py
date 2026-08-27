@@ -71,6 +71,25 @@ def test_https_certificate_failure_is_not_retried(tmp_path: Path) -> None:
     sleep.assert_not_called()
 
 
+def test_close_request_replaces_keep_alive_headers(tmp_path: Path) -> None:
+    proxy = _load_proxy(tmp_path)
+    request = (
+        b"GET /package HTTP/1.1\r\n"
+        b"Host: registry.npmjs.org\r\n"
+        b"Connection: keep-alive\r\n"
+        b"Proxy-Connection: keep-alive\r\n"
+        b"X-Request: preserved\r\n\r\nbody"
+    )
+
+    closed = proxy.close_request(request)
+
+    assert b"Connection: keep-alive" not in closed
+    assert b"Proxy-Connection: keep-alive" not in closed
+    assert closed.count(b"Connection: close") == 1
+    assert b"X-Request: preserved\r\n" in closed
+    assert closed.endswith(b"\r\n\r\nbody")
+
+
 def test_https_handshake_eof_exhausts_bounded_backoff(tmp_path: Path) -> None:
     proxy = _load_proxy(tmp_path)
     raw_connections = [Mock() for _ in range(proxy.UPSTREAM_TLS_HANDSHAKE_ATTEMPTS)]
