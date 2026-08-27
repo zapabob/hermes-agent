@@ -490,13 +490,15 @@ def test_turn_lease_fences_stale_transcript_flush_after_reclaim(tmp_path):
     db.release_session_turn_lease("shared", next_holder)
 
 
-def test_turn_lease_revives_expired_row_still_owned_by_writer(tmp_path):
+def test_turn_lease_revives_expired_row_still_owned_by_writer(tmp_path, monkeypatch):
     db = SessionDB(tmp_path / "state.db")
     db.create_session("shared", source="test")
     holder = f"pid={os.getpid()}:turn=owner"
+    now = 1_000_000.0
+    monkeypatch.setattr(hermes_state.time, "time", lambda: now)
 
     assert db.try_acquire_session_turn_lease("shared", holder, ttl_seconds=0.05)
-    time.sleep(0.12)
+    now += 0.12
     assert db.append_messages_batch(
         "shared",
         [{"role": "assistant", "content": "after ttl"}],
