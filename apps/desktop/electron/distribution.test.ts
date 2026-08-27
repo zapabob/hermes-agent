@@ -5,7 +5,6 @@ import { test } from 'vitest'
 
 import { distributionInstallArgs, distributionRawUrl, loadDistributionMetadata } from './distribution'
 
-
 test('distribution metadata controls Desktop repository authority', () => {
   const metadataPath = path.resolve(process.cwd(), '../../downstream/distribution.json')
   const distribution = loadDistributionMetadata(metadataPath)

@@ -25,7 +25,6 @@ import { notify, notifyError } from '@/store/notifications'
 
 import type { SetStatusbarItemGroup } from '../shell/statusbar-controls'
 
-
 interface SecurityViewProps extends React.ComponentProps<'section'> {
   setStatusbarItemGroup?: SetStatusbarItemGroup
 }
@@ -68,7 +67,8 @@ function formatEvidence(serialized: string): string {
   try {
     const value: unknown = JSON.parse(serialized)
 
-    const record = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+    const record =
+      value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null
     const findings = Array.isArray(value) ? value : Array.isArray(record?.findings) ? record.findings : []
 
     const labels = findings.flatMap(item => {
@@ -93,7 +93,11 @@ function formatEvidence(serialized: string): string {
   }
 }
 
-export function SecurityView({ setStatusbarItemGroup: _setStatusbarItemGroup, className, ...props }: SecurityViewProps) {
+export function SecurityView({
+  setStatusbarItemGroup: _setStatusbarItemGroup,
+  className,
+  ...props
+}: SecurityViewProps) {
   const { t } = useI18n()
   const s = t.security
   const [status, setStatus] = useState<SecurityStatus | null>(null)
@@ -205,7 +209,9 @@ export function SecurityView({ setStatusbarItemGroup: _setStatusbarItemGroup, cl
   )
 
   const engines = useMemo(() => Object.entries(status?.engines ?? {}), [status?.engines])
-  const scannerReady = engines.some(([name, version]) => ['clamav', 'yara'].includes(name) && toneForEngine(version) === 'good')
+  const scannerReady = engines.some(
+    ([name, version]) => ['clamav', 'yara'].includes(name) && toneForEngine(version) === 'good'
+  )
   const protectionReady = Boolean(status?.enabled && scannerReady)
 
   if (!status && !error) {
@@ -235,7 +241,10 @@ export function SecurityView({ setStatusbarItemGroup: _setStatusbarItemGroup, cl
               <dl className="mt-4 grid gap-2 text-xs">
                 <div className="flex items-center justify-between gap-4">
                   <dt className="text-(--ui-text-secondary)">{s.title}</dt>
-                  <dd className="flex items-center gap-2"><StatusDot tone={protectionReady ? 'good' : 'warn'} />{protectionReady ? s.enabled : s.needsAttention}</dd>
+                  <dd className="flex items-center gap-2">
+                    <StatusDot tone={protectionReady ? 'good' : 'warn'} />
+                    {protectionReady ? s.enabled : s.needsAttention}
+                  </dd>
                 </div>
                 <div className="flex items-center justify-between gap-4">
                   <dt className="text-(--ui-text-secondary)">{s.watcher}</dt>
@@ -250,7 +259,13 @@ export function SecurityView({ setStatusbarItemGroup: _setStatusbarItemGroup, cl
                   <dd className="min-w-0 break-all text-right font-mono text-[11px]">{status.vault_key_protection}</dd>
                 </div>
               </dl>
-              <Button className="mt-4" disabled={busy !== null} onClick={() => void toggleWatch()} size="sm" variant="outline">
+              <Button
+                className="mt-4"
+                disabled={busy !== null}
+                onClick={() => void toggleWatch()}
+                size="sm"
+                variant="outline"
+              >
                 {status.watch.running ? t.common.off : t.common.on}
               </Button>
             </section>
@@ -263,7 +278,9 @@ export function SecurityView({ setStatusbarItemGroup: _setStatusbarItemGroup, cl
                     <dt className="font-mono text-(--ui-text-secondary)">{name}</dt>
                     <dd className="flex min-w-0 items-center gap-2">
                       <StatusDot tone={toneForEngine(version)} />
-                      <span className="max-w-52 truncate font-mono text-[11px]" title={version}>{version}</span>
+                      <span className="max-w-52 truncate font-mono text-[11px]" title={version}>
+                        {version}
+                      </span>
                     </dd>
                   </div>
                 ))}
@@ -275,7 +292,9 @@ export function SecurityView({ setStatusbarItemGroup: _setStatusbarItemGroup, cl
                 <dl className="mt-2 grid gap-2 text-xs">
                   {status.feeds.map(feed => (
                     <div className="flex items-center justify-between gap-4" key={feed.name}>
-                      <dt className="min-w-0 truncate font-mono text-(--ui-text-secondary)" title={feed.name}>{feed.name}</dt>
+                      <dt className="min-w-0 truncate font-mono text-(--ui-text-secondary)" title={feed.name}>
+                        {feed.name}
+                      </dt>
                       <dd className="flex items-center gap-2 font-mono text-[11px]">
                         <StatusDot tone={feed.status === 'ok' ? 'good' : 'bad'} />
                         {feed.status}
@@ -289,12 +308,31 @@ export function SecurityView({ setStatusbarItemGroup: _setStatusbarItemGroup, cl
             <section className="min-w-0">
               <h2 className="text-sm font-semibold text-(--ui-text-primary)">{s.scanActions}</h2>
               <div className="mt-4 grid gap-2">
-                <Button disabled={busy !== null} onClick={() => void scan('quick')} variant="outline"><Codicon name="search" />{s.quickScan}</Button>
+                <Button disabled={busy !== null} onClick={() => void scan('quick')} variant="outline">
+                  <Codicon name="search" />
+                  {s.quickScan}
+                </Button>
                 <div className="flex min-w-0 flex-wrap gap-2">
-                  <Input aria-label={s.pathPlaceholder} className="min-w-0 basis-48 flex-1" onChange={event => setCustomPath(event.target.value)} placeholder={s.pathPlaceholder} value={customPath} />
-                  <Button className="min-w-fit flex-1" disabled={busy !== null || !customPath.trim()} onClick={() => void scan('custom')} variant="outline">{s.customScan}</Button>
+                  <Input
+                    aria-label={s.pathPlaceholder}
+                    className="min-w-0 basis-48 flex-1"
+                    onChange={event => setCustomPath(event.target.value)}
+                    placeholder={s.pathPlaceholder}
+                    value={customPath}
+                  />
+                  <Button
+                    className="min-w-fit flex-1"
+                    disabled={busy !== null || !customPath.trim()}
+                    onClick={() => void scan('custom')}
+                    variant="outline"
+                  >
+                    {s.customScan}
+                  </Button>
                 </div>
-                <Button disabled={busy !== null} onClick={() => void updateDefinitions()} variant="outline"><Codicon name="cloud-download" />{s.updateDefinitions}</Button>
+                <Button disabled={busy !== null} onClick={() => void updateDefinitions()} variant="outline">
+                  <Codicon name="cloud-download" />
+                  {s.updateDefinitions}
+                </Button>
               </div>
             </section>
           </div>
@@ -302,11 +340,30 @@ export function SecurityView({ setStatusbarItemGroup: _setStatusbarItemGroup, cl
           <section className="border-b border-(--ui-stroke-secondary) py-6">
             <h2 className="text-sm font-semibold text-(--ui-text-primary)">{s.securitySummary}</h2>
             <dl className="mt-4 grid grid-cols-[repeat(auto-fit,minmax(min(100%,9rem),1fr))] gap-x-6 gap-y-4 text-xs">
-              <div><dt className="text-(--ui-text-tertiary)">{s.filesScanned}</dt><dd className="mt-1 text-lg font-medium text-(--ui-text-primary)">{status.summary.files_scanned}</dd></div>
-              <div><dt className="text-(--ui-text-tertiary)">{s.detections}</dt><dd className="mt-1 text-lg font-medium text-(--ui-text-primary)">{status.summary.detections}</dd></div>
-              <div><dt className="text-(--ui-text-tertiary)">{s.quarantineCount}</dt><dd className="mt-1 text-lg font-medium text-(--ui-text-primary)">{status.summary.quarantine_count}</dd></div>
-              <div><dt className="text-(--ui-text-tertiary)">{s.lastScan}</dt><dd className="mt-1 text-(--ui-text-primary)">{status.summary.last_scan ? formatTime(status.summary.last_scan) : s.notYet}</dd></div>
-              <div><dt className="text-(--ui-text-tertiary)">{s.lastSignatureUpdate}</dt><dd className="mt-1 text-(--ui-text-primary)">{status.summary.last_signature_update ? formatTime(status.summary.last_signature_update) : s.notYet}</dd></div>
+              <div>
+                <dt className="text-(--ui-text-tertiary)">{s.filesScanned}</dt>
+                <dd className="mt-1 text-lg font-medium text-(--ui-text-primary)">{status.summary.files_scanned}</dd>
+              </div>
+              <div>
+                <dt className="text-(--ui-text-tertiary)">{s.detections}</dt>
+                <dd className="mt-1 text-lg font-medium text-(--ui-text-primary)">{status.summary.detections}</dd>
+              </div>
+              <div>
+                <dt className="text-(--ui-text-tertiary)">{s.quarantineCount}</dt>
+                <dd className="mt-1 text-lg font-medium text-(--ui-text-primary)">{status.summary.quarantine_count}</dd>
+              </div>
+              <div>
+                <dt className="text-(--ui-text-tertiary)">{s.lastScan}</dt>
+                <dd className="mt-1 text-(--ui-text-primary)">
+                  {status.summary.last_scan ? formatTime(status.summary.last_scan) : s.notYet}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-(--ui-text-tertiary)">{s.lastSignatureUpdate}</dt>
+                <dd className="mt-1 text-(--ui-text-primary)">
+                  {status.summary.last_signature_update ? formatTime(status.summary.last_signature_update) : s.notYet}
+                </dd>
+              </div>
             </dl>
           </section>
 
@@ -317,8 +374,35 @@ export function SecurityView({ setStatusbarItemGroup: _setStatusbarItemGroup, cl
             ) : (
               <div className="mt-4 overflow-x-auto">
                 <table className="w-full min-w-3xl border-collapse text-left text-xs">
-                  <thead className="text-(--ui-text-tertiary)"><tr><th className="pb-2 font-medium">{s.time}</th><th className="pb-2 font-medium">{s.subject}</th><th className="pb-2 font-medium">{s.verdict}</th><th className="pb-2 font-medium">{s.evidence}</th><th className="pb-2 font-medium">{s.action}</th></tr></thead>
-                  <tbody>{status.recent_events.map(event => <tr className="border-t border-(--ui-stroke-secondary)" key={event.id}><td className="py-2 pr-4 whitespace-nowrap">{formatTime(event.created_at)}</td><td className="max-w-xl truncate py-2 pr-4 font-mono text-[11px]" title={event.subject}>{event.subject}</td><td className={cn('py-2 pr-4 font-mono text-[11px]', toneForVerdict(event.verdict))}>{event.verdict || '—'}</td><td className="max-w-xl truncate py-2 pr-4 font-mono text-[11px]" title={formatEvidence(event.details_json)}>{formatEvidence(event.details_json)}</td><td className="py-2">{event.action}</td></tr>)}</tbody>
+                  <thead className="text-(--ui-text-tertiary)">
+                    <tr>
+                      <th className="pb-2 font-medium">{s.time}</th>
+                      <th className="pb-2 font-medium">{s.subject}</th>
+                      <th className="pb-2 font-medium">{s.verdict}</th>
+                      <th className="pb-2 font-medium">{s.evidence}</th>
+                      <th className="pb-2 font-medium">{s.action}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {status.recent_events.map(event => (
+                      <tr className="border-t border-(--ui-stroke-secondary)" key={event.id}>
+                        <td className="py-2 pr-4 whitespace-nowrap">{formatTime(event.created_at)}</td>
+                        <td className="max-w-xl truncate py-2 pr-4 font-mono text-[11px]" title={event.subject}>
+                          {event.subject}
+                        </td>
+                        <td className={cn('py-2 pr-4 font-mono text-[11px]', toneForVerdict(event.verdict))}>
+                          {event.verdict || '—'}
+                        </td>
+                        <td
+                          className="max-w-xl truncate py-2 pr-4 font-mono text-[11px]"
+                          title={formatEvidence(event.details_json)}
+                        >
+                          {formatEvidence(event.details_json)}
+                        </td>
+                        <td className="py-2">{event.action}</td>
+                      </tr>
+                    ))}
+                  </tbody>
                 </table>
               </div>
             )}
@@ -331,8 +415,58 @@ export function SecurityView({ setStatusbarItemGroup: _setStatusbarItemGroup, cl
             ) : (
               <div className="mt-4 overflow-x-auto">
                 <table className="w-full min-w-4xl border-collapse text-left text-xs">
-                  <thead className="text-(--ui-text-tertiary)"><tr><th className="pb-2 font-medium">{s.time}</th><th className="pb-2 font-medium">{s.originalPath}</th><th className="pb-2 font-medium">{s.verdict}</th><th className="pb-2 font-medium">{s.evidence}</th><th className="pb-2 font-medium">{s.size}</th><th className="pb-2 font-medium">{s.action}</th></tr></thead>
-                  <tbody>{status.quarantine.filter(item => !item.deleted_at && !item.restored_at).map(item => <tr className="border-t border-(--ui-stroke-secondary)" key={item.id}><td className="py-2 pr-4 whitespace-nowrap">{formatTime(item.created_at)}</td><td className="max-w-xl truncate py-2 pr-4 font-mono text-[11px]" title={item.original_path}>{item.original_path}</td><td className={cn('py-2 pr-4 font-mono text-[11px]', toneForVerdict(item.verdict))}>{item.verdict}</td><td className="max-w-xl truncate py-2 pr-4 font-mono text-[11px]" title={formatEvidence(item.findings_json)}>{formatEvidence(item.findings_json)}</td><td className="py-2 pr-4 whitespace-nowrap">{formatBytes(item.size)}</td><td className="py-2"><div className="flex gap-3"><Button disabled={busy !== null} onClick={() => void restore(item)} size="inline" variant="text">{s.restore}</Button><Button disabled={busy !== null} onClick={() => void remove(item)} size="inline" variant="text">{s.delete}</Button></div></td></tr>)}</tbody>
+                  <thead className="text-(--ui-text-tertiary)">
+                    <tr>
+                      <th className="pb-2 font-medium">{s.time}</th>
+                      <th className="pb-2 font-medium">{s.originalPath}</th>
+                      <th className="pb-2 font-medium">{s.verdict}</th>
+                      <th className="pb-2 font-medium">{s.evidence}</th>
+                      <th className="pb-2 font-medium">{s.size}</th>
+                      <th className="pb-2 font-medium">{s.action}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {status.quarantine
+                      .filter(item => !item.deleted_at && !item.restored_at)
+                      .map(item => (
+                        <tr className="border-t border-(--ui-stroke-secondary)" key={item.id}>
+                          <td className="py-2 pr-4 whitespace-nowrap">{formatTime(item.created_at)}</td>
+                          <td className="max-w-xl truncate py-2 pr-4 font-mono text-[11px]" title={item.original_path}>
+                            {item.original_path}
+                          </td>
+                          <td className={cn('py-2 pr-4 font-mono text-[11px]', toneForVerdict(item.verdict))}>
+                            {item.verdict}
+                          </td>
+                          <td
+                            className="max-w-xl truncate py-2 pr-4 font-mono text-[11px]"
+                            title={formatEvidence(item.findings_json)}
+                          >
+                            {formatEvidence(item.findings_json)}
+                          </td>
+                          <td className="py-2 pr-4 whitespace-nowrap">{formatBytes(item.size)}</td>
+                          <td className="py-2">
+                            <div className="flex gap-3">
+                              <Button
+                                disabled={busy !== null}
+                                onClick={() => void restore(item)}
+                                size="inline"
+                                variant="text"
+                              >
+                                {s.restore}
+                              </Button>
+                              <Button
+                                disabled={busy !== null}
+                                onClick={() => void remove(item)}
+                                size="inline"
+                                variant="text"
+                              >
+                                {s.delete}
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
                 </table>
               </div>
             )}
