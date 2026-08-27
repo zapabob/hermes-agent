@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib.util
 import ssl
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import Mock, call, patch
 
@@ -67,3 +69,75 @@ def test_https_certificate_failure_is_not_retried(tmp_path: Path) -> None:
     assert connect.call_count == 1
     assert raw.close.call_count == 1
     sleep.assert_not_called()
+
+
+def test_https_handshake_eof_exhausts_bounded_backoff(tmp_path: Path) -> None:
+    proxy = _load_proxy(tmp_path)
+    raw_connections = [Mock() for _ in range(proxy.UPSTREAM_TLS_HANDSHAKE_ATTEMPTS)]
+    context = Mock()
+    context.wrap_socket.side_effect = [
+        ssl.SSLEOFError(8, "unexpected EOF") for _ in raw_connections
+    ]
+
+    with (
+        patch.object(proxy.socket, "create_connection", side_effect=raw_connections),
+        patch.object(proxy.time, "sleep") as sleep,
+    ):
+        with pytest.raises(ssl.SSLEOFError):
+            proxy.open_https_upstream(context, "registry.npmjs.org", 443)
+
+    assert all(raw.close.call_count == 1 for raw in raw_connections)
+    assert sleep.call_args_list == [
+        call(0.25),
+        call(0.5),
+        call(1.0),
+        call(2.0),
+        call(2.0),
+    ]
+
+
+def test_https_handshakes_are_serialized(tmp_path: Path) -> None:
+    proxy = _load_proxy(tmp_path)
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    second_invoked = threading.Event()
+    second_entered = threading.Event()
+    upstreams = [Mock(), Mock()]
+    context = Mock()
+    call_count = 0
+
+    def wrap_socket(raw, *, server_hostname):
+        nonlocal call_count
+        assert server_hostname == "registry.npmjs.org"
+        call_count += 1
+        if call_count == 1:
+            first_entered.set()
+            assert release_first.wait(timeout=1)
+        else:
+            second_entered.set()
+        return upstreams[call_count - 1]
+
+    def open_second():
+        second_invoked.set()
+        return proxy.open_https_upstream(context, "registry.npmjs.org", 443)
+
+    context.wrap_socket.side_effect = wrap_socket
+    with (
+        patch.object(
+            proxy.socket, "create_connection", side_effect=[Mock(), Mock()]
+        ) as connect,
+        ThreadPoolExecutor(max_workers=2) as pool,
+    ):
+        first = pool.submit(
+            proxy.open_https_upstream, context, "registry.npmjs.org", 443
+        )
+        assert first_entered.wait(timeout=1)
+        second = pool.submit(open_second)
+        assert second_invoked.wait(timeout=1)
+        assert not second_entered.wait(timeout=0.1)
+        release_first.set()
+
+        assert first.result(timeout=1) is upstreams[0]
+        assert second.result(timeout=1) is upstreams[1]
+
+    assert connect.call_count == 2

@@ -32,8 +32,9 @@ ROOT, CERTS, REAL_CA = map(pathlib.Path, sys.argv[1:])
 LISTEN_ADDRESS = ('127.0.0.1', 8080)
 MAX_REQUEST_BYTES = 65536
 UPSTREAM_TIMEOUT_SECONDS = 30
-UPSTREAM_TLS_HANDSHAKE_ATTEMPTS = 3
+UPSTREAM_TLS_HANDSHAKE_ATTEMPTS = 6
 UPSTREAM_TLS_RETRY_DELAY_SECONDS = 0.25
+UPSTREAM_TLS_MAX_RETRY_DELAY_SECONDS = 2.0
 CERT_VALIDITY_DAYS = 2
 
 
@@ -66,6 +67,7 @@ def run_openssl(args):
 
 
 _CERT_LOCK = threading.Lock()
+_UPSTREAM_TLS_HANDSHAKE_LOCK = threading.Lock()
 
 
 def cert_for(host):
@@ -162,20 +164,28 @@ def open_https_upstream(context, host, port):
     sent yet. All other TLS failures, including certificate verification, are
     permanent for this request and must remain visible immediately.
     """
-    for attempt in range(1, UPSTREAM_TLS_HANDSHAKE_ATTEMPTS + 1):
-        raw = socket.create_connection(
-            (host, port), timeout=UPSTREAM_TIMEOUT_SECONDS
-        )
-        try:
-            return context.wrap_socket(raw, server_hostname=host)
-        except ssl.SSLEOFError:
-            raw.close()
-            if attempt == UPSTREAM_TLS_HANDSHAKE_ATTEMPTS:
+    # npm starts several downloads together. Serializing only the TLS
+    # handshakes prevents those connections from retrying in lockstep through
+    # slirp4netns; established connections still relay concurrently.
+    with _UPSTREAM_TLS_HANDSHAKE_LOCK:
+        for attempt in range(1, UPSTREAM_TLS_HANDSHAKE_ATTEMPTS + 1):
+            raw = socket.create_connection(
+                (host, port), timeout=UPSTREAM_TIMEOUT_SECONDS
+            )
+            try:
+                return context.wrap_socket(raw, server_hostname=host)
+            except ssl.SSLEOFError:
+                raw.close()
+                if attempt == UPSTREAM_TLS_HANDSHAKE_ATTEMPTS:
+                    raise
+                delay = min(
+                    UPSTREAM_TLS_RETRY_DELAY_SECONDS * (2 ** (attempt - 1)),
+                    UPSTREAM_TLS_MAX_RETRY_DELAY_SECONDS,
+                )
+                time.sleep(delay)
+            except Exception:
+                raw.close()
                 raise
-            time.sleep(UPSTREAM_TLS_RETRY_DELAY_SECONDS * attempt)
-        except Exception:
-            raw.close()
-            raise
 
 
 def forward_https(conn, host, port, request):
