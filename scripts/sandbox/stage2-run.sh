@@ -196,8 +196,8 @@ if [ "$DEV_SANDBOX_INTERACTIVE" = true ]; then
   dev_mounts=(--dev /dev)
 fi
 
-# Fixture hosts use the sandbox CA; end-to-end CONNECT tunnels use public CAs.
-# client-ca.pem contains both without changing the fixture-signing CA file.
+# Node connects to the local MITM proxy, so it must trust the sandbox CA.
+# proxy.py alone uses real-ca.pem for its separate outbound TLS connection.
 exec bwrap \
   --unshare-pid \
   --die-with-parent --proc /proc --tmpfs /tmp \
@@ -215,10 +215,10 @@ exec bwrap \
   --setenv HOME "$DEV_SANDBOX_HOME" \
   --setenv USER "$DEV_SANDBOX_USER" \
   --setenv LOGNAME "$DEV_SANDBOX_USER" \
-  --setenv CURL_CA_BUNDLE /work/certs/client-ca.pem \
-  --setenv SSL_CERT_FILE /work/certs/client-ca.pem \
-  --setenv GIT_SSL_CAINFO /work/certs/client-ca.pem \
-  --setenv NODE_EXTRA_CA_CERTS /work/certs/client-ca.pem \
+  --setenv CURL_CA_BUNDLE /work/certs/ca.pem \
+  --setenv SSL_CERT_FILE /work/certs/ca.pem \
+  --setenv GIT_SSL_CAINFO /work/certs/ca.pem \
+  --setenv NODE_EXTRA_CA_CERTS /work/certs/ca.pem \
   --setenv OPENSSL_CONF /work/certs/openssl.cnf \
   --setenv HTTP_PROXY http://127.0.0.1:8080 \
   --setenv HTTPS_PROXY http://127.0.0.1:8080 \

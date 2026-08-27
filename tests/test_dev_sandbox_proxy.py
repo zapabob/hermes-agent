@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib.util
-import socket
 import ssl
 import sys
 import threading
@@ -16,8 +15,6 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 PROXY_PATH = ROOT / "scripts" / "sandbox" / "proxy.py"
-DEV_SANDBOX_PATH = ROOT / "scripts" / "dev-sandbox.sh"
-STAGE2_PATH = ROOT / "scripts" / "sandbox" / "stage2-run.sh"
 
 
 def _load_proxy(tmp_path: Path):
@@ -91,58 +88,6 @@ def test_close_request_replaces_keep_alive_headers(tmp_path: Path) -> None:
     assert closed.count(b"Connection: close") == 1
     assert b"X-Request: preserved\r\n" in closed
     assert closed.endswith(b"\r\n\r\nbody")
-
-
-def test_non_fixture_https_is_relayed_as_end_to_end_tunnel(tmp_path: Path) -> None:
-    proxy = _load_proxy(tmp_path)
-    client, proxy_side = socket.socketpair()
-    upstream_side, server = socket.socketpair()
-    worker = threading.Thread(target=proxy.handle, args=(proxy_side,))
-
-    with (
-        patch.object(
-            proxy.socket, "create_connection", return_value=upstream_side
-        ) as connect,
-        patch.object(proxy, "cert_for") as cert_for,
-    ):
-        worker.start()
-        client.sendall(
-            b"CONNECT registry.npmjs.org:443 HTTP/1.1\r\n"
-            b"Host: registry.npmjs.org:443\r\n\r\n"
-        )
-        assert client.recv(4096) == b"HTTP/1.1 200 Connection Established\r\n\r\n"
-
-        client.sendall(b"client TLS bytes")
-        assert server.recv(4096) == b"client TLS bytes"
-        server.sendall(b"server TLS bytes")
-        assert client.recv(4096) == b"server TLS bytes"
-
-        client.shutdown(socket.SHUT_WR)
-        worker.join(timeout=1)
-
-    client.close()
-    server.close()
-    assert not worker.is_alive()
-    connect.assert_called_once_with(
-        ("registry.npmjs.org", 443), timeout=proxy.UPSTREAM_TIMEOUT_SECONDS
-    )
-    cert_for.assert_not_called()
-
-
-def test_client_trust_bundle_covers_fixture_and_tunneled_https() -> None:
-    sandbox = DEV_SANDBOX_PATH.read_text(encoding="utf-8")
-    stage2 = STAGE2_PATH.read_text(encoding="utf-8")
-
-    assert '"$SANDBOX_ROOT/root/certs/ca.pem"' in sandbox
-    assert '"$SANDBOX_ROOT/root/certs/real-ca.pem"' in sandbox
-    assert '> "$SANDBOX_ROOT/root/certs/client-ca.pem"' in sandbox
-    for variable in (
-        "CURL_CA_BUNDLE",
-        "SSL_CERT_FILE",
-        "GIT_SSL_CAINFO",
-        "NODE_EXTRA_CA_CERTS",
-    ):
-        assert f"--setenv {variable} /work/certs/client-ca.pem" in stage2
 
 
 def test_https_handshake_eof_exhausts_bounded_backoff(tmp_path: Path) -> None:
