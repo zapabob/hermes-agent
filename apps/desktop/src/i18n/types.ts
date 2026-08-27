@@ -1777,6 +1777,54 @@ export interface Translations {
     copyPath: string
   }
 
+  security: {
+    title: string
+    subtitle: string
+    refresh: string
+    enabled: string
+    needsAttention: string
+    protectionStatus: string
+    watcher: string
+    automaticQuarantine: string
+    vaultProtection: string
+    engineAvailability: string
+    activeFeeds: string
+    securitySummary: string
+    filesScanned: string
+    detections: string
+    quarantineCount: string
+    lastScan: string
+    lastSignatureUpdate: string
+    notYet: string
+    scanActions: string
+    quickScan: string
+    customScan: string
+    pathPlaceholder: string
+    updateDefinitions: string
+    recentEvents: string
+    encryptedQuarantine: string
+    noEvents: string
+    noQuarantine: string
+    unavailable: string
+    time: string
+    subject: string
+    verdict: string
+    evidence: string
+    action: string
+    originalPath: string
+    size: string
+    restore: string
+    delete: string
+    confirmQuick: string
+    confirmCustom: string
+    confirmUpdate: string
+    confirmRestore: string
+    confirmDelete: string
+    failedLoad: string
+    actionFailed: string
+    scanComplete: (count: number) => string
+  }
+
   artifactCard: {
     kind: Record<'code' | 'html' | 'svg', string>
     generating: (lines: number) => string
