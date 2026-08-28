@@ -9,6 +9,7 @@ Covers:
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import stat
@@ -71,11 +72,50 @@ class TestVaultStore:
         assert b"s3cret-pw" not in blob
         assert b"user@example.com" not in blob
 
+    @pytest.mark.skipif(os.name == "nt", reason="Windows enforces file access with DACLs")
     def test_file_permissions_0600(self, store, tmp_path):
         _add_login(store)
         for name in ("vault.json.enc", "vault.key"):
             mode = stat.S_IMODE(os.stat(tmp_path / "vault" / name).st_mode)
             assert mode == 0o600, f"{name} has mode {oct(mode)}"
+
+    @pytest.mark.windows_only
+    def test_windows_acl_is_limited_to_owner_and_system(self, store, tmp_path):
+        win32api = importlib.import_module("win32api")
+        win32con = importlib.import_module("win32con")
+        win32security = importlib.import_module("win32security")
+
+        _add_login(store)
+        owner = win32security.GetTokenInformation(
+            win32security.OpenProcessToken(
+                win32api.GetCurrentProcess(), win32con.TOKEN_QUERY
+            ),
+            win32security.TokenUser,
+        )[0]
+        system = win32security.CreateWellKnownSid(
+            win32security.WinLocalSystemSid, None
+        )
+        expected = {
+            win32security.ConvertSidToStringSid(owner),
+            win32security.ConvertSidToStringSid(system),
+        }
+
+        for path in (
+            tmp_path / "vault",
+            tmp_path / "vault" / "vault.json.enc",
+            tmp_path / "vault" / "vault.key",
+        ):
+            descriptor = win32security.GetFileSecurity(
+                str(path), win32security.DACL_SECURITY_INFORMATION
+            )
+            acl = descriptor.GetSecurityDescriptorDacl()
+            sids = {
+                win32security.ConvertSidToStringSid(acl.GetAce(index)[2])
+                for index in range(acl.GetAceCount())
+            }
+            assert sids == expected, f"unexpected principals on {path.name}: {sids}"
+            control, _revision = descriptor.GetSecurityDescriptorControl()
+            assert control & win32security.SE_DACL_PROTECTED
 
     def test_listing_is_metadata_only(self, store):
         meta = _add_login(store)

@@ -17,9 +17,11 @@ Design notes:
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import re
+import sys
 import threading
 import uuid
 from dataclasses import dataclass
@@ -37,6 +39,57 @@ LOGIN_IDENTIFIER_TYPES = ("email", "phone", "username")
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
 _LOCK = threading.Lock()
+
+
+def _restrict_windows_acl(path: Path, *, directory: bool = False) -> None:
+    """Restrict a Vault path to the current user and LocalSystem on Windows."""
+    if sys.platform != "win32":
+        return
+
+    try:
+        ntsecuritycon = importlib.import_module("ntsecuritycon")
+        win32api = importlib.import_module("win32api")
+        win32con = importlib.import_module("win32con")
+        win32security = importlib.import_module("win32security")
+
+        owner = win32security.GetTokenInformation(
+            win32security.OpenProcessToken(
+                win32api.GetCurrentProcess(), win32con.TOKEN_QUERY
+            ),
+            win32security.TokenUser,
+        )[0]
+        system = win32security.CreateWellKnownSid(
+            win32security.WinLocalSystemSid, None
+        )
+        inheritance = 0
+        if directory:
+            inheritance = (
+                win32security.CONTAINER_INHERIT_ACE
+                | win32security.OBJECT_INHERIT_ACE
+            )
+        acl = win32security.ACL()
+        for sid in (owner, system):
+            acl.AddAccessAllowedAceEx(
+                win32security.ACL_REVISION,
+                inheritance,
+                ntsecuritycon.FILE_ALL_ACCESS,
+                sid,
+            )
+        descriptor = win32security.SECURITY_DESCRIPTOR()
+        descriptor.SetSecurityDescriptorOwner(owner, False)
+        descriptor.SetSecurityDescriptorDacl(True, acl, False)
+        descriptor.SetSecurityDescriptorControl(
+            win32security.SE_DACL_PROTECTED,
+            win32security.SE_DACL_PROTECTED,
+        )
+        flags = (
+            win32security.OWNER_SECURITY_INFORMATION
+            | win32security.DACL_SECURITY_INFORMATION
+            | win32security.PROTECTED_DACL_SECURITY_INFORMATION
+        )
+        win32security.SetFileSecurity(str(path), flags, descriptor)
+    except Exception as exc:
+        raise VaultError("could not secure vault permissions on Windows") from exc
 
 
 class VaultError(Exception):
@@ -116,6 +169,7 @@ class VaultStore:
                 os.chmod(self._base, 0o700)
             except OSError:
                 pass
+        _restrict_windows_acl(self._base, directory=True)
 
     def _fernet(self):
         from cryptography.fernet import Fernet
@@ -136,6 +190,7 @@ class VaultStore:
             os.chmod(self._key_path, 0o600)
         except OSError:
             pass
+        _restrict_windows_acl(self._key_path)
         return Fernet(key)
 
     # -- persistence -------------------------------------------------------
@@ -173,6 +228,7 @@ class VaultStore:
             os.chmod(self._vault_path, 0o600)
         except OSError:
             pass
+        _restrict_windows_acl(self._vault_path)
 
     # -- public API ----------------------------------------------------------
 
