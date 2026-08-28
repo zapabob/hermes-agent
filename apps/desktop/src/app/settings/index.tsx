@@ -21,6 +21,7 @@ import {
   RefreshCw,
   Search,
   Settings2,
+  ShieldLock,
   Upload,
   Wrench,
   Zap
@@ -52,6 +53,7 @@ import { PluginsSettings } from './plugins-settings'
 import { PROVIDER_VIEWS, ProvidersSettings, type ProviderView } from './providers-settings'
 import { SessionsSettings } from './sessions-settings'
 import type { SettingsPageProps, SettingsView as SettingsViewId } from './types'
+import { VaultSettings } from './vault-settings'
 
 const SETTINGS_VIEWS: readonly SettingsViewId[] = [
   ...SECTIONS.map(s => `config:${s.id}` as SettingsViewId),
@@ -62,6 +64,7 @@ const SETTINGS_VIEWS: readonly SettingsViewId[] = [
   'connections',
   'keybinds',
   'keys',
+  'vault',
   'notifications',
   'billing',
   'plugins',
@@ -169,16 +172,33 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
 
   const navGroups: OverlayNavGroup[] = useMemo(
     () => [
-      ...SECTIONS.map(s => {
+      ...SECTIONS.flatMap(s => {
         const view = `config:${s.id}` as SettingsViewId
 
-        return {
+        const entry = {
           active: activeView === view,
           icon: s.icon,
           id: view,
           label: t.settings.sections[s.id] ?? s.label,
           onSelect: () => setActiveView(view)
         }
+
+        // Credential Vault lives beside the Browser section: it feeds the
+        // browser's model-blind vault fill, so the two are one mental unit.
+        if (s.id === 'browser') {
+          return [
+            entry,
+            {
+              active: activeView === 'vault',
+              icon: ShieldLock,
+              id: 'vault',
+              label: t.settings.nav.vault,
+              onSelect: () => setActiveView('vault')
+            }
+          ]
+        }
+
+        return [entry]
       }),
       {
         active: activeView === 'notifications',
@@ -404,6 +424,8 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
       <BillingSettings />
     ) : activeView === 'plugins' ? (
       <PluginsSettings />
+    ) : activeView === 'vault' ? (
+      <VaultSettings />
     ) : (
       <SessionsSettings />
     )

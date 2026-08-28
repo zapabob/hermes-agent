@@ -142,7 +142,14 @@ def browser_vault_fill(handle: str, task_id: Optional[str] = None) -> str:
     meta = store.get_meta(handle)
     if meta is None:
         return json.dumps(
-            {"success": False, "error": f"No vault item with handle {handle!r}. Use browser_vault_list."}
+            {
+                "success": False,
+                "error": (
+                    f"No vault item with handle {handle!r}. Use browser_vault_list. "
+                    "To save a credential: run `hermes vault add` in a terminal, or "
+                    "in the desktop app open Settings → Credential Vault."
+                ),
+            }
         )
     if meta.kind != "login":
         return json.dumps(

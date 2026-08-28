@@ -42,6 +42,27 @@ hermes vault rm vault_ab12cd34ef56
 Item kinds: `login`, `payment`, and `address` are all stored; Phase 1
 browser fill supports `login` items only.
 
+## Desktop app
+
+Desktop users can manage the vault without a terminal: open
+**Settings → Credential Vault** (right next to the Browser section). The
+panel lists saved items — label, kind, origin, and creation date only;
+values are never displayed — and lets you add or delete credentials. The
+Add dialog adapts to the selected kind (login / payment card / address),
+masks secret fields, and submits them straight into the encrypted store
+over the local gateway connection.
+
+The panel is deep-linkable: opening
+
+```text
+hermes://open/settings?tab=vault&kind=login&label=github&origin=https://github.com
+```
+
+launches the app on the vault panel with the Add dialog pre-filled from
+the query parameters (metadata only — a secret can never travel in a
+link). When a fill request fails because no matching item exists, the
+agent's error message points at both `hermes vault add` and this panel.
+
 ## Example agent flow
 
 ```
