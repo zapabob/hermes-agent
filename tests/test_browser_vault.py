@@ -288,3 +288,55 @@ class TestBrowserVaultTools:
             out = json.loads(browser_vault_tool.browser_vault_fill(meta.id))
         assert out["success"] is False
         assert "login" in out["error"]
+
+
+class TestVaultHardening:
+    """Read-deny, backup perms-tightening, canonical dir securing.
+
+    Mirrors the browser-profile snapshot hardening (f1d05c): the vault dir
+    holds key + ciphertext side by side, so it gets the same treatment.
+    """
+
+    def test_read_block_vault_dir_and_contents(self, tmp_path, monkeypatch):
+        import agent.file_safety as fs
+
+        home = tmp_path / "hermes_home"
+        vault = home / "vault"
+        vault.mkdir(parents=True)
+        (vault / "vault.key").write_text("k")
+        (vault / "vault.json.enc").write_text("blob")
+        monkeypatch.setattr(fs, "_hermes_home_path", lambda: home)
+
+        for target in (vault, vault / "vault.key", vault / "vault.json.enc"):
+            err = fs.get_read_block_error(str(target))
+            assert err is not None, f"expected read deny for {target}"
+            assert "vault" in err.lower()
+
+    def test_read_block_leaves_sibling_dirs_alone(self, tmp_path, monkeypatch):
+        import agent.file_safety as fs
+
+        home = tmp_path / "hermes_home"
+        other = home / "vaults-notes"
+        other.mkdir(parents=True)
+        f = other / "notes.txt"
+        f.write_text("hi")
+        monkeypatch.setattr(fs, "_hermes_home_path", lambda: home)
+        assert fs.get_read_block_error(str(f)) is None
+
+    def test_backup_secret_names_include_vault_files(self):
+        from hermes_cli.backup import _SECRET_FILE_NAMES
+
+        assert "vault.key" in _SECRET_FILE_NAMES
+        assert "vault.json.enc" in _SECRET_FILE_NAMES
+
+    def test_ensure_dir_uses_canonical_secure_dir(self, tmp_path, monkeypatch):
+        from unittest.mock import MagicMock
+
+        import hermes_cli.config as cfg
+        from agent.vault_store import VaultStore
+
+        called = MagicMock()
+        monkeypatch.setattr(cfg, "_secure_dir", called)
+        store = VaultStore(base_dir=tmp_path / "vault")
+        store._ensure_dir()
+        assert called.call_count == 1

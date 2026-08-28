@@ -103,10 +103,19 @@ class VaultStore:
 
     def _ensure_dir(self) -> None:
         self._base.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # Route through the canonical securer (honors managed/NixOS
+        # group-share mode and HERMES_UID/GID ownership) rather than a
+        # bespoke chmod — same requirement as the browser-profile snapshot
+        # dir (f1d05c review).
         try:
-            os.chmod(self._base, 0o700)
-        except OSError:
-            pass
+            from hermes_cli.config import _secure_dir
+
+            _secure_dir(self._base)
+        except Exception:
+            try:
+                os.chmod(self._base, 0o700)
+            except OSError:
+                pass
 
     def _fernet(self):
         from cryptography.fernet import Fernet
