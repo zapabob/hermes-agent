@@ -496,6 +496,7 @@ DEFAULT_CONTEXT_LENGTHS = {
     # Qwen — specific model families before the catch-all.
     # Official docs: https://help.aliyun.com/zh/model-studio/developer-reference/
     "qwen3.8-max": 1_000_000,     # 1M context (OpenRouter & Nous portal, verified 2026-08-03)
+    "qwen3.8-flash": 1_000_000,   # 1M context (OpenRouter & Nous portal, verified 2026-08-28)
     "qwen3.8-27b-abliterated-mtp": 131072,  # 128K context (local llama-server MTP)
     "qwen3.8-27b": 131072,        # 128K context
     "qwen3.8": 131072,            # 128K context
