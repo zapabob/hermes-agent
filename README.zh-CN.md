@@ -1,27 +1,51 @@
 # Hermes Agent Windows Workstation Edition
 
-<p align="right">
-  <a href="README.md"><kbd>English</kbd></a>
-  <a href="README.ja.md"><kbd>日本語</kbd></a>
-  <a href="README.zh-CN.md"><kbd>简体中文</kbd></a>
+<p align="center">
+  <a href="README.md" lang="en">English</a> ·
+  <a href="README.ja.md" lang="ja">日本語</a> ·
+  <a href="README.zh-CN.md" lang="zh-CN"><strong>简体中文</strong></a>
 </p>
 
 > [!NOTE]
 > 英文版 `README.md` 是规范正本。本简体中文版以英文版为准并随其更新。
 
-Hermes Agent 的 Windows 优先下游发行版。
+面向 Windows 11 AI 工作站的 Hermes Agent 非官方 Windows 原生版。
 
-这是一个非官方的下游发行版。
-本项目不隶属于 Nous Research，也未获得其认可。
+这个 fork 由一名维护者独立维护，不隶属于 Nous Research，也未获得其认可。
 原版 Hermes Agent 由 Nous Research 开发，并采用 MIT License。
 
 [![Windows Workstation Tier-1 CI](https://github.com/zapabob/hermes-agent-windows/actions/workflows/fork-cicd.yml/badge.svg)](https://github.com/zapabob/hermes-agent-windows/actions/workflows/fork-cicd.yml)
 
-面向 Windows 11 AI 工作站、在 Windows 原生环境持续验证的 Hermes 下游发行版。
+## 30 秒看懂安装
+
+当前可立即使用的是源码安装。请准备 Windows 11 x64、PowerShell、Git、`uv` 和
+Python 3.11-3.13。只有构建 Desktop 时才需要 Node.js。
+
+```powershell
+git clone https://github.com/zapabob/hermes-agent-windows.git
+Set-Location hermes-agent-windows
+uv sync --locked --all-extras
+uv run hermes setup
+uv run hermes chat
+```
+
+设置向导会配置模型提供商，最后一条命令会打开 CLI chat。要从同一 checkout 启动
+Desktop，请运行：
+
+```powershell
+uv run hermes desktop
+```
+
+如果需要 installer 或 portable ZIP，请先确认
+[下游 Releases](https://github.com/zapabob/hermes-agent-windows/releases)
+已经发布对应 asset，并用 `SHA256SUMS.txt` 校验。完整步骤见
+[Windows 安装指南](docs/windows/INSTALL.md)。
+
+## 这个 fork 增加了什么
 
 - Python、Electron、Go、upstream API 兼容、regression 与 security lock 的 Windows Tier-1 CI
 - 覆盖非管理员与含空格 path 的 installer、portable、旧版 upgrade E2E
-- 固定 upstream snapshot `1fe0f2f3ac9748ce799272eb93bee2937b5ab802`，不使用移动基线
+- 固定 upstream snapshot `5fc308a70719a83cccdbba4c0e39c23f5a8239d5`，不使用移动基线
 - 通过官方 provider/memory seam 连接 local llama.cpp/GGUF 与 embedding lifecycle
 - 由外部 Go watchdog 对 Desktop/backend 及可选 embedding 执行有限恢复
 - consumer NVIDIA workstation 实机证据与无 GPU 的 hosted CI 分开记录
@@ -29,9 +53,8 @@ Hermes Agent 的 Windows 优先下游发行版。
 release candidate 为 `0.20.5-win.1`，支持 `stable` 与 `preview` channel。
 通过验证的产物只从对应 tag 发布到
 [下游 Releases](https://github.com/zapabob/hermes-agent-windows/releases)。
-在首个 stable asset 实际存在前，请使用 source route，不提前展示 direct download button。
-另见 [Windows 安装指南](docs/windows/INSTALL.md)、
-[release policy](docs/windows/RELEASE_POLICY.md) 与
+在首个 stable asset 实际存在前，请使用上面的 source route。
+另见 [release policy](docs/windows/RELEASE_POLICY.md) 与
 [官方 upstream](https://github.com/NousResearch/hermes-agent)。
 
 ## 1. 产品定位

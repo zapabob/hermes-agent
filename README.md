@@ -1,28 +1,51 @@
 # Hermes Agent Windows Workstation Edition
 
-<p align="right">
-  <a href="README.md"><kbd>English</kbd></a>
-  <a href="README.ja.md"><kbd>日本語</kbd></a>
-  <a href="README.zh-CN.md"><kbd>简体中文</kbd></a>
+<p align="center">
+  <a href="README.md" lang="en"><strong>English</strong></a> ·
+  <a href="README.ja.md" lang="ja">日本語</a> ·
+  <a href="README.zh-CN.md" lang="zh-CN">简体中文</a>
 </p>
 
 > [!NOTE]
 > `README.md` is the canonical English document. The Japanese and Simplified Chinese translations follow this file.
 
-Windows-first downstream distribution of Hermes Agent.
+An unofficial, Windows-native downstream of Hermes Agent for Windows 11 AI workstations.
 
-This is an unofficial downstream distribution.
-It is not affiliated with or endorsed by Nous Research.
-Original Hermes Agent is developed by Nous Research and licensed under MIT.
+This single-maintainer fork is independent of, and not endorsed by, Nous Research.
+The original Hermes Agent is developed by Nous Research and licensed under MIT.
 
 [![Windows Workstation Tier-1 CI](https://github.com/zapabob/hermes-agent-windows/actions/workflows/fork-cicd.yml/badge.svg)](https://github.com/zapabob/hermes-agent-windows/actions/workflows/fork-cicd.yml)
 
-Windows-first, locally qualified Hermes distribution for Windows 11 AI
-workstations.
+## Setup in 30 seconds
+
+Use the source route today. You need Windows 11 x64, PowerShell, Git, `uv`,
+and Python 3.11-3.13. Node.js is needed only when building the Desktop app.
+
+```powershell
+git clone https://github.com/zapabob/hermes-agent-windows.git
+Set-Location hermes-agent-windows
+uv sync --locked --all-extras
+uv run hermes setup
+uv run hermes chat
+```
+
+The setup wizard configures your model provider. The last command opens the
+CLI chat. To open the Desktop app from the same checkout, run:
+
+```powershell
+uv run hermes desktop
+```
+
+Prefer an installer or portable ZIP? Use a matching asset from the
+[downstream Releases page](https://github.com/zapabob/hermes-agent-windows/releases)
+only when it is published, and verify it against `SHA256SUMS.txt`. The complete
+procedure is in the [Windows installation guide](docs/windows/INSTALL.md).
+
+## What this fork adds
 
 - Native Windows Tier-1 CI for Python, Electron, Go, upstream API compatibility, regressions, and security locks.
 - Qualified installer, portable, and prior-version upgrade paths with spaces and non-admin operation.
-- Frozen upstream snapshot `1fe0f2f3ac9748ce799272eb93bee2937b5ab802`, never a moving release baseline.
+- Frozen upstream snapshot `5fc308a70719a83cccdbba4c0e39c23f5a8239d5`, never a moving release baseline.
 - Local llama.cpp/GGUF and embedding lifecycles through official provider and memory seams.
 - External Go watchdog for bounded Desktop/backend and optional embedding recovery.
 - Consumer NVIDIA workstation evidence kept separate from GPU-free hosted CI.
@@ -30,10 +53,8 @@ workstations.
 Release candidate: `0.20.5-win.1`. Supported channels: `stable` and `preview`.
 Qualified artifacts are published only from the matching version tag on the
 [downstream Releases page](https://github.com/zapabob/hermes-agent-windows/releases).
-Until the first stable asset is present there, use the source route below; no
-direct download button is advertised early. See the
-[Windows installation guide](docs/windows/INSTALL.md),
-[release policy](docs/windows/RELEASE_POLICY.md), and
+Until the first stable asset is present there, use the source route above. See
+the [release policy](docs/windows/RELEASE_POLICY.md) and
 [official upstream](https://github.com/NousResearch/hermes-agent).
 
 ## 1. Product identity

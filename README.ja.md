@@ -1,28 +1,53 @@
 # Hermes Agent Windows Workstation Edition
 
-<p align="right">
-  <a href="README.md"><kbd>English</kbd></a>
-  <a href="README.ja.md"><kbd>日本語</kbd></a>
-  <a href="README.zh-CN.md"><kbd>简体中文</kbd></a>
+<p align="center">
+  <a href="README.md" lang="en">English</a> ·
+  <a href="README.ja.md" lang="ja"><strong>日本語</strong></a> ·
+  <a href="README.zh-CN.md" lang="zh-CN">简体中文</a>
 </p>
 
 > [!NOTE]
 > 英語版の `README.md` が正本です。この日本語版は英語版に追随します。
 
-Hermes Agent の Windows ファーストなダウンストリーム・ディストリビューションです。
+Windows 11 AI ワークステーション向けに整備した、Hermes Agent の非公式 Windows
+ネイティブ版です。
 
-これは非公式のダウンストリーム・ディストリビューションです。
-Nous Research との提携関係はなく、同社による承認も受けていません。
-オリジナルの Hermes Agent は Nous Research によって開発され、MIT License の下で提供されています。
+この fork は1名のメンテナーが独立して保守しており、Nous Research との提携関係や
+同社による承認はありません。オリジナルの Hermes Agent は Nous Research が開発し、
+MIT License の下で提供しています。
 
 [![Windows Workstation Tier-1 CI](https://github.com/zapabob/hermes-agent-windows/actions/workflows/fork-cicd.yml/badge.svg)](https://github.com/zapabob/hermes-agent-windows/actions/workflows/fork-cicd.yml)
 
-Windows 11 AI ワークステーション向けに、Windows ネイティブで継続的に認定する
-Hermes のダウンストリーム・ディストリビューションです。
+## 30秒でわかる導入
+
+現在すぐに使えるのは source route です。Windows 11 x64、PowerShell、Git、`uv`、
+Python 3.11-3.13 を用意してください。Node.js は Desktop をビルドする場合だけ必要です。
+
+```powershell
+git clone https://github.com/zapabob/hermes-agent-windows.git
+Set-Location hermes-agent-windows
+uv sync --locked --all-extras
+uv run hermes setup
+uv run hermes chat
+```
+
+セットアップウィザードでモデルプロバイダーを設定し、最後のコマンドで CLI chat を
+開始します。同じ checkout から Desktop を開く場合は、次を実行します。
+
+```powershell
+uv run hermes desktop
+```
+
+installer または portable ZIP を使う場合は、
+[ダウンストリーム Releases](https://github.com/zapabob/hermes-agent-windows/releases)
+に対応 asset が公開されていることを確認し、`SHA256SUMS.txt` と照合してください。
+詳しい手順は [Windows 導入ガイド](docs/windows/INSTALL.md) にあります。
+
+## この fork が追加するもの
 
 - Python、Electron、Go、upstream API 互換、regression、security lock の Windows Tier-1 CI
 - 非管理者・空白入り path を含む installer、portable、旧版からの upgrade E2E
-- 移動しない upstream snapshot `1fe0f2f3ac9748ce799272eb93bee2937b5ab802`
+- 移動しない upstream snapshot `5fc308a70719a83cccdbba4c0e39c23f5a8239d5`
 - 公式 provider/memory seam 上の local llama.cpp/GGUF と embedding lifecycle
 - Desktop/backend と任意 embedding を限定的に復旧する外部 Go watchdog
 - GPU のない hosted CI と分離した consumer NVIDIA workstation の実機証拠
@@ -30,11 +55,9 @@ Hermes のダウンストリーム・ディストリビューションです。
 release candidate は `0.20.5-win.1`、対応 channel は `stable` と `preview` です。
 認定済み成果物は対応 tag からのみ
 [ダウンストリーム Releases](https://github.com/zapabob/hermes-agent-windows/releases)
-へ公開します。最初の stable asset が存在するまでは source route を使用し、先行した
-direct download button は表示しません。
-[Windows 導入ガイド](docs/windows/INSTALL.md)、
-[release policy](docs/windows/RELEASE_POLICY.md)、
-[公式 upstream](https://github.com/NousResearch/hermes-agent)も参照してください。
+へ公開します。最初の stable asset が存在するまでは、上の source route を使用してください。
+[release policy](docs/windows/RELEASE_POLICY.md) と
+[公式 upstream](https://github.com/NousResearch/hermes-agent)も参照できます。
 
 ## 1. 製品の位置づけ
 
