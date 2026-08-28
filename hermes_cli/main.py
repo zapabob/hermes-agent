@@ -12478,6 +12478,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "resume",
         "send", "sessions", "setup",
         "skin", "skills", "slack", "status", "sync", "tools", "uninstall", "update",
+        "vault",
         "webhook", "whatsapp", "whatsapp-cloud", "worktree", "chat", "secrets", "security",
         "browser", "verify", "harness",
         # Help-ish invocations — plugin commands not being listed in
@@ -13785,6 +13786,22 @@ def main():
     from hermes_cli.bundles import register_cli as _bundles_register, bundles_command
     _bundles_register(bundles_parser)
     bundles_parser.set_defaults(func=bundles_command)
+
+    # =========================================================================
+    # vault command — local encrypted autofill vault (model-blind browser fill)
+    # =========================================================================
+    vault_parser = subparsers.add_parser(
+        "vault",
+        help="Manage the local encrypted autofill vault (add/list/rm credentials)",
+        description=(
+            "Store login credentials in a locally encrypted vault. The agent "
+            "only ever sees opaque handles; browser_vault_fill injects values "
+            "server-side on the exact origin they were saved for."
+        ),
+    )
+    from hermes_cli.vault import register_cli as _vault_register, vault_command
+    _vault_register(vault_parser)
+    vault_parser.set_defaults(func=vault_command)
 
     # =========================================================================
     # plugins command  (parser built in hermes_cli/subcommands/plugins.py)
