@@ -580,6 +580,33 @@ DEFAULT_CONFIG = {
         "auto_local_for_private_urls": True,  # When a cloud provider is set, auto-spawn local Chromium for LAN/localhost URLs instead of sending them to the cloud
         "cdp_url": "",  # Optional persistent CDP endpoint for attaching to an existing Chromium/Chrome
         "allow_sensitive_cdp_methods": False,  # Explicit opt-in for raw cookie/storage/permission/JS CDP methods
+        # Consent to browse with the user's REAL logins for local browsing.
+        # When true, local browsing (the Browser Use CLI, or the built-in
+        # browser tools) runs on a Hermes-managed SNAPSHOT of the user's
+        # ACTIVE default-Chromium profile (Local State -> profile.last_used) —
+        # its cookies, logins and preferences copied in and re-synced when a
+        # fresh session launches — driven by Hermes' packaged Chromium. Only
+        # the active profile is copied. The snapshot is a non-default dir, so it
+        # sidesteps Chrome 136+'s block on debugging the default profile and
+        # never contends with the user's running browser. Turning this back off
+        # deletes the snapshot store (~/.hermes/browser-profile/) so copied
+        # credentials don't outlive consent. Only Chromium-family default
+        # browsers are supported (Chrome, Edge, Brave, Chromium); a non-Chromium
+        # default (e.g. Firefox) fails closed with a clear message. Default
+        # false. Also gates the browser_exec ``local`` argument, which forces a
+        # real-profile local session even under a cloud browser backend. Toggle
+        # in the desktop Settings → Browser section.
+        "use_real_profile": False,
+        # When real-profile browsing needs the browser closed (Windows: a
+        # running Chrome/Edge/Brave locks its cookie DB deny-all, so it must be
+        # fully quit before its profile can be copied), arm the "offer to close
+        # it" flow. This does NOT auto-kill: when the profile is locked the
+        # snapshot always blocks and the agent asks the user first; only on
+        # approval does it run `hermes browser close-profile` (terminates the
+        # browser process tree bound to that profile, losing unsaved tabs) and
+        # retry. Still locked afterward → stays blocked, no loop, no auto-kill.
+        # OFF by default. No effect on macOS/Linux (copy-while-running works).
+        "real_profile_autoclose": False,
         "allow_unsafe_evaluate": False,  # Legacy override: when true, browser_console(expression=...) bypasses the restrict_evaluate denylist entirely
         "restrict_evaluate": False,  # Opt-in denylist blocking sensitive JS primitives (cookies/storage/clipboard/network/form values) in browser_console(expression=...)
         # CDP supervisor — dialog + frame detection via a persistent WebSocket.

@@ -8,11 +8,11 @@ README = (ROOT / "README.md").read_text(encoding="utf-8")
 
 def test_readme_has_downstream_identity_and_attribution() -> None:
     assert README.startswith("# Hermes Agent Windows Workstation Edition\n")
-    assert "Windows-first downstream distribution of Hermes Agent." in README
-    assert "This is an unofficial downstream distribution." in README
-    assert "It is not affiliated with or endorsed by Nous Research." in README
+    assert "An unofficial, Windows-native downstream of Hermes Agent" in README
+    assert "This single-maintainer fork is independent of" in README
+    assert "not endorsed by, Nous Research" in README
     assert (
-        "Original Hermes Agent is developed by Nous Research and licensed under MIT."
+        "The original Hermes Agent is developed by Nous Research and licensed under MIT."
         in README
     )
 
@@ -58,15 +58,29 @@ def test_readme_preserves_upstream_identity() -> None:
 
 
 def test_translated_readmes_keep_distribution_metadata_in_parity() -> None:
-    for name in ("README.md", "README.ja.md", "README.zh-CN.md"):
+    localized_quick_start = {
+        "README.md": "## Setup in 30 seconds",
+        "README.ja.md": "## 30秒でわかる導入",
+        "README.zh-CN.md": "## 30 秒看懂安装",
+    }
+    for name, quick_start_heading in localized_quick_start.items():
         content = (ROOT / name).read_text(encoding="utf-8")
         for value in (
             "Hermes Agent Windows Workstation Edition",
+            "README.md",
+            "README.ja.md",
+            "README.zh-CN.md",
             "zapabob/hermes-agent-windows",
             "NousResearch/hermes-agent",
             "0.20.5-win.1",
+            "5fc308a70719a83cccdbba4c0e39c23f5a8239d5",
             "stable",
             "preview",
             "docs/windows/INSTALL.md",
+            "uv sync --locked --all-extras",
+            "uv run hermes setup",
+            "uv run hermes chat",
+            "uv run hermes desktop",
         ):
             assert value in content, f"{name}: {value}"
+        assert quick_start_heading in content

@@ -29,8 +29,10 @@ export type SessionOwnerScope = undefined | null | string | SessionProfileRoute
 
 const normKey = (profile: null | string | undefined): string => (profile ?? '').trim() || 'default'
 
-const isRoute = (owner: SessionOwnerScope): owner is SessionProfileRoute =>
+export const isSessionOwnerRoute = (owner: SessionOwnerScope): owner is SessionProfileRoute =>
   Boolean(owner && typeof owner === 'object' && 'connectionId' in owner)
+
+const isRoute = isSessionOwnerRoute
 
 function routeParams(route: SessionProfileRoute, params: Record<string, unknown>): Record<string, unknown> {
   if (!route.targetProfile || !Object.prototype.hasOwnProperty.call(params, 'profile')) {
@@ -95,6 +97,8 @@ async function withRoutedTurnLease<T>(
  *
  * A KNOWN owner (route or profile name) always needs its own socket: the
  * session belongs to that profile regardless of what the window is showing.
+ * A bare profile names the legacy profile door's pool socket in every
+ * topology (a pick on the primary / explicit `local` source dials it).
  * There is deliberately NO comparison against the active profile — "active" is
  * presentation state, never a routing authority. Only a null/empty owner (a
  * fresh draft with no session, or global chrome) routes ambient.

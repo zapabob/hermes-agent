@@ -5,6 +5,7 @@ import json
 
 import pytest
 
+from downstream import UPSTREAM_SNAPSHOT_SHA
 from scripts.downstream.generate_release_manifest import generate_release_bundle
 
 
@@ -56,9 +57,7 @@ def test_release_bundle_contains_required_identity_hashes_and_truthful_signing(
     assert manifest["distribution_id"] == "hermes-agent-windows"
     assert manifest["downstream_version"] == "0.20.5-win.1"
     assert manifest["downstream_commit_sha"] == "a" * 40
-    assert manifest["upstream_snapshot_sha"] == (
-        "1fe0f2f3ac9748ce799272eb93bee2937b5ab802"
-    )
+    assert manifest["upstream_snapshot_sha"] == UPSTREAM_SNAPSHOT_SHA
     assert manifest["release_channel"] == "stable"
     assert manifest["architecture"] == "x64"
     assert manifest["installer_signed"] is False

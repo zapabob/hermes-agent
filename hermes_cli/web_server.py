@@ -18486,6 +18486,32 @@ def mount_spa(application: FastAPI):
 
         @application.get("/{full_path:path}")
         async def no_frontend(full_path: str):
+            # Desktop token handshake (#94227): the Electron shell boots by
+            # fetching `/` and extracting ``window.__HERMES_SESSION_TOKEN__``
+            # for /api/ws auth (apps/desktop/electron/dashboard-token.ts).
+            # When headless serve 404'd every path, a renderer whose spawn
+            # token no longer matched the backend's live token (e.g. after
+            # `hermes update` replaced the backend) had no way to adopt the
+            # served token — the WS handshake failed and the window
+            # white-screened (#95575). Serve a minimal token-only page at the
+            # exact root, but ONLY when the dashboard auth gate is off: on a
+            # gated (non-loopback/remote) serve the token must never be
+            # readable without auth, so the 404 JSON stays.
+            gated = bool(getattr(application.state, "auth_required", False))
+            if full_path == "" and not gated:
+                token_js = json.dumps(_SESSION_TOKEN)
+                return HTMLResponse(
+                    "<!doctype html><html><head><script>"
+                    f"window.__HERMES_SESSION_TOKEN__={token_js};"
+                    "window.__HERMES_AUTH_REQUIRED__=false;"
+                    "</script></head><body>"
+                    "Headless backend (hermes serve): web UI disabled — use "
+                    "`hermes dashboard` for the browser UI."
+                    "</body></html>",
+                    headers={
+                        "Cache-Control": "no-store, no-cache, must-revalidate"
+                    },
+                )
             return JSONResponse({"error": _msg}, status_code=404)
         return
 
@@ -20288,9 +20314,36 @@ def _port_bind_conflict(host: str, port: int) -> bool:
     return False
 
 
+def _write_machine_sentinel_line(line: str) -> None:
+    """Write a machine-parsed sentinel line to the REAL stdout (fd 1).
+
+    The serve startup path imports ``tui_gateway.server`` (flush-on-SIGTERM
+    handlers, #94724) which redirects ``sys.stdout`` to ``sys.stderr`` at
+    import time to keep stray prints off the JSON-RPC protocol stream. Any
+    machine-readable sentinel printed after that import via ``print()`` lands
+    on stderr — invisible to consumers that parse the child's stdout pipe
+    (the Desktop spawn, scripts). fd 1 is untouched by the Python-level
+    redirect, so write there.
+
+    Best-effort by design: if fd 1 is unwritable (closed; invalid under
+    pythonw.exe), fall back to ``print()`` for human visibility only — the
+    redirected stream can't reach stdout-parsing consumers, and pythonw
+    Desktop spawns rely on ``_write_dashboard_ready_file()`` (the
+    HERMES_DESKTOP_READY_FILE channel) for port discovery instead. Never
+    raises: a sentinel-delivery failure must not kill a healthy serve.
+    """
+    try:
+        os.write(1, (line + "\n").encode())
+    except OSError:
+        try:
+            print(line, flush=True)
+        except Exception:
+            pass
+
+
 def _report_port_in_use(host: str, port: int) -> None:
     """Print the machine sentinel + a human hint naming likely holders."""
-    print(_PORT_IN_USE_SENTINEL.format(port=port), flush=True)
+    _write_machine_sentinel_line(_PORT_IN_USE_SENTINEL.format(port=port))
     print(
         f"  Port {port} on {host} is already in use — likely another "
         "'hermes serve' / 'hermes dashboard' backend or the Hermes gateway. "
@@ -20552,6 +20605,19 @@ def start_server(
     )
     server = uvicorn.Server(config)
 
+    # Flush-on-kill guard (#94724 item 2): install chaining SIGTERM/SIGINT
+    # handlers that first persist in-memory session transcripts to state.db
+    # (bounded, best-effort) before the normal shutdown story runs. Installed
+    # on the main thread BEFORE uvicorn's capture_signals() so uvicorn saves
+    # these as the "original" handlers and re-raises into them after its own
+    # graceful shutdown — kills outside the serve window are covered too.
+    try:
+        from tui_gateway.server import install_exit_flush_signal_handlers
+
+        install_exit_flush_signal_handlers()
+    except Exception as exc:
+        _log.debug("exit-flush signal handlers not installed: %s", exc)
+
     # ── #93608: machine-readable port-conflict detection ──────────────
     # uvicorn's own bind_socket() would catch the EADDRINUSE and exit 1
     # with a bare ERROR line — indistinguishable from "backend broken".
@@ -20619,7 +20685,14 @@ def start_server(
             # plain backend, not a dashboard, so it announces a neutral token;
             # `dashboard` keeps the legacy one. The desktop matches either.
             ready_token = "HERMES_BACKEND_READY" if headless else "HERMES_DASHBOARD_READY"
-            print(f"{ready_token} port={actual_port}", flush=True)
+            # tui_gateway.server (imported above for the flush-on-SIGTERM
+            # handlers, #94724) redirects sys.stdout→sys.stderr at import time
+            # to keep stray prints off the JSON-RPC protocol stream. fd 1 is
+            # still the real stdout — and the Desktop spawn watches
+            # child.stdout for this sentinel — so write to the fd, not to the
+            # (redirected) sys.stdout, or the desktop times out after 90s
+            # against a perfectly healthy backend (#96282).
+            _write_machine_sentinel_line(f"{ready_token} port={actual_port}")
             if headless:
                 # No SPA, and the JSON-RPC/WS endpoints are auth-gated — don't
                 # advertise a paste-and-connect URL, just announce the bind.

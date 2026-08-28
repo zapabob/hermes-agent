@@ -32,7 +32,13 @@ import { type ElectronApplication, expect, type Page, test } from './test'
 const CAPTION = 'E2E attached image must survive a relaunch'
 const IMAGE_DIR = 'Application Support/e2e shots'
 const IMAGE_NAME = 'e2e capture.png'
-const NATIVE_IMAGE_CONFIG = 'agent:\n  image_input_mode: native'
+const NATIVE_IMAGE_CONFIG = [
+  'agent:',
+  '  image_input_mode: native',
+  'auxiliary:',
+  '  title_generation:',
+  '    enabled: false',
+].join('\n')
 
 /** A 160x100 framed magenta block — small, but visible in the screenshots. */
 const PNG_BASE64 =

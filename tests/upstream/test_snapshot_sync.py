@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -82,7 +83,7 @@ def test_report_only_is_deterministic_and_read_only(
     assert not (repo / "_docs" / "upstream-integration-20260826.md").exists()
 
 
-def test_apply_writes_only_reports(
+def test_apply_writes_campaign_metadata(
     divergent_repo: tuple[Path, str, str],
 ) -> None:
     module = _load_module()
@@ -104,6 +105,14 @@ def test_apply_writes_only_reports(
     ledger = (repo / "UPSTREAM_ADOPTION.yaml").read_text(encoding="utf-8")
     assert f'upstream_head_sha: "{upstream}"' in ledger
     assert "commit_count: 1" in ledger
+    snapshot = json.loads(
+        (repo / ".codex" / "UPSTREAM_SNAPSHOT.json").read_text(encoding="utf-8")
+    )
+    assert snapshot["upstream_head_sha"] == upstream
+    assert snapshot["downstream_start_sha"] == downstream
+    assert snapshot["merge_base_sha"] == _git(repo, "merge-base", downstream, upstream)
+    assert snapshot["captured_at"] == "2026-08-26T18:25:00+09:00"
+    assert (repo / "_docs" / "upstream-integration-20260826.md").is_file()
     assert _git(repo, "rev-parse", "HEAD") == upstream
 
 

@@ -9,7 +9,7 @@ reset, cleaned, stashed, or incorporated implicitly.
 ## Frozen input
 
 The only permitted upstream input for this campaign is
-`1fe0f2f3ac9748ce799272eb93bee2937b5ab802`. Run
+`5fc308a70719a83cccdbba4c0e39c23f5a8239d5`. Run
 `scripts/upstream/snapshot_sync.py --upstream-sha <sha> --downstream-ref <ref>
 --report-only` before semantic integration. The helper must not resolve a
 moving branch.

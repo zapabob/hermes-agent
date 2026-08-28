@@ -19,6 +19,12 @@ export interface PoolEvictionEntry {
   process?: unknown
 }
 
+export const DEFAULT_POOL_KEEPALIVE_FRESH_MS = 4 * 60_000
+
+export function resolvePoolKeepaliveFreshMs(value: string | undefined): number {
+  return Math.max(120_000, Number(value) || DEFAULT_POOL_KEEPALIVE_FRESH_MS)
+}
+
 /**
  * Pick which pool keys the LRU cap should evict so that at most `keep`
  * SPAWNED backends remain. Only entries with a live child process count

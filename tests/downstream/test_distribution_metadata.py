@@ -9,6 +9,7 @@ import tomllib
 
 import pytest
 
+from downstream import UPSTREAM_SNAPSHOT_SHA
 from downstream.distribution import (
     distribution_version_lines,
     install_script_url,
@@ -27,9 +28,7 @@ def test_distribution_metadata_is_the_downstream_product_authority() -> None:
     assert distribution.display_name == "Hermes Agent Windows Workstation Edition"
     assert distribution.version == "0.20.5-win.1"
     assert distribution.repository.slug == "zapabob/hermes-agent-windows"
-    assert distribution.upstream.snapshot_sha == (
-        "1fe0f2f3ac9748ce799272eb93bee2937b5ab802"
-    )
+    assert distribution.upstream.snapshot_sha == UPSTREAM_SNAPSHOT_SHA
     assert distribution.platform.tier == 1
     assert distribution.platform.architectures == ("x64",)
     assert distribution.channels.default == "stable"
@@ -72,7 +71,7 @@ def test_version_lines_identify_distribution_snapshot_and_checkout() -> None:
 
     assert lines == (
         "Distribution: Hermes Agent Windows Workstation Edition 0.20.5-win.1",
-        "Frozen upstream: 1fe0f2f3ac97",
+        f"Frozen upstream: {UPSTREAM_SNAPSHOT_SHA[:12]}",
         "Downstream revision: bbbbbbbbbbbb",
         "Update channel: stable",
     )
