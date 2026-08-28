@@ -1470,6 +1470,29 @@ def _agent_browser_argv(browser_cmd: str) -> list:
     return [browser_cmd]
 
 
+def _run_agent_browser_capture(argv: list[str], timeout: float):
+    kwargs = {
+        "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
+        "timeout": timeout,
+        "env": _build_browser_env(),
+    }
+    if not _is_windows():
+        return subprocess.run(argv, capture_output=True, **kwargs)
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as stdout_file, \
+         tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as stderr_file:
+        proc = subprocess.run(argv, stdout=stdout_file, stderr=stderr_file, **kwargs)
+        stdout_file.seek(0)
+        stderr_file.seek(0)
+        return subprocess.CompletedProcess(
+            argv,
+            proc.returncode,
+            stdout=stdout_file.read(),
+            stderr=stderr_file.read(),
+        )
+
+
 def _cdp_http_ready(http_cdp: str) -> bool:
     """True when an ``http://host:port`` CDP discovery root answers."""
     try:
@@ -1493,9 +1516,9 @@ def _agent_browser_get_cdp(session_name: str) -> Optional[str]:
     except FileNotFoundError:
         return None
     try:
-        proc = subprocess.run(
+        proc = _run_agent_browser_capture(
             [*_agent_browser_argv(browser_cmd), "--session", session_name, "get", "cdp-url"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15, env=_build_browser_env(),
+            timeout=15,
         )
     except (subprocess.SubprocessError, OSError) as e:
         logger.debug("real-profile get cdp-url failed: %s", e)
@@ -1533,9 +1556,9 @@ def _agent_browser_close_session(session_name: str) -> None:
     except FileNotFoundError:
         return
     try:
-        subprocess.run(
+        _run_agent_browser_capture(
             [*_agent_browser_argv(browser_cmd), "--session", session_name, "close"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15, env=_build_browser_env(),
+            timeout=15,
         )
     except (subprocess.SubprocessError, OSError) as e:
         logger.debug("real-profile session close failed: %s", e)
@@ -1681,10 +1704,9 @@ def _real_profile_cdp() -> tuple:
         # (visible window) and equally fine, so no flag either way.
         argv += ["open", "about:blank"]
         try:
-            proc = subprocess.run(
-                argv, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            proc = _run_agent_browser_capture(
+                argv,
                 timeout=_get_open_command_timeout(first_open=True),
-                env=_build_browser_env(),
             )
         except subprocess.TimeoutExpired:
             return None, (

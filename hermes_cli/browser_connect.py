@@ -738,14 +738,44 @@ def _profile_dirs_from_cmdline(cmd: list[str]) -> tuple[set[str], bool]:
     return found, malformed
 
 
+def _default_profile_browser(src: str) -> str | None:
+    if platform.system() != "Windows":
+        return None
+    target = _normalized_profile_path(src)
+    for browser in _CHROMIUM_BROWSERS:
+        data_dir = real_profile_data_dir(browser, "Windows")
+        if data_dir and _normalized_profile_path(data_dir) == target:
+            return browser
+    return None
+
+
+def _is_browser_root_process(
+    browser: str,
+    info: dict,
+    cmd: list[str],
+    profile_dirs: set[str],
+) -> bool:
+    if profile_dirs or any(str(arg).casefold().startswith("--type=") for arg in cmd):
+        return False
+    expected = chromium_executable(browser, "Windows")
+    executable = info.get("exe") or (cmd[0] if cmd else "")
+    return bool(
+        expected
+        and executable
+        and _normalized_profile_path(str(executable))
+        == _normalized_profile_path(expected)
+    )
+
+
 def _scan_processes_holding_profile(src: str):
     """Return verified profile-bound browser processes and ambiguity state."""
     import psutil
 
     target = _normalized_profile_path(src)
+    default_browser = _default_profile_browser(src)
     matched = []
     ambiguous = False
-    for proc in psutil.process_iter(["name", "cmdline"]):
+    for proc in psutil.process_iter(["name", "cmdline", "exe"]):
         try:
             info = proc.info
             raw_cmd = info.get("cmdline")
@@ -763,9 +793,22 @@ def _scan_processes_holding_profile(src: str):
         if malformed:
             ambiguous = True
             continue
-        if target in profile_dirs:
+        if target in profile_dirs or (
+            default_browser
+            and _is_browser_root_process(default_browser, info, cmd, profile_dirs)
+        ):
             matched.append(proc)
     return matched, ambiguous
+
+
+def _default_profile_is_running(src: str) -> bool:
+    if not _default_profile_browser(src):
+        return False
+    try:
+        matched, ambiguous = _scan_processes_holding_profile(src)
+    except ImportError:
+        return False
+    return bool(matched) or ambiguous
 
 
 def _processes_holding_profile(src: str):
@@ -869,7 +912,7 @@ def snapshot_real_profile(browser: str, src: str | None = None) -> tuple[str | N
     # deny-all (Windows), and a blocking file op on it can hang the launch for
     # minutes. On POSIX this never trips (no mandatory locking) so
     # copy-while-running still works.
-    if _profile_is_locked(src, source_profile):
+    if _profile_is_locked(src, source_profile) or _default_profile_is_running(src):
         # NEVER kill from here. Closing the user's browser is destructive and
         # must be an explicit, per-attempt, user-approved step — not a silent
         # side effect of a snapshot. So we always BLOCK when locked and let the

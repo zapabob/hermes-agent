@@ -177,6 +177,24 @@ class TestRealProfileCdpLaunch:
         assert cdp == "http://127.0.0.1:41000"
         self._reset()
 
+    def test_windows_agent_browser_capture_uses_files_not_pipes(self):
+        import tools.browser_tool as bt
+
+        captured = {}
+
+        def fake_run(argv, **kwargs):
+            captured.update(kwargs)
+            return Mock(returncode=0)
+
+        with patch.object(bt, "_is_windows", return_value=True), \
+             patch.object(bt.subprocess, "run", side_effect=fake_run):
+            proc = bt._run_agent_browser_capture(["agent-browser", "open"], timeout=5)
+
+        assert proc.returncode == 0
+        assert "capture_output" not in captured
+        assert captured["stdout"] is not bt.subprocess.PIPE
+        assert captured["stderr"] is not bt.subprocess.PIPE
+
     def test_launch_never_passes_headless(self, tmp_path):
         """--headless would use a separate cookie store → 0 real cookies."""
         import tools.browser_tool as bt
@@ -817,6 +835,55 @@ class TestReviewRound3:
         assert len(matched) == 1
         assert matched[0].info["name"] == "chrome.exe"
         assert f"--user-data-dir={ud}" in " ".join(matched[0].info["cmdline"])
+
+    def test_windows_default_profile_matches_exact_browser_root(self, monkeypatch):
+        import hermes_cli.browser_connect as bc
+
+        class FakeProc:
+            def __init__(self, name, cmdline, exe):
+                self.info = {"name": name, "cmdline": cmdline, "exe": exe}
+
+        src = r"C:\Users\alice\AppData\Local\Microsoft\Edge\User Data"
+        edge = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+        procs = [
+            FakeProc("msedge.exe", [edge], edge),
+            FakeProc("msedge.exe", [edge, "--type=renderer"], edge),
+            FakeProc("chrome.exe", [r"C:\Other\chrome.exe"], r"C:\Other\chrome.exe"),
+        ]
+
+        class FakePsutil:
+            NoSuchProcess = type("E", (Exception,), {})
+            AccessDenied = type("E2", (Exception,), {})
+
+            def process_iter(self, attrs=None):
+                return iter(procs)
+
+        import sys as _sys
+        monkeypatch.setitem(_sys.modules, "psutil", FakePsutil())
+        monkeypatch.setattr(bc.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(bc, "real_profile_data_dir", lambda browser, system=None: src if browser == "edge" else None)
+        monkeypatch.setattr(bc, "chromium_executable", lambda browser, system=None: edge if browser == "edge" else None)
+        matched, ambiguous = bc._scan_processes_holding_profile(src)
+        assert ambiguous is False
+        assert matched == [procs[0]]
+
+    def test_snapshot_blocks_running_default_browser_when_cookie_db_is_readable(
+        self, tmp_path, monkeypatch
+    ):
+        import hermes_cli.browser_connect as bc
+
+        src = self._multi(tmp_path / "real")
+        monkeypatch.setattr(bc, "get_hermes_home", lambda: tmp_path / "hh")
+        monkeypatch.setattr(bc, "_profile_is_locked", lambda _src, _profile: False)
+        monkeypatch.setattr(bc, "_default_profile_is_running", lambda _src: True)
+        copytree = Mock(side_effect=AssertionError("copy must not start"))
+        monkeypatch.setattr(bc.shutil, "copytree", copytree)
+
+        dst, err = bc.snapshot_real_profile("edge", src=str(src))
+
+        assert dst is None
+        assert err and err.startswith(bc._PROFILE_LOCKED_PREFIX)
+        copytree.assert_not_called()
 
     def test_ambiguous_browser_identity_never_terminates(self, tmp_path, monkeypatch):
         import hermes_cli.browser_connect as bc
