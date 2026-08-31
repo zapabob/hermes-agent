@@ -1853,6 +1853,78 @@ class TestWebServerEndpoints:
         assert "sk-super-secret" not in yaml.safe_dump(cfg)
 
 
+    @pytest.mark.parametrize("make_default", [False, True])
+    @pytest.mark.parametrize("key_action", ["rotate", "clear", "migrate"])
+    def test_custom_endpoint_update_does_not_restore_a_stale_model_key(
+        self,
+        make_default,
+        key_action,
+    ):
+        from hermes_cli.config import (
+            custom_endpoint_key_env,
+            get_config_path,
+            get_env_value,
+            invalidate_env_cache,
+        )
+
+        old_key = "sk-old-" + "o" * 24
+        new_key = "sk-new-" + "n" * 24
+        env_var = custom_endpoint_key_env("proxy")
+        raw = {
+            "model": {
+                "provider": "proxy",
+                "default": "m",
+                "base_url": "https://llm.example.com/v1",
+                "api_key": old_key,
+                "unrelated_setting": "preserve-me",
+            },
+            "providers": {
+                "proxy": {
+                    "name": "Proxy",
+                    "base_url": "https://llm.example.com/v1",
+                    "model": "m",
+                    "api_key": old_key,
+                    "models": {"m": {}},
+                }
+            },
+        }
+        get_config_path().write_text(yaml.safe_dump(raw), encoding="utf-8")
+        get_config_path().with_name(".env").write_text(
+            f"{env_var}={old_key}\n",
+            encoding="utf-8",
+        )
+        invalidate_env_cache()
+
+        payload = {
+            "id": "proxy",
+            "name": "Proxy",
+            "base_url": "https://llm.example.com/v1",
+            "model": "m",
+            "make_default": make_default,
+        }
+        if key_action == "rotate":
+            payload["api_key"] = new_key
+        elif key_action == "clear":
+            payload["api_key"] = "   "
+
+        response = self.client.post("/api/providers/custom-endpoints", json=payload)
+
+        assert response.status_code == 200
+        final_raw = yaml.safe_load(get_config_path().read_text(encoding="utf-8"))
+        serialized = yaml.safe_dump(final_raw)
+        assert old_key not in serialized
+        assert new_key not in serialized
+        assert "api_key" not in final_raw["model"]
+        assert final_raw["model"]["unrelated_setting"] == "preserve-me"
+        assert "api_key" not in final_raw["providers"]["proxy"]
+        if key_action == "clear":
+            assert "key_env" not in final_raw["providers"]["proxy"]
+            assert not get_env_value(env_var)
+        else:
+            assert final_raw["providers"]["proxy"]["key_env"] == env_var
+            assert get_env_value(env_var) == (new_key if key_action == "rotate" else old_key)
+
+
     def test_custom_endpoint_save_leaves_a_hand_written_env_ref_alone(self, monkeypatch):
         """``api_key: ${MY_KEY}`` is already safe — don't copy it elsewhere.
 

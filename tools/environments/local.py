@@ -759,7 +759,10 @@ def hermes_subprocess_env(
             key: value
             for key, value in os.environ.items()
             if key.upper() in _STRICT_SUBPROCESS_ENV_KEYS
-            or key.upper().startswith("LC_")
+            or (
+                key.upper().startswith("LC_")
+                and not _CREDENTIAL_ENV_NAME_RE.search(key.upper())
+            )
         }
     else:
         env = os.environ.copy()

@@ -8841,14 +8841,14 @@ def _write_custom_endpoint(cfg: Dict[str, Any], body: CustomEndpointUpdate) -> T
     if submitted_key:
         from hermes_cli.credential_lifecycle import save_provider_env_credential
 
-        save_provider_env_credential(env_var, submitted_key)
+        save_provider_env_credential(env_var, submitted_key, loaded_config=cfg)
         entry["key_env"] = env_var
         entry.pop("api_key", None)
     elif submitted_key is not None:
         # Blank field means "clear the key", not "leave it alone".
         from hermes_cli.credential_lifecycle import remove_provider_env_credential
 
-        remove_provider_env_credential(env_var)
+        remove_provider_env_credential(env_var, loaded_config=cfg)
         entry.pop("key_env", None)
         entry.pop("api_key", None)
     elif str(entry.get("api_key") or "").strip() and not _config_api_key_is_env_ref(endpoint_id):
@@ -8858,7 +8858,11 @@ def _write_custom_endpoint(cfg: Dict[str, Any], body: CustomEndpointUpdate) -> T
         # having to re-enter the key.
         from hermes_cli.credential_lifecycle import save_provider_env_credential
 
-        save_provider_env_credential(env_var, entry["api_key"].strip())
+        save_provider_env_credential(
+            env_var,
+            entry["api_key"].strip(),
+            loaded_config=cfg,
+        )
         entry["key_env"] = env_var
         entry.pop("api_key", None)
 

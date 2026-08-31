@@ -204,6 +204,13 @@ test('desktop updater env excludes parent credentials and unrelated values', () 
       OPENCODE_API_KEY: 'opencode-test-canary',
       GITHUB_TOKEN: 'ghp_test_canary',
       HF_TOKEN: 'hf_test_canary',
+      LC_ALL: 'C.UTF-8',
+      LC_CTYPE: 'en_US.UTF-8',
+      LC_MESSAGES: 'C',
+      LC_API_KEY: 'lc-api-key-canary',
+      lc_secret: 'lc-secret-canary',
+      LC_TOKEN_CACHE: 'lc-token-canary',
+      LC_PASSWORD: 'lc-password-canary',
       UNRELATED_PARENT_SETTING: 'must-not-leak'
     },
     extra: {
@@ -220,6 +227,9 @@ test('desktop updater env excludes parent credentials and unrelated values', () 
   assert.equal(env.Path, undefined)
   assert.equal(env.HERMES_HOME, 'C:\\Users\\test\\.hermes')
   assert.equal(env.HERMES_UPDATE_STARTED_AT, '1770000000')
+  assert.equal(env.LC_ALL, 'C.UTF-8')
+  assert.equal(env.LC_CTYPE, 'en_US.UTF-8')
+  assert.equal(env.LC_MESSAGES, 'C')
 
   for (const key of [
     'HERMES_TEST_SECRET_CANARY',
@@ -229,6 +239,10 @@ test('desktop updater env excludes parent credentials and unrelated values', () 
     'OPENCODE_API_KEY',
     'GITHUB_TOKEN',
     'HF_TOKEN',
+    'LC_API_KEY',
+    'lc_secret',
+    'LC_TOKEN_CACHE',
+    'LC_PASSWORD',
     'UNRELATED_PARENT_SETTING'
   ]) {
     assert.equal(env[key], undefined, `${key} must not cross the updater boundary`)

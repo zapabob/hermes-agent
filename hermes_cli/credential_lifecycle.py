@@ -107,7 +107,80 @@ def _prune_env_pool_entries(env_var: str) -> List[str]:
     return pruned
 
 
-def _scrub_config_yaml_mirrors(old_value: str) -> List[str]:
+def _scrub_config_mapping_mirrors(
+    user_config: Dict[str, Any],
+    old_value: str,
+    *,
+    loaded_config: Dict[str, Any] | None = None,
+) -> List[str]:
+    """Remove exact-value credential mirrors from raw and loaded config maps.
+
+    Decisions are made only from ``user_config``, the unexpanded YAML mapping.
+    When a matching raw path is removed, the same path is removed from the
+    already-loaded mapping so a later ``save_config(loaded_config)`` cannot
+    restore it. This deliberately preserves raw ``${VAR}`` references even
+    when their expanded in-memory value happens to equal ``old_value``.
+    """
+    if not old_value:
+        return []
+
+    touched: List[str] = []
+
+    def _fix(section: Any, key_path: str, loaded_section: Any = None) -> None:
+        if not isinstance(section, dict):
+            return
+        # "api" is the legacy alias for model.api_key kept by older configs.
+        for field in ("api_key", "api"):
+            current = section.get(field)
+            if isinstance(current, str) and current == old_value:
+                section.pop(field, None)
+                if isinstance(loaded_section, dict):
+                    loaded_section.pop(field, None)
+                touched.append(f"{key_path}.{field}")
+
+    loaded_model = (
+        loaded_config.get("model") if isinstance(loaded_config, dict) else None
+    )
+    _fix(user_config.get("model"), "model", loaded_model)
+
+    aux = user_config.get("auxiliary")
+    loaded_aux = (
+        loaded_config.get("auxiliary") if isinstance(loaded_config, dict) else None
+    )
+    if isinstance(aux, dict):
+        for task, slot_cfg in aux.items():
+            loaded_slot = loaded_aux.get(task) if isinstance(loaded_aux, dict) else None
+            _fix(slot_cfg, f"auxiliary.{task}", loaded_slot)
+
+    custom = user_config.get("custom_providers")
+    loaded_custom = (
+        loaded_config.get("custom_providers")
+        if isinstance(loaded_config, dict)
+        else None
+    )
+    if isinstance(custom, list):
+        for idx, entry in enumerate(custom):
+            loaded_entry = (
+                loaded_custom[idx]
+                if isinstance(loaded_custom, list) and idx < len(loaded_custom)
+                else None
+            )
+            _fix(entry, f"custom_providers.{idx}", loaded_entry)
+    elif isinstance(custom, dict):
+        for name, entry in custom.items():
+            loaded_entry = (
+                loaded_custom.get(name) if isinstance(loaded_custom, dict) else None
+            )
+            _fix(entry, f"custom_providers.{name}", loaded_entry)
+
+    return touched
+
+
+def _scrub_config_yaml_mirrors(
+    old_value: str,
+    *,
+    loaded_config: Dict[str, Any] | None = None,
+) -> List[str]:
     """Remove config.yaml api_key copies that hold ``old_value``.
 
     Value-matched on purpose: we only touch a config entry when it provably
@@ -139,32 +212,11 @@ def _scrub_config_yaml_mirrors(old_value: str) -> List[str]:
     if not isinstance(user_config, dict):
         return []
 
-    touched: List[str] = []
-
-    def _fix(section: Any, key_path: str) -> None:
-        if not isinstance(section, dict):
-            return
-        # "api" is the legacy alias for model.api_key kept by older configs.
-        for field in ("api_key", "api"):
-            current = section.get(field)
-            if isinstance(current, str) and current == old_value:
-                section.pop(field, None)
-                touched.append(f"{key_path}.{field}")
-
-    _fix(user_config.get("model"), "model")
-
-    aux = user_config.get("auxiliary")
-    if isinstance(aux, dict):
-        for task, slot_cfg in aux.items():
-            _fix(slot_cfg, f"auxiliary.{task}")
-
-    custom = user_config.get("custom_providers")
-    if isinstance(custom, list):
-        for idx, entry in enumerate(custom):
-            _fix(entry, f"custom_providers.{idx}")
-    elif isinstance(custom, dict):
-        for name, entry in custom.items():
-            _fix(entry, f"custom_providers.{name}")
+    touched = _scrub_config_mapping_mirrors(
+        user_config,
+        old_value,
+        loaded_config=loaded_config,
+    )
 
     if touched:
         require_readable_config_before_write(config_path)
@@ -207,7 +259,12 @@ def purge_env_credential_references(
     return {"pool_pruned": pruned, "providers": providers}
 
 
-def save_provider_env_credential(env_var: str, value: str) -> Dict[str, Any]:
+def save_provider_env_credential(
+    env_var: str,
+    value: str,
+    *,
+    loaded_config: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     """Save/update a credential in ``.env`` and remove every legacy copy.
 
     After the ``.env`` write, any config.yaml field that held the previous
@@ -227,7 +284,10 @@ def save_provider_env_credential(env_var: str, value: str) -> Dict[str, Any]:
         if not candidate or candidate in scrubbed_values:
             continue
         scrubbed_values.append(candidate)
-        for path in _scrub_config_yaml_mirrors(candidate):
+        for path in _scrub_config_yaml_mirrors(
+            candidate,
+            loaded_config=loaded_config,
+        ):
             if path not in config_updates:
                 config_updates.append(path)
 
@@ -245,7 +305,11 @@ def save_provider_env_credential(env_var: str, value: str) -> Dict[str, Any]:
     return {"ok": True, "key": env_var, "config_updates": config_updates}
 
 
-def remove_provider_env_credential(env_var: str) -> Dict[str, Any]:
+def remove_provider_env_credential(
+    env_var: str,
+    *,
+    loaded_config: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     """Remove a credential from EVERY store it lives in.
 
     Clears the ``.env`` entry (and process env), prunes env-seeded
@@ -262,7 +326,11 @@ def remove_provider_env_credential(env_var: str) -> Dict[str, Any]:
     old_value = load_env().get(env_var)
     removed_from_env = remove_env_value(env_var)
     refs = purge_env_credential_references(env_var)
-    config_scrubbed = _scrub_config_yaml_mirrors(old_value) if old_value else []
+    config_scrubbed = (
+        _scrub_config_yaml_mirrors(old_value, loaded_config=loaded_config)
+        if old_value
+        else []
+    )
 
     return {
         "ok": True,

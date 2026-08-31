@@ -157,6 +157,75 @@ def test_first_save_removes_matching_legacy_config_secret(hermes_home):
     assert canary not in hermes_home.joinpath("config.yaml").read_text(encoding="utf-8")
 
 
+def test_save_scrubs_the_same_raw_paths_from_the_loaded_config(hermes_home):
+    canary = "nvapi-" + "r" * 24
+    unrelated = "nvapi-" + "s" * 24
+    _write_config(
+        hermes_home,
+        "model:\n"
+        "  provider: nvidia\n"
+        f"  api_key: {canary}\n"
+        "auxiliary:\n"
+        "  vision:\n"
+        f"    api_key: {canary}\n"
+        "custom_providers:\n"
+        "  - name: primary\n"
+        f"    api_key: {canary}\n"
+        "  - name: unrelated\n"
+        f"    api_key: {unrelated}\n",
+    )
+    loaded = {
+        "model": {"provider": "nvidia", "api_key": canary},
+        "auxiliary": {"vision": {"api_key": canary}},
+        "custom_providers": [
+            {"name": "primary", "api_key": canary},
+            {"name": "unrelated", "api_key": unrelated},
+        ],
+    }
+
+    from hermes_cli.credential_lifecycle import save_provider_env_credential
+
+    result = save_provider_env_credential(
+        "NVIDIA_API_KEY",
+        canary,
+        loaded_config=loaded,
+    )
+
+    assert result["config_updates"] == [
+        "model.api_key",
+        "auxiliary.vision.api_key",
+        "custom_providers.0.api_key",
+    ]
+    assert "api_key" not in loaded["model"]
+    assert "api_key" not in loaded["auxiliary"]["vision"]
+    assert "api_key" not in loaded["custom_providers"][0]
+    assert loaded["custom_providers"][1]["api_key"] == unrelated
+
+
+def test_save_preserves_raw_env_reference_in_loaded_config(hermes_home, monkeypatch):
+    canary = "nvapi-" + "t" * 24
+    monkeypatch.setenv("MY_NVIDIA_KEY", canary)
+    _write_config(
+        hermes_home,
+        "model:\n"
+        "  provider: nvidia\n"
+        "  api_key: ${MY_NVIDIA_KEY}\n",
+    )
+    loaded = {"model": {"provider": "nvidia", "api_key": canary}}
+
+    from hermes_cli.credential_lifecycle import save_provider_env_credential
+
+    result = save_provider_env_credential(
+        "NVIDIA_API_KEY",
+        canary,
+        loaded_config=loaded,
+    )
+
+    assert result["config_updates"] == []
+    assert loaded["model"]["api_key"] == canary
+    assert "${MY_NVIDIA_KEY}" in hermes_home.joinpath("config.yaml").read_text(encoding="utf-8")
+
+
 def test_save_is_scoped_to_active_profile(monkeypatch, tmp_path):
     from hermes_cli.config import invalidate_env_cache, load_env
     from hermes_cli.credential_lifecycle import save_provider_env_credential

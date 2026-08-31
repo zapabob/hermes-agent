@@ -57,8 +57,7 @@ const DESKTOP_UPDATER_ENV_KEYS = new Set([
   'XDG_DATA_HOME'
 ])
 
-const CREDENTIAL_ENV_NAME =
-  /(?:^|_)(?:API_KEY|ACCESS_KEY|AUTH|CREDENTIALS?|PASSWORD|PRIVATE_KEY|SECRET|TOKEN)(?:$|_)/i
+const CREDENTIAL_ENV_NAME = /(?:^|_)(?:API_KEY|ACCESS_KEY|AUTH|CREDENTIALS?|PASSWORD|PRIVATE_KEY|SECRET|TOKEN)(?:$|_)/i
 
 interface DesktopUpdaterEnvOptions {
   currentEnv?: NodeJS.ProcessEnv
@@ -75,7 +74,8 @@ function buildDesktopUpdaterEnv({
     Object.entries(currentEnv).filter(
       ([key, value]) =>
         typeof value === 'string' &&
-        (DESKTOP_UPDATER_ENV_KEYS.has(key.toUpperCase()) || key.toUpperCase().startsWith('LC_'))
+        (DESKTOP_UPDATER_ENV_KEYS.has(key.toUpperCase()) ||
+          (key.toUpperCase().startsWith('LC_') && !CREDENTIAL_ENV_NAME.test(key)))
     )
   )
 

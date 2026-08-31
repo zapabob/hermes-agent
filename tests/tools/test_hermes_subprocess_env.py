@@ -84,6 +84,29 @@ class TestAllowlistOnly:
         for key in canaries:
             assert key not in result, f"{key} leaked through the strict allowlist"
 
+    def test_locale_variables_survive_without_credential_shaped_lc_names(self):
+        locales = {
+            "LC_ALL": "C.UTF-8",
+            "LC_CTYPE": "en_US.UTF-8",
+            "LC_MESSAGES": "C",
+        }
+        credential_canaries = {
+            "LC_API_KEY": "must-not-cross-boundary",
+            "lc_secret": "must-not-cross-boundary",
+            "LC_TOKEN_CACHE": "must-not-cross-boundary",
+            "LC_PASSWORD": "must-not-cross-boundary",
+        }
+
+        result = _build(
+            {**locales, **credential_canaries},
+            allowlist_only=True,
+        )
+
+        for key, value in locales.items():
+            assert result[key] == value
+        for key in credential_canaries:
+            assert key not in result
+
     def test_explicit_non_secret_child_values_are_supported(self):
         result = _build(
             allowlist_only=True,
