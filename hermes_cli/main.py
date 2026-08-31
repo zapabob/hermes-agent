@@ -5411,7 +5411,10 @@ def _prompt_api_key(
     cleared the key and is now unconfigured.
     """
     from hermes_cli.auth import LMSTUDIO_NOAUTH_PLACEHOLDER
-    from hermes_cli.config import save_env_value
+    from hermes_cli.credential_lifecycle import (
+        remove_provider_env_credential,
+        save_provider_env_credential,
+    )
     from hermes_cli.secret_prompt import masked_secret_prompt
 
     key_env = pconfig.api_key_env_vars[0] if pconfig.api_key_env_vars else ""
@@ -5439,7 +5442,7 @@ def _prompt_api_key(
         if not new_key:
             print("Cancelled.")
             return "", True
-        save_env_value(key_env, new_key)
+        save_provider_env_credential(key_env, new_key)
         print("API key saved.")
         print()
         return new_key, False
@@ -5471,13 +5474,13 @@ def _prompt_api_key(
             print("  No change.")
             print()
             return existing_key, False
-        save_env_value(key_env, new_key)
+        save_provider_env_credential(key_env, new_key)
         print("  API key updated.")
         print()
         return new_key, False
 
     if choice.startswith("c") and not pool_backed:
-        save_env_value(key_env, "")
+        remove_provider_env_credential(key_env)
         print(
             f"  API key cleared.  Re-run `hermes setup` to configure {pconfig.name} again."
         )

@@ -77,7 +77,7 @@ export const PROVIDER_GROUPS: ProviderPrefix[] = [
   {
     prefix: 'XAI_',
     name: 'xAI',
-    description: 'Grok models (use OAuth for SuperGrok / Premium+)',
+    description: 'Grok API keys; Grok plan sign-in is a separate OAuth option',
     docsUrl: 'https://console.x.ai/',
     priority: 3
   },

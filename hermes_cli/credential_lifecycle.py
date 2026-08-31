@@ -6,9 +6,9 @@ A provider API key can live in up to THREE stores at once:
     2. ``~/.hermes/auth.json`` →
        ``credential_pool.<provider>[*]``      — env-seeded pool entries
        (``source == "env:<VAR>"``) persisted by the pool loader
-    3. ``~/.hermes/config.yaml``              — inline mirrors written by the
-       custom-endpoint flows (``model.api_key``, ``auxiliary.<task>.api_key``,
-       ``custom_providers[*].api_key``)
+    3. ``~/.hermes/config.yaml``              — legacy inline copies written by
+       older custom-endpoint flows (``model.api_key``,
+       ``auxiliary.<task>.api_key``, ``custom_providers[*].api_key``)
 
 Historically the desktop/dashboard endpoints (PUT/DELETE ``/api/env``) and the
 TUI-gateway RPCs only mutated store 1. That divergence is the root cause of a
@@ -18,10 +18,10 @@ whole bug family:
       ``credential_pool`` entry (and ``provider_models_cache.json`` row)
       survives, so the provider keeps appearing in the model picker, even
       across restarts (the pool loader is additive-only).
-    * #62269 — updating a key rewrites ``.env`` but leaves the OLD key in a
-      higher-precedence ``config.yaml`` mirror (``model.api_key`` wins over
-      env at client construction), producing persistent 401s with a key the
-      UI no longer shows.
+    * #62269 — updating a key rewrites ``.env`` but leaves a credential in a
+      higher-precedence ``config.yaml`` copy (``model.api_key`` wins over env
+      at client construction), producing persistent 401s and exposing the
+      secret outside the profile secret store.
 
 This module is the single choke point: every surface that saves or removes a
 provider credential should route through :func:`save_provider_env_credential`
@@ -107,17 +107,17 @@ def _prune_env_pool_entries(env_var: str) -> List[str]:
     return pruned
 
 
-def _scrub_config_yaml_mirrors(old_value: str, new_value: str | None) -> List[str]:
-    """Reconcile config.yaml api_key mirrors that hold ``old_value``.
+def _scrub_config_yaml_mirrors(old_value: str) -> List[str]:
+    """Remove config.yaml api_key copies that hold ``old_value``.
 
     Value-matched on purpose: we only touch a config entry when it provably
     holds the SAME credential that just changed in ``.env`` — an independent
     key the user configured for a different endpoint is left alone.
 
-    ``new_value=None`` removes the mirror field; a string replaces it.
     Operates on the RAW user config (never the defaults-merged view) so the
-    write doesn't bake defaults into the user's file. Returns the dotted
-    paths that were updated (names only — never values).
+    write doesn't bake defaults into the user's file. Provider credentials
+    remain solely in the profile secret store. Returns the dotted paths that
+    were removed (names only — never values).
     """
     if not old_value:
         return []
@@ -148,10 +148,7 @@ def _scrub_config_yaml_mirrors(old_value: str, new_value: str | None) -> List[st
         for field in ("api_key", "api"):
             current = section.get(field)
             if isinstance(current, str) and current == old_value:
-                if new_value:
-                    section[field] = new_value
-                else:
-                    section.pop(field, None)
+                section.pop(field, None)
                 touched.append(f"{key_path}.{field}")
 
     _fix(user_config.get("model"), "model")
@@ -211,11 +208,11 @@ def purge_env_credential_references(
 
 
 def save_provider_env_credential(env_var: str, value: str) -> Dict[str, Any]:
-    """Save/update a credential in ``.env`` and reconcile every mirror.
+    """Save/update a credential in ``.env`` and remove every legacy copy.
 
-    After the ``.env`` write, any config.yaml mirror that held the PREVIOUS
-    value of this var (``model.api_key`` etc.) is updated to the new value so
-    a stale higher-precedence copy cannot shadow the rotation (#62269).
+    After the ``.env`` write, any config.yaml field that held the previous
+    value of this var (``model.api_key`` etc.) is removed so the profile secret
+    store remains authoritative and no higher-precedence copy shadows it.
     Suppressed ``env:<VAR>`` pool sources are re-enabled so a deliberate
     re-add through the UI behaves like ``hermes auth add``.
     """
@@ -225,8 +222,14 @@ def save_provider_env_credential(env_var: str, value: str) -> Dict[str, Any]:
     save_env_value(env_var, value)
 
     config_updates: List[str] = []
-    if value and old_value and old_value != value:
-        config_updates = _scrub_config_yaml_mirrors(old_value, value)
+    scrubbed_values: List[str] = []
+    for candidate in (old_value, value):
+        if not candidate or candidate in scrubbed_values:
+            continue
+        scrubbed_values.append(candidate)
+        for path in _scrub_config_yaml_mirrors(candidate):
+            if path not in config_updates:
+                config_updates.append(path)
 
     # A prior UI/CLI removal may have suppressed this env source; a fresh
     # save is an explicit re-add, so lift the suppression for every provider
@@ -259,7 +262,7 @@ def remove_provider_env_credential(env_var: str) -> Dict[str, Any]:
     old_value = load_env().get(env_var)
     removed_from_env = remove_env_value(env_var)
     refs = purge_env_credential_references(env_var)
-    config_scrubbed = _scrub_config_yaml_mirrors(old_value, None) if old_value else []
+    config_scrubbed = _scrub_config_yaml_mirrors(old_value) if old_value else []
 
     return {
         "ok": True,

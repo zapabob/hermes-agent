@@ -139,8 +139,8 @@ def build_models_payload(
     - ``include_unconfigured``: append ``CANONICAL_PROVIDERS`` rows that
       ``list_authenticated_providers`` didn't emit (TUI uses this to show
       the full provider universe in the picker).
-    - ``picker_hints``: add ``authenticated``/``auth_type``/``key_env``/
-      ``warning`` per row (TUI ``ModelPickerDialog`` shape).
+    - ``picker_hints``: add public authentication and access-contract hints per
+      row without exposing credential values (TUI ``ModelPickerDialog`` shape).
     - ``canonical_order``: reorder canonical-slug rows to
       ``CANONICAL_PROVIDERS`` declaration order; truly-custom rows go
       last (TUI display order).
@@ -811,8 +811,73 @@ def _raw_config_has_enabled_moa_preset() -> bool:
     return any(key in moa for key in legacy_keys) and bool(moa.get("enabled", True))
 
 
+def _provider_auth_details(
+    slug: str,
+    name: str,
+    auth_type: str,
+    key_env: str,
+) -> dict[str, str]:
+    if slug == "openai-codex":
+        return {
+            "auth_method": "subscription",
+            "auth_label": "ChatGPT subscription",
+            "access_note": (
+                "Uses official Codex sign-in and an eligible ChatGPT plan allowance. "
+                "OpenAI API billing is separate."
+            ),
+        }
+    if slug == "xai-oauth":
+        return {
+            "auth_method": "subscription",
+            "auth_label": "Grok plan subscription",
+            "access_note": (
+                "Uses official xAI OAuth and your Grok plan allowance. "
+                "xAI API credits and billing are separate."
+            ),
+        }
+    if _provider_is_keyless(slug):
+        return {
+            "auth_method": "keyless",
+            "auth_label": "Keyless free tier",
+            "access_note": (
+                "No credential is stored. Availability and limits are controlled "
+                f"by {name}."
+            ),
+        }
+    if auth_type == "api_key" and key_env:
+        return {
+            "auth_method": "byok_api_key",
+            "auth_label": "BYOK API key",
+            "access_note": (
+                "Stored in the active profile secret store. Requires a separate "
+                f"{name} API account or provider-issued free-tier key; usage and "
+                "limits follow that API contract."
+            ),
+        }
+    if auth_type.startswith("oauth"):
+        return {
+            "auth_method": "oauth",
+            "auth_label": "Provider account sign-in",
+            "access_note": (
+                "Uses the provider's official sign-in flow. API-key billing and "
+                "subscription entitlements remain separate."
+            ),
+        }
+    if auth_type == "virtual":
+        return {
+            "auth_method": "virtual",
+            "auth_label": "No separate authentication",
+            "access_note": "Uses credentials from the providers assigned to this mode.",
+        }
+    return {
+        "auth_method": "external",
+        "auth_label": "External provider authentication",
+        "access_note": "Availability follows the provider's configured authentication contract.",
+    }
+
+
 def _apply_picker_hints(rows: list[dict]) -> None:
-    """Add ``authenticated``/``auth_type``/``key_env``/``warning`` per row.
+    """Add credential-free authentication and access-contract hints per row.
 
     Mutates ``rows`` in-place. Rows already from
     ``list_authenticated_providers`` are marked ``authenticated=True``;
@@ -822,19 +887,10 @@ def _apply_picker_hints(rows: list[dict]) -> None:
     from hermes_cli.auth import PROVIDER_REGISTRY
 
     for row in rows:
-        if "authenticated" in row:
-            continue
-        # Distinguish authenticated rows (returned by
-        # list_authenticated_providers) from skeleton rows (from
-        # _append_unconfigured_rows). The skeleton rows have empty
-        # `models` AND source="canonical"; authenticated rows have
-        # populated `models` OR a non-canonical source.
         is_skeleton = row.get("source") == "canonical" and not row.get("models")
-        row["authenticated"] = not is_skeleton
-        if not is_skeleton or row.get("is_user_defined"):
-            continue
+        row.setdefault("authenticated", not is_skeleton)
         cfg = PROVIDER_REGISTRY.get(row["slug"])
-        auth_type = cfg.auth_type if cfg else "api_key"
+        auth_type = str(row.get("auth_type") or (cfg.auth_type if cfg else "api_key"))
         key_env = (
             cfg.api_key_env_vars[0]
             if (cfg and cfg.api_key_env_vars)
@@ -842,10 +898,28 @@ def _apply_picker_hints(rows: list[dict]) -> None:
         )
         row["auth_type"] = auth_type
         row["key_env"] = key_env
+        row.update(
+            _provider_auth_details(
+                str(row["slug"]),
+                str(row.get("name") or row["slug"]),
+                auth_type,
+                key_env,
+            )
+        )
+        if row.get("authenticated") is not False or row.get("is_user_defined"):
+            continue
+        if row["auth_method"] == "subscription":
+            row["warning"] = (
+                "sign in with the provider account; API keys use the separate API provider"
+            )
+            continue
+        if row["auth_method"] == "keyless":
+            row["warning"] = "no API key required; refresh models if none are listed"
+            continue
         row["warning"] = (
             f"paste {key_env} to activate"
             if auth_type == "api_key" and key_env
-            else f"run `hermes model` to configure ({auth_type})"
+            else "run `hermes model` to configure the official provider sign-in"
         )
 
 

@@ -200,6 +200,45 @@ describe('ModelSettings', () => {
     expect(startManualOnboarding).not.toHaveBeenCalled()
   })
 
+  it.each([
+    [
+      'openai-codex',
+      'OpenAI Codex',
+      'ChatGPT subscription',
+      'OpenAI API billing is separate.'
+    ],
+    [
+      'xai-oauth',
+      'xAI Grok',
+      'Grok plan subscription',
+      'xAI API credits and billing are separate.'
+    ]
+  ])(
+    'shows the authentication contract for %s',
+    async (slug, name, authLabel, accessNote) => {
+      getGlobalModelInfo.mockResolvedValueOnce({ provider: slug, model: '' })
+      getGlobalModelOptions.mockResolvedValueOnce({
+        providers: [
+          {
+            name,
+            slug,
+            models: [],
+            authenticated: false,
+            auth_type: 'oauth_external',
+            auth_method: 'subscription',
+            auth_label: authLabel,
+            access_note: accessNote
+          }
+        ]
+      })
+
+      await renderModelSettings()
+
+      expect(await screen.findByText(new RegExp(authLabel))).toBeTruthy()
+      expect(screen.getByText(new RegExp(accessNote.replace('.', '\\.')))).toBeTruthy()
+    }
+  )
+
   it('replaces the selected provider and model when the active profile changes', async () => {
     getGlobalModelInfo
       .mockResolvedValueOnce({ provider: 'custom', model: 'local-a' })

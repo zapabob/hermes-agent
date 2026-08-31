@@ -147,12 +147,6 @@ def gui_toolset_label(label: str) -> str:
 # who want it opt in via `hermes tools` → Video Generation, which walks
 # them through provider + model selection.
 #
-# X search is off by default for users without xAI credentials, but
-# auto-enables when SuperGrok OAuth tokens are stored OR XAI_API_KEY is
-# set — mirroring the HASS_TOKEN → homeassistant auto-enable below. The
-# `hermes tools` → X (Twitter) Search setup walks users through credential
-# setup. The tool's check_fn means the schema still won't appear to the
-# model if the credential later goes missing or expires.
 _DEFAULT_OFF_TOOLSETS = {"homeassistant", "spotify", "discord", "discord_admin", "video", "video_gen", "x_search", "a2a"}
 
 
@@ -166,16 +160,6 @@ _CONFIG_ONLY_TOOLSETS = {"stt"}
 
 
 def _xai_credentials_present() -> bool:
-    """Cheap, side-effect-free check for usable xAI credentials.
-
-    Used to auto-enable the ``x_search`` toolset when the user has either
-    completed xAI Grok OAuth (SuperGrok / Premium+) or set
-    ``XAI_API_KEY``. Does NOT hit the network — only inspects the local
-    auth store and environment. The tool's runtime ``check_fn`` still
-    gates schema registration if creds later expire or get revoked.
-    Also reused by ``provider_readiness_status`` for ``post_setup:
-    "xai_grok"`` picker rows (xAI TTS, Grok OAuth x_search).
-    """
     try:
         from hermes_cli.auth import _read_xai_oauth_tokens
 
@@ -592,15 +576,15 @@ TOOL_CATEGORIES = {
             "skill for authenticated X API reads and account actions. Both "
             "credential sources hit the same "
             "https://api.x.ai/v1/responses endpoint — pick whichever you "
-            "already have. SuperGrok OAuth is preferred when both are set "
-            "(uses your subscription quota instead of API spend)."
+            "already have. Official Grok plan OAuth is preferred when both "
+            "are set; direct xAI API credits and billing remain separate."
         ),
         "icon": "🐦",
         "providers": [
             {
-                "name": "xAI Grok OAuth (SuperGrok / Premium+)",
+                "name": "xAI Grok (official subscription OAuth)",
                 "badge": "subscription",
-                "tag": "Browser login at accounts.x.ai — no API key required",
+                "tag": "Official xAI account sign-in; no API key required",
                 "env_vars": [],
                 "post_setup": "xai_grok",
             },
@@ -2374,12 +2358,6 @@ def _run_post_setup(post_setup_key: str):
         _print_info("    Verify: hermes plugins list")
 
     elif post_setup_key == "xai_grok":
-        # Shared credential bootstrap for any picker entry that talks to xAI
-        # (TTS, Video Gen, future Image Gen, etc.). Accepts either a
-        # SuperGrok-tier OAuth bearer token (preferred — billed against the
-        # user's existing subscription) or a raw XAI_API_KEY from
-        # console.x.ai. The picker entries declare empty env_vars so we
-        # drive the full auth UX here.
         try:
             from hermes_cli.auth import get_xai_oauth_auth_status
             oauth_logged_in = bool(get_xai_oauth_auth_status().get("logged_in"))
@@ -2389,7 +2367,7 @@ def _run_post_setup(post_setup_key: str):
 
         if oauth_logged_in:
             _print_success(
-                "    xAI will use your xAI Grok OAuth (SuperGrok / Premium+) credentials"
+                "    xAI will use your official Grok plan sign-in credentials"
             )
             return
         if existing_api_key:
@@ -2403,7 +2381,7 @@ def _run_post_setup(post_setup_key: str):
                 prompt_choice,
                 prompt as _setup_prompt,
             )
-            from hermes_cli.config import save_env_value
+            from hermes_cli.credential_lifecycle import save_provider_env_credential
         except Exception as exc:
             _print_warning(f"    Could not load setup helpers: {exc}")
             _print_info("    Run later: hermes auth add xai-oauth   (or set XAI_API_KEY)")
@@ -2412,7 +2390,7 @@ def _run_post_setup(post_setup_key: str):
         idx = prompt_choice(
             "    How do you want xAI to authenticate?",
             choices=[
-                "Sign in with xAI Grok OAuth (SuperGrok / Premium+) — browser login",
+                "Sign in with your Grok plan through official xAI OAuth",
                 "Paste an xAI API key (console.x.ai)",
                 "Skip — configure later via `hermes auth add xai-oauth`",
             ],
@@ -2431,7 +2409,7 @@ def _run_post_setup(post_setup_key: str):
         elif idx == 1:
             api_key = _setup_prompt("    xAI API key", password=True)
             if api_key:
-                save_env_value("XAI_API_KEY", api_key)
+                save_provider_env_credential("XAI_API_KEY", api_key)
                 _print_success("    XAI_API_KEY saved")
             else:
                 _print_warning(

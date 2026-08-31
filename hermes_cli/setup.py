@@ -1096,11 +1096,6 @@ def _install_kittentts_deps() -> bool:
 
 
 def _xai_oauth_logged_in_for_setup() -> bool:
-    """True iff xAI Grok OAuth credentials are already stored locally.
-
-    Lets TTS / STT setup skip the API-key prompt for users who logged in
-    through ``hermes model`` -> xAI Grok OAuth (SuperGrok / Premium+).
-    """
     try:
         from hermes_cli.auth import get_xai_oauth_auth_status
 
@@ -1132,7 +1127,7 @@ def _run_xai_oauth_login_from_setup() -> bool:
 
     open_browser = not _is_remote_session()
     print()
-    print_info("Signing in to xAI Grok OAuth (SuperGrok / Premium+)...")
+    print_info("Signing in to your Grok plan through official xAI OAuth...")
     try:
         creds = _xai_oauth_device_code_login(open_browser=open_browser)
         _save_xai_oauth_tokens(
@@ -1260,17 +1255,12 @@ def _setup_tts_provider(config: dict):
                 selected = "edge"
 
     elif selected == "xai":
-        # Resolution order: existing OAuth tokens (free for SuperGrok subscribers
-        # via the Hermes auth store) > existing XAI_API_KEY > prompt the user.
-        # When neither is configured, offer both options instead of forcing the
-        # API-key path — xAI TTS works fine with OAuth bearer tokens too.
         oauth_logged_in = _xai_oauth_logged_in_for_setup()
         existing_api_key = get_env_value("XAI_API_KEY")
 
         if oauth_logged_in:
             print_success(
-                "xAI TTS will use your xAI Grok OAuth (SuperGrok / Premium+) "
-                "credentials"
+                "xAI TTS will use your official Grok plan sign-in credentials"
             )
         elif existing_api_key:
             print_success("xAI TTS will use your existing XAI_API_KEY")
@@ -1279,7 +1269,7 @@ def _setup_tts_provider(config: dict):
             choice_idx = prompt_choice(
                 "How do you want xAI TTS to authenticate?",
                 choices=[
-                    "Sign in with xAI Grok OAuth (SuperGrok / Premium+) — browser login",
+                    "Sign in with your Grok plan through official xAI OAuth",
                     "Paste an xAI API key (console.x.ai)",
                     "Skip → fallback to Edge TTS",
                 ],
@@ -1299,7 +1289,9 @@ def _setup_tts_provider(config: dict):
             elif choice_idx == 1:
                 api_key = prompt("xAI API key for TTS", password=True)
                 if api_key:
-                    save_env_value("XAI_API_KEY", api_key)
+                    from hermes_cli.credential_lifecycle import save_provider_env_credential
+
+                    save_provider_env_credential("XAI_API_KEY", api_key)
                     print_success("xAI TTS API key saved")
                 else:
                     from hermes_constants import display_hermes_home as _dhh

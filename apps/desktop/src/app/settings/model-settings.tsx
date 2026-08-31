@@ -858,6 +858,11 @@ export function ModelSettings({ onMainModelChanged, scopeProfile }: ModelSetting
             </>
           )}
         </div>
+        {selectedProviderRow?.auth_label && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            {`Authentication: ${selectedProviderRow.auth_label}. ${selectedProviderRow.access_note ?? ''}`.trim()}
+          </p>
+        )}
         {needsSetup && !setupIsApiKey && selectedProviderRow && (
           <p className="mt-2 text-xs text-muted-foreground">
             {selectedProviderRow?.auth_type === 'api_key'

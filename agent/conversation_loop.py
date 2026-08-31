@@ -6494,7 +6494,7 @@ def run_conversation(
                                     force=True,
                                 )
                                 agent._vprint(
-                                    f"{agent.log_prefix}      re-authenticate with xAI Grok OAuth (SuperGrok / Premium+) from `hermes model`.",
+                                    f"{agent.log_prefix}      re-authenticate with xAI Grok official subscription OAuth from `hermes model`.",
                                     force=True,
                                 )
                             else:  # nous

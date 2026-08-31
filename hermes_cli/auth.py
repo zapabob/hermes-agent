@@ -265,7 +265,7 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
     ),
     "openai-codex": ProviderConfig(
         id="openai-codex",
-        name="OpenAI Codex",
+        name="OpenAI Codex (ChatGPT subscription)",
         auth_type="oauth_external",
         inference_base_url=DEFAULT_CODEX_BASE_URL,
     ),
@@ -279,7 +279,7 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
     ),
     "xai-oauth": ProviderConfig(
         id="xai-oauth",
-        name="xAI Grok OAuth (SuperGrok / Premium+)",
+        name="xAI Grok (official subscription OAuth)",
         auth_type="oauth_external",
         inference_base_url=DEFAULT_XAI_OAUTH_BASE_URL,
     ),
@@ -4920,7 +4920,7 @@ def _read_xai_oauth_tokens(*, _lock: bool = True) -> Dict[str, Any]:
             state = global_state
     if not state:
         raise AuthError(
-            "No xAI OAuth credentials stored. Select xAI Grok OAuth (SuperGrok / Premium+) in `hermes model`.",
+            "No xAI OAuth credentials stored. Select xAI Grok subscription sign-in in `hermes model`.",
             provider="xai-oauth",
             code="xai_auth_missing",
             relogin_required=True,
@@ -5332,13 +5332,13 @@ def refresh_xai_oauth_pure(
             raise AuthError(
                 "xAI token refresh failed with HTTP 403."
                 + (f" Response: {detail}" if detail else "")
-                + " This OAuth account is not authorized for xAI API"
-                " access — xAI may be restricting API/OAuth use to"
-                " specific SuperGrok tiers despite the in-app"
-                " subscription being active. Re-logging in won't"
-                " change that; set ``XAI_API_KEY`` and switch to"
-                " ``provider: xai`` (API-key path) if available, or"
-                " upgrade your subscription at https://x.ai/grok.",
+                + " This official OAuth account is not authorized for this"
+                " request. Its Grok plan tier may be ineligible for the API or"
+                " model, or its allowance may be exhausted. Re-logging in"
+                " will not change an entitlement decision. A direct"
+                " ``XAI_API_KEY`` uses separate xAI API credits and billing;"
+                " switch to ``provider: xai`` to use that contract if"
+                " available.",
                 provider="xai-oauth",
                 code="xai_oauth_tier_denied",
                 relogin_required=False,
@@ -8485,7 +8485,7 @@ def _login_xai_oauth(
             pass
 
     print()
-    print("Signing in to xAI Grok OAuth (SuperGrok / Premium+)...")
+    print("Signing in with your Grok plan through official xAI OAuth...")
     print("(Hermes creates its own local OAuth session)")
     print()
 

@@ -463,6 +463,9 @@ export interface ToolsConfigureResponse {
 // ── Model picker ─────────────────────────────────────────────────────
 
 export interface ModelOptionProvider {
+  access_note?: string
+  auth_label?: string
+  auth_method?: 'byok_api_key' | 'external' | 'keyless' | 'oauth' | 'subscription' | 'virtual'
   auth_type?: string
   authenticated?: boolean
   is_current?: boolean

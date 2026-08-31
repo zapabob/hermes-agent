@@ -8839,12 +8839,16 @@ def _write_custom_endpoint(cfg: Dict[str, Any], body: CustomEndpointUpdate) -> T
     env_var = custom_endpoint_key_env(endpoint_id)
     submitted_key = body.api_key.strip() if body.api_key is not None else None
     if submitted_key:
-        save_env_value(env_var, submitted_key)
+        from hermes_cli.credential_lifecycle import save_provider_env_credential
+
+        save_provider_env_credential(env_var, submitted_key)
         entry["key_env"] = env_var
         entry.pop("api_key", None)
     elif submitted_key is not None:
         # Blank field means "clear the key", not "leave it alone".
-        remove_env_value(env_var)
+        from hermes_cli.credential_lifecycle import remove_provider_env_credential
+
+        remove_provider_env_credential(env_var)
         entry.pop("key_env", None)
         entry.pop("api_key", None)
     elif str(entry.get("api_key") or "").strip() and not _config_api_key_is_env_ref(endpoint_id):
@@ -8852,7 +8856,9 @@ def _write_custom_endpoint(cfg: Dict[str, Any], body: CustomEndpointUpdate) -> T
         # release wrote in plaintext. Migrate it on the next save so endpoints
         # configured before the fix get cleaned up too, without the user
         # having to re-enter the key.
-        save_env_value(env_var, entry["api_key"].strip())
+        from hermes_cli.credential_lifecycle import save_provider_env_credential
+
+        save_provider_env_credential(env_var, entry["api_key"].strip())
         entry["key_env"] = env_var
         entry.pop("api_key", None)
 
@@ -11260,10 +11266,10 @@ _OAUTH_PROVIDER_CATALOG: tuple[Dict[str, Any], ...] = (
     },
     {
         "id": "openai-codex",
-        "name": "ChatGPT or Codex Subscription",
+        "name": "OpenAI Codex (ChatGPT subscription)",
         "flow": "device_code",
         "cli_command": "hermes auth add openai-codex",
-        "docs_url": "https://platform.openai.com/docs",
+        "docs_url": "https://developers.openai.com/codex/auth",
         "status_fn": None,  # dispatched via auth.get_codex_auth_status
     },
     {
@@ -11289,13 +11295,13 @@ _OAUTH_PROVIDER_CATALOG: tuple[Dict[str, Any], ...] = (
     },
     {
         "id": "xai-oauth",
-        "name": "xAI Grok OAuth (SuperGrok / Premium+)",
+        "name": "xAI Grok (official subscription OAuth)",
         # Device code is the default because it works in remote shells,
         # containers, and desktop installs without requiring a reachable
         # 127.0.0.1 callback.
         "flow": "device_code",
         "cli_command": "hermes auth add xai-oauth",
-        "docs_url": "https://hermes-agent.nousresearch.com/docs/guides/xai-grok-oauth",
+        "docs_url": "https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md",
         "status_fn": None,  # dispatched via auth.get_xai_oauth_auth_status
     },
     {

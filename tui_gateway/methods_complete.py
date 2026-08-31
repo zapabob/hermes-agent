@@ -543,18 +543,19 @@ def _(rid, params: dict) -> dict:
         if not pconfig:
             return _err(rid, 4002, f"unknown provider: {slug}")
         if pconfig.auth_type != "api_key":
+            sign_in = {
+                "openai-codex": "official ChatGPT subscription sign-in",
+                "xai-oauth": "official Grok plan sign-in",
+            }.get(slug, "the provider's official sign-in flow")
             return _err(
                 rid,
                 4003,
-                f"{pconfig.name} uses {pconfig.auth_type} auth — "
-                f"run `hermes model` to configure",
+                f"{pconfig.name} requires {sign_in}; this endpoint accepts BYOK "
+                "API keys only, and API billing is a separate contract",
             )
         if not pconfig.api_key_env_vars:
             return _err(rid, 4004, f"no env var defined for {pconfig.name}")
 
-        # Save the key to ~/.hermes/.env via the unified credential lifecycle
-        # so any stale config.yaml mirror of the previous key (model.api_key,
-        # custom_providers[*].api_key) is rotated in the same action (#62269).
         env_var = pconfig.api_key_env_vars[0]
         from hermes_cli.credential_lifecycle import save_provider_env_credential
 
@@ -586,6 +587,14 @@ def _(rid, params: dict) -> dict:
                 "models": [],
                 "total_models": 0,
                 "authenticated": True,
+                "auth_type": "api_key",
+                "auth_method": "byok_api_key",
+                "auth_label": "BYOK API key",
+                "key_env": env_var,
+                "access_note": (
+                    "Stored in the active profile secret store. Requires a separate "
+                    f"{pconfig.name} API account; usage and limits follow that API contract."
+                ),
             }
         # picker_hints sets `authenticated` from the row state, but the
         # synthetic fallback above doesn't go through that path.

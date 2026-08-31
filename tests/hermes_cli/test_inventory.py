@@ -355,6 +355,31 @@ def test_picker_hints_api_key_warning_format():
     assert anthropic["warning"].startswith("paste ")
 
 
+def test_picker_hints_distinguish_byok_subscription_and_keyless_access():
+    with _list_auth_returning([]):
+        payload = build_models_payload(
+            _empty_ctx(), include_unconfigured=True, picker_hints=True,
+        )
+
+    by_slug = {row["slug"]: row for row in payload["providers"]}
+
+    for slug in ("nvidia", "opencode-zen", "opencode-go", "openai-api", "xai"):
+        assert by_slug[slug]["auth_method"] == "byok_api_key"
+        assert by_slug[slug]["auth_label"] == "BYOK API key"
+        assert "active profile secret store" in by_slug[slug]["access_note"]
+
+    assert by_slug["openai-codex"]["auth_method"] == "subscription"
+    assert by_slug["openai-codex"]["auth_label"] == "ChatGPT subscription"
+    assert "API billing is separate" in by_slug["openai-codex"]["access_note"]
+
+    assert by_slug["xai-oauth"]["auth_method"] == "subscription"
+    assert by_slug["xai-oauth"]["auth_label"] == "Grok plan subscription"
+    assert "API credits and billing are separate" in by_slug["xai-oauth"]["access_note"]
+
+    assert by_slug["opencode-free"]["auth_method"] == "keyless"
+    assert by_slug["opencode-free"]["auth_label"] == "Keyless free tier"
+
+
 # ─── canonical_order ───────────────────────────────────────────────────
 
 
@@ -655,7 +680,6 @@ def _apply_featured_with_dates(rows, dates: dict[str, str]):
 
     with patch("agent.models_dev.get_model_info", side_effect=_fake_get_model_info):
         inventory._apply_featured(rows)
-
 
 
 

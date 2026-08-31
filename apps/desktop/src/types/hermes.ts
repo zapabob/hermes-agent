@@ -382,6 +382,9 @@ export interface ModelPricing {
 }
 
 export interface ModelOptionProvider {
+  access_note?: string
+  auth_label?: string
+  auth_method?: 'byok_api_key' | 'external' | 'keyless' | 'oauth' | 'subscription' | 'virtual'
   is_current?: boolean
   models?: string[]
   name: string

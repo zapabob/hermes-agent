@@ -167,14 +167,7 @@ def test_codex_stream_wire_error_event_nested_envelope_attr_style():
 
 
 def test_summarize_api_error_decorates_xai_entitlement_403():
-    """xAI's OAuth 403 must surface the X Premium+ gotcha + neutral causes.
-
-    Wording deliberately leads with the X Premium+ gotcha because that's
-    the #1 confusing case: people see Grok in their X app, assume it
-    works here too, and hit this 403 with no idea API access is a
-    separate SKU.  Other causes (no subscription, wrong tier, exhausted
-    quota) follow.
-    """
+    """xAI's OAuth 403 must distinguish plan and direct-API contracts."""
     from run_agent import AIAgent
 
     error = RuntimeError(
@@ -186,39 +179,25 @@ def test_summarize_api_error_decorates_xai_entitlement_403():
     summary = AIAgent._summarize_api_error(error)
     # The original xAI text must survive — it's still useful diagnostic info.
     assert "do not have an active Grok subscription" in summary
-    # The hint MUST lead with the X Premium+ gotcha (most likely cause
-    # for users who think they're subscribed).
-    assert "X Premium+ does NOT include" in summary
-    assert "standalone SuperGrok subscribers" in summary
-    # Other causes still listed.
-    assert "no Grok subscription" in summary
-    assert "tier doesn't include this model" in summary
-    assert "quota is exhausted" in summary
-    # The hint must point at the usage page where the user can verify.
+    assert "official OAuth account" in summary
+    assert "Grok plan may be ineligible" in summary
+    assert "allowance may be exhausted" in summary
+    assert "direct XAI_API_KEY uses separate xAI API credits and billing" in summary
     assert "https://grok.com/?_s=usage" in summary
-    # Switching providers is still a valid escape hatch.
     assert "/model" in summary
 
 
 def test_summarize_api_error_does_not_accuse_subscribers():
-    """Hint must not confidently say the user has no subscription.
-
-    Don Piedro reported his subscription is active. The hint must not
-    contradict him — leading with the X Premium+ gotcha gives subscribers
-    a plausible reason ("oh, I'm on Premium+ not pure SuperGrok") instead
-    of accusing them of lying about having a subscription.
-    """
+    """Hint must not infer the user's subscription state."""
     from run_agent import AIAgent
 
     error = RuntimeError(
         "HTTP 403: do not have an active Grok subscription"
     )
     summary = AIAgent._summarize_api_error(error)
-    # MUST NOT contain language that flatly assumes the user is unsubscribed.
     assert "lacks SuperGrok" not in summary
     assert "you are not subscribed" not in summary.lower()
-    # MUST lead with the most-likely-but-non-accusatory cause.
-    assert "X Premium+ does NOT include" in summary
+    assert "Grok plan may be ineligible" in summary
 
 
 

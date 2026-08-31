@@ -443,7 +443,7 @@ ALIASES: Dict[str, str] = {
 _LABEL_OVERRIDES: Dict[str, str] = {
     "moa": "Mixture of Agents",
     "nous": "Nous Portal",
-    "openai-codex": "ChatGPT or Codex Subscription",
+    "openai-codex": "OpenAI Codex (ChatGPT subscription)",
     "copilot-acp": "GitHub Copilot ACP",
     "stepfun": "StepFun Step Plan",
     "xiaomi": "Xiaomi MiMo",
@@ -458,7 +458,7 @@ _LABEL_OVERRIDES: Dict[str, str] = {
     "bedrock": "AWS Bedrock",
     "vertex": "Google Vertex AI",
     "ollama-cloud": "Ollama Cloud",
-    "xai-oauth": "xAI Grok OAuth (SuperGrok / Premium+)",
+    "xai-oauth": "xAI Grok (official subscription OAuth)",
     "opencode-free": "OpenCode Free",
 }
 

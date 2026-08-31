@@ -160,6 +160,7 @@ def _iter_typescript_files():
                 path.is_file()
                 and path.suffix in extensions
                 and "node_modules" not in rel_parts
+                and "dist" not in rel_parts
                 and ".gitnexus" not in rel_parts
                 and ".test." not in path.name
                 and ".spec." not in path.name

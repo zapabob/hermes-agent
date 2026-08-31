@@ -14,8 +14,8 @@ import pytest
 
 @pytest.fixture
 def profile_env(tmp_path, monkeypatch):
-    home = tmp_path / ".hermes"
-    home.mkdir()
+    home = tmp_path / "profiles" / "prompt-test"
+    home.mkdir(parents=True)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.setenv("HERMES_HOME", str(home))
     (home / ".env").write_text("")
@@ -104,5 +104,4 @@ def test_lmstudio_first_time_empty_uses_placeholder(profile_env):
     assert key == LMSTUDIO_NOAUTH_PLACEHOLDER
     assert abort is False
     assert get_env_value("LM_API_KEY") == LMSTUDIO_NOAUTH_PLACEHOLDER
-
 

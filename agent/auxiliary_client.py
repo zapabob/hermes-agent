@@ -6841,7 +6841,7 @@ def resolve_provider_client(
         if client is None:
             logger.warning(
                 "resolve_provider_client: xai-oauth requested but no xAI "
-                "OAuth token found (run: hermes model -> xAI Grok OAuth — SuperGrok / Premium+)"
+                "OAuth token found (run: hermes model -> xAI Grok official subscription OAuth)"
             )
             return None, None
         final_model = _normalize_resolved_model(model or default, provider)

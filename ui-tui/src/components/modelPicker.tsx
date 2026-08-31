@@ -474,7 +474,7 @@ export function ModelPicker({
         </Text>
 
         <Text color={t.color.muted} wrap="truncate-end">
-          Paste your API key below (saved to ~/.hermes/.env)
+          Paste your API key below (saved to the active profile secret store)
         </Text>
 
         <Text color={t.color.muted} wrap="truncate-end">
@@ -556,7 +556,13 @@ export function ModelPicker({
       const modelCount = p.total_models ?? p.models?.length ?? 0
 
       const suffix =
-        p.authenticated === false ? (p.auth_type === 'api_key' ? '(no key)' : '(needs setup)') : `${modelCount} models`
+        p.authenticated === false
+          ? p.auth_method === 'keyless'
+            ? '(keyless free tier)'
+            : p.auth_method === 'byok_api_key'
+              ? '(BYOK required)'
+              : '(sign-in required)'
+          : `${modelCount} models`
 
       return `${authMark} ${name} · ${suffix}`
     })
@@ -582,6 +588,12 @@ export function ModelPicker({
         </Text>
         <Text color={t.color.label} wrap="truncate-end">
           {provider?.warning ? `warning: ${provider.warning}` : ' '}
+        </Text>
+        <Text color={t.color.muted} wrap="truncate-end">
+          {provider?.auth_label ? `auth: ${provider.auth_label}` : ' '}
+        </Text>
+        <Text color={t.color.muted} wrap="truncate-end">
+          {provider?.access_note || ' '}
         </Text>
         <Text color={t.color.muted} wrap="truncate-end">
           {offset > 0 ? ` ↑ ${offset} more` : ' '}
@@ -647,6 +659,12 @@ export function ModelPicker({
       </Text>
       <Text color={t.color.label} wrap="truncate-end">
         {provider?.warning ? `warning: ${provider.warning}` : ' '}
+      </Text>
+      <Text color={t.color.muted} wrap="truncate-end">
+        {provider?.auth_label ? `auth: ${provider.auth_label}` : ' '}
+      </Text>
+      <Text color={t.color.muted} wrap="truncate-end">
+        {provider?.access_note || ' '}
       </Text>
       <Text color={t.color.muted} wrap="truncate-end">
         {offset > 0 ? ` ↑ ${offset} more` : ' '}

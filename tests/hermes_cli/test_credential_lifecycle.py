@@ -106,16 +106,11 @@ def test_delete_clears_provider_models_cache(hermes_home):
         assert "zai" not in cache
 
 
-# ---------------------------------------------------------------------------
-# UPDATE — #62269: config.yaml mirrors of the old key must rotate with .env
-# ---------------------------------------------------------------------------
-
-
 def _write_config(home, text):
     home.joinpath("config.yaml").write_text(text, encoding="utf-8")
 
 
-def test_update_rotates_config_yaml_model_mirror(hermes_home):
+def test_update_removes_config_yaml_model_mirror(hermes_home):
     old = "sk-oe-" + "f" * 24
     new = "sk-oe-" + "g" * 24
     _write_env(hermes_home, OPENAI_API_KEY=old)
@@ -136,11 +131,53 @@ def test_update_rotates_config_yaml_model_mirror(hermes_home):
 
     cfg_text = hermes_home.joinpath("config.yaml").read_text(encoding="utf-8")
     assert old not in cfg_text, "stale old key left in config.yaml (#62269)"
-    assert new in cfg_text, "config.yaml mirror not rotated to the new key"
+    assert new not in cfg_text, "new key copied into config.yaml"
+    assert "api_key:" not in cfg_text
 
     from hermes_cli.config import load_env
 
     assert load_env()["OPENAI_API_KEY"] == new
+
+
+def test_first_save_removes_matching_legacy_config_secret(hermes_home):
+    canary = "nvapi-" + "q" * 24
+    _write_config(
+        hermes_home,
+        "model:\n"
+        "  provider: nvidia\n"
+        "  default: meta/llama-3.1-8b-instruct\n"
+        f"  api_key: {canary}\n",
+    )
+
+    from hermes_cli.credential_lifecycle import save_provider_env_credential
+
+    result = save_provider_env_credential("NVIDIA_API_KEY", canary)
+
+    assert "model.api_key" in result["config_updates"]
+    assert canary not in hermes_home.joinpath("config.yaml").read_text(encoding="utf-8")
+
+
+def test_save_is_scoped_to_active_profile(monkeypatch, tmp_path):
+    from hermes_cli.config import invalidate_env_cache, load_env
+    from hermes_cli.credential_lifecycle import save_provider_env_credential
+
+    first = tmp_path / "profiles" / "first"
+    second = tmp_path / "profiles" / "second"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    canary = "nvapi-" + "p" * 24
+
+    monkeypatch.setenv("HERMES_HOME", str(first))
+    invalidate_env_cache()
+    save_provider_env_credential("NVIDIA_API_KEY", canary)
+
+    monkeypatch.setenv("HERMES_HOME", str(second))
+    invalidate_env_cache()
+
+    assert "NVIDIA_API_KEY" not in load_env()
+    assert canary in first.joinpath(".env").read_text(encoding="utf-8")
+    assert not second.joinpath(".env").exists()
+    assert not first.joinpath("config.yaml").exists()
 
 
 
@@ -148,5 +185,3 @@ def test_update_rotates_config_yaml_model_mirror(hermes_home):
 # ---------------------------------------------------------------------------
 # Suppression round-trip: delete sticks, re-add lifts it
 # ---------------------------------------------------------------------------
-
-
