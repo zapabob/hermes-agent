@@ -14,6 +14,8 @@ full credential environment. Two tiers:
 import os
 from unittest.mock import patch
 
+import pytest
+
 from tools.environments.local import (
     hermes_subprocess_env,
     _ALWAYS_STRIP_KEYS,
@@ -43,12 +45,62 @@ _SAFE_SAMPLE = {
 }
 
 
-def _build(extra=None, *, inherit_credentials=False):
+def _build(
+    extra=None,
+    *,
+    inherit_credentials=False,
+    allowlist_only=False,
+    child_extra=None,
+):
     env = dict(_SAFE_SAMPLE)
     if extra:
         env.update(extra)
     with patch.dict(os.environ, env, clear=True):
-        return hermes_subprocess_env(inherit_credentials=inherit_credentials)
+        kwargs = {"inherit_credentials": inherit_credentials}
+        if allowlist_only or child_extra is not None:
+            kwargs.update(allowlist_only=allowlist_only, extra=child_extra)
+        return hermes_subprocess_env(**kwargs)
+
+
+class TestAllowlistOnly:
+    def test_parent_canaries_and_arbitrary_variables_are_not_inherited(self):
+        canaries = {
+            "HERMES_TEST_SECRET_CANARY": "HERMES_CANARY_DO_NOT_LEAK_8F421",
+            "OPENAI_API_KEY": "sk-test-HERMES-CANARY",
+            "ANTHROPIC_API_KEY": "test-anthropic-canary",
+            "NVIDIA_API_KEY": "nvapi-test-canary",
+            "OPENCODE_API_KEY": "opencode-test-canary",
+            "GITHUB_TOKEN": "ghp_test_canary",
+            "HF_TOKEN": "hf_test_canary",
+        }
+
+        result = _build(canaries, allowlist_only=True)
+
+        assert result["PATH"] == _SAFE_SAMPLE["PATH"]
+        assert result["HOME"] == _SAFE_SAMPLE["HOME"]
+        assert result["USER"] == _SAFE_SAMPLE["USER"]
+        assert result["PYTHONUTF8"] == "1"
+        assert "MY_APP_VAR" not in result
+        for key in canaries:
+            assert key not in result, f"{key} leaked through the strict allowlist"
+
+    def test_explicit_non_secret_child_values_are_supported(self):
+        result = _build(
+            allowlist_only=True,
+            child_extra={"GOBIN": "/tmp/hermes-go-bin"},
+        )
+        assert result["GOBIN"] == "/tmp/hermes-go-bin"
+
+    def test_credential_shaped_explicit_value_is_rejected(self):
+        with pytest.raises(ValueError, match="credential"):
+            _build(
+                allowlist_only=True,
+                child_extra={"CUSTOM_API_KEY": "must-not-cross-boundary"},
+            )
+
+    def test_strict_allowlist_cannot_inherit_provider_credentials(self):
+        with pytest.raises(ValueError, match="inherit_credentials"):
+            _build(allowlist_only=True, inherit_credentials=True)
 
 
 class TestStripByDefault:

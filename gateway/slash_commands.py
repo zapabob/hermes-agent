@@ -6080,6 +6080,7 @@ class GatewaySlashCommandsMixin:
         import subprocess
         from datetime import datetime
         from hermes_cli.config import is_managed, format_managed_message
+        from tools.environments.local import hermes_subprocess_env
 
         # Block non-messaging platforms (API server, webhooks, ACP)
         platform = event.source.platform
@@ -6127,6 +6128,10 @@ class GatewaySlashCommandsMixin:
         _tmp_pending.write_text(json.dumps(pending), encoding="utf-8")
         _tmp_pending.replace(pending_path)
         exit_code_path.unlink(missing_ok=True)
+        update_env = hermes_subprocess_env(
+            allowlist_only=True,
+            extra={"PYTHONUNBUFFERED": "1"},
+        )
 
         # Spawn `hermes update --gateway` detached so it survives gateway restart.
         # --gateway enables file-based IPC for interactive prompts (stash
@@ -6164,11 +6169,12 @@ class GatewaySlashCommandsMixin:
                 # shim, so the entry points can be rewritten freely.
                 helper = textwrap.dedent(
                     """
-                    import os, subprocess, sys
+                    import json, os, subprocess, sys
                     output_path = sys.argv[1]
                     exit_code_path = sys.argv[2]
-                    cmd = sys.argv[3:]
-                    env = dict(os.environ)
+                    allowed_keys = json.loads(sys.argv[3])
+                    cmd = sys.argv[4:]
+                    env = {key: os.environ[key] for key in allowed_keys if key in os.environ}
                     env["PYTHONUNBUFFERED"] = "1"
                     with open(output_path, "wb") as f:
                         proc = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT, env=env)
@@ -6181,11 +6187,13 @@ class GatewaySlashCommandsMixin:
                     [
                         sys.executable, "-c", helper,
                         str(output_path), str(exit_code_path),
+                        json.dumps(sorted(update_env)),
                         sys.executable, "-m", "hermes_cli.main",
                         "update", "--gateway",
                     ],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
+                    env=update_env,
                     **windows_detach_popen_kwargs(),
                 )
             else:
@@ -6206,6 +6214,7 @@ class GatewaySlashCommandsMixin:
                         [setsid_bin, "bash", "-c", update_cmd],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
+                        env=update_env,
                         start_new_session=True,
                     )
                 else:
@@ -6214,6 +6223,7 @@ class GatewaySlashCommandsMixin:
                         ["bash", "-c", update_cmd],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
+                        env=update_env,
                         start_new_session=True,
                     )
         except Exception as e:

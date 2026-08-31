@@ -654,7 +654,72 @@ _ALWAYS_STRIP_KEYS: frozenset[str] = frozenset({
 })
 
 
-def hermes_subprocess_env(*, inherit_credentials: bool = False) -> dict[str, str]:
+_STRICT_SUBPROCESS_ENV_KEYS: frozenset[str] = frozenset({
+    "APPDATA",
+    "CHERE_INVOKING",
+    "CODEX_HOME",
+    "COLORTERM",
+    "COMSPEC",
+    "FORCE_COLOR",
+    "GOBIN",
+    "HERMES_DELEGATED_CHILD_CONTEXT",
+    "HERMES_HOME",
+    "HERMES_KANBAN_DB",
+    "HERMES_KANBAN_ROOT",
+    "HERMES_KANBAN_RUN_ID",
+    "HERMES_KANBAN_TASK",
+    "HERMES_KANBAN_WORKSPACE",
+    "HOME",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "LANG",
+    "LANGUAGE",
+    "LOCALAPPDATA",
+    "LOGNAME",
+    "MSYSTEM",
+    "NO_COLOR",
+    "NUMBER_OF_PROCESSORS",
+    "OS",
+    "PATH",
+    "PATHEXT",
+    "PROCESSOR_ARCHITECTURE",
+    "PROCESSOR_IDENTIFIER",
+    "PROCESSOR_LEVEL",
+    "PROCESSOR_REVISION",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "PROGRAMW6432",
+    "PYTHONIOENCODING",
+    "PYTHONUTF8",
+    "SHELL",
+    "SYSTEMDRIVE",
+    "SYSTEMROOT",
+    "TEMP",
+    "TERM",
+    "TMP",
+    "TMPDIR",
+    "USER",
+    "USERNAME",
+    "USERPROFILE",
+    "WINDIR",
+    "XDG_CACHE_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+})
+
+_CREDENTIAL_ENV_NAME_RE = re.compile(
+    r"(?:^|_)(?:API_KEY|ACCESS_KEY|AUTH|CREDENTIALS?|PASSWORD|PRIVATE_KEY|SECRET|TOKEN)(?:$|_)",
+    re.IGNORECASE,
+)
+
+
+def hermes_subprocess_env(
+    *,
+    inherit_credentials: bool = False,
+    allowlist_only: bool = False,
+    extra: Mapping[str, str] | None = None,
+) -> dict[str, str]:
     """Build a sanitized environment dict for a spawned subprocess.
 
     Centralized helper for the **non-terminal** spawn surface (browser,
@@ -686,7 +751,31 @@ def hermes_subprocess_env(*, inherit_credentials: bool = False) -> dict[str, str
     ``inherit_credentials=False`` and copy just those keys back from
     ``os.environ`` into the returned dict.
     """
-    env = os.environ.copy()
+    if allowlist_only and inherit_credentials:
+        raise ValueError("allowlist_only cannot be combined with inherit_credentials")
+
+    if allowlist_only:
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if key.upper() in _STRICT_SUBPROCESS_ENV_KEYS
+            or key.upper().startswith("LC_")
+        }
+    else:
+        env = os.environ.copy()
+
+    for key, value in (extra or {}).items():
+        upper = key.upper()
+        if allowlist_only and (
+            key.startswith(_HERMES_PROVIDER_ENV_FORCE_PREFIX)
+            or upper in _ALWAYS_STRIP_KEYS
+            or upper in _HERMES_PROVIDER_ENV_BLOCKLIST
+            or key in _plugin_terminal_env_strip_keys()
+            or _is_hermes_internal_secret(key)
+            or _CREDENTIAL_ENV_NAME_RE.search(upper)
+        ):
+            raise ValueError(f"credential-shaped environment key is not allowed: {key}")
+        env[key] = value
 
     # Tier 1 — always strip.
     for key in _ALWAYS_STRIP_KEYS:

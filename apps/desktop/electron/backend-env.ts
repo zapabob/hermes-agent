@@ -14,6 +14,90 @@ const POSIX_SANE_PATH_ENTRIES = Object.freeze([
   '/bin'
 ])
 
+const DESKTOP_UPDATER_ENV_KEYS = new Set([
+  'APPDATA',
+  'CHERE_INVOKING',
+  'COLORTERM',
+  'COMSPEC',
+  'FORCE_COLOR',
+  'HOME',
+  'HOMEDRIVE',
+  'HOMEPATH',
+  'LANG',
+  'LANGUAGE',
+  'LOCALAPPDATA',
+  'LOGNAME',
+  'MSYSTEM',
+  'NO_COLOR',
+  'NUMBER_OF_PROCESSORS',
+  'OS',
+  'PATH',
+  'PATHEXT',
+  'PROCESSOR_ARCHITECTURE',
+  'PROCESSOR_IDENTIFIER',
+  'PROCESSOR_LEVEL',
+  'PROCESSOR_REVISION',
+  'PROGRAMDATA',
+  'PROGRAMFILES',
+  'PROGRAMFILES(X86)',
+  'PROGRAMW6432',
+  'SHELL',
+  'SYSTEMDRIVE',
+  'SYSTEMROOT',
+  'TEMP',
+  'TERM',
+  'TMP',
+  'TMPDIR',
+  'USER',
+  'USERNAME',
+  'USERPROFILE',
+  'WINDIR',
+  'XDG_CACHE_HOME',
+  'XDG_CONFIG_HOME',
+  'XDG_DATA_HOME'
+])
+
+const CREDENTIAL_ENV_NAME =
+  /(?:^|_)(?:API_KEY|ACCESS_KEY|AUTH|CREDENTIALS?|PASSWORD|PRIVATE_KEY|SECRET|TOKEN)(?:$|_)/i
+
+interface DesktopUpdaterEnvOptions {
+  currentEnv?: NodeJS.ProcessEnv
+  extra?: NodeJS.ProcessEnv
+  platform?: NodeJS.Platform
+}
+
+function buildDesktopUpdaterEnv({
+  currentEnv = process.env,
+  extra = {},
+  platform = process.platform
+}: DesktopUpdaterEnvOptions = {}): NodeJS.ProcessEnv {
+  const env = Object.fromEntries(
+    Object.entries(currentEnv).filter(
+      ([key, value]) =>
+        typeof value === 'string' &&
+        (DESKTOP_UPDATER_ENV_KEYS.has(key.toUpperCase()) || key.toUpperCase().startsWith('LC_'))
+    )
+  )
+
+  for (const [key, value] of Object.entries(extra)) {
+    if (value === undefined) {
+      continue
+    }
+    if (CREDENTIAL_ENV_NAME.test(key)) {
+      throw new Error(`credential-shaped environment key is not allowed: ${key}`)
+    }
+    if (platform === 'win32') {
+      const inheritedKey = Object.keys(env).find(candidate => candidate.toUpperCase() === key.toUpperCase())
+      if (inheritedKey) {
+        delete env[inheritedKey]
+      }
+    }
+    env[key] = value
+  }
+
+  return env
+}
+
 function delimiterForPlatform(platform = process.platform) {
   return platform === 'win32' ? ';' : ':'
 }
@@ -153,6 +237,7 @@ export {
   appendUniquePathEntries,
   buildDesktopBackendEnv,
   buildDesktopBackendPath,
+  buildDesktopUpdaterEnv,
   delimiterForPlatform,
   hermesManagedNodePathEntries,
   normalizeHermesHomeRoot,

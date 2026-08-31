@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 from hermes_cli._subprocess_compat import IS_WINDOWS, windows_hide_flags
+from tools.environments.local import _find_bash, hermes_subprocess_env
 
 logger = logging.getLogger(__name__)
 
@@ -71,13 +72,14 @@ def run_inline_shell(command: str, cwd: Path | None, timeout: int) -> str:
     _popen_kwargs = {"creationflags": windows_hide_flags()} if IS_WINDOWS else {}
     try:
         completed = subprocess.run(
-            ["bash", "-c", command],
+            [_find_bash(), "-c", command],
             cwd=str(cwd) if cwd else None,
             capture_output=True,
             text=True, encoding='utf-8', errors='replace',
             timeout=max(1, int(timeout)),
             check=False,
             stdin=subprocess.DEVNULL,
+            env=hermes_subprocess_env(allowlist_only=True),
             **_popen_kwargs,
         )
     except subprocess.TimeoutExpired:

@@ -16,6 +16,9 @@ import subprocess
 import urllib.request
 from pathlib import Path
 
+from hermes_constants import find_node_executable
+from tools.environments.local import hermes_subprocess_env
+
 _HERMES_HOME = Path(os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes")))
 
 DEFAULT_DIR = None  # resolved on first use
@@ -227,6 +230,10 @@ def sillytavern_start(args, **kwargs) -> str:
             {"ok": True, "already_running": True, "url": _base_url()}
         )
 
+    node = find_node_executable("node")
+    if node is None:
+        return json.dumps({"ok": False, "error": "managed Node.js runtime not found"})
+
     # Auto-configure from Hermes before launch
     config_result = _configure()
     config_note = (
@@ -239,7 +246,7 @@ def sillytavern_start(args, **kwargs) -> str:
         flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
     proc = subprocess.Popen(
         [
-            "node",
+            node,
             "server.js",
             "--browserLaunchEnabled",
             "false",
@@ -249,6 +256,7 @@ def sillytavern_start(args, **kwargs) -> str:
         cwd=_get_dir(),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        env=hermes_subprocess_env(allowlist_only=True),
         creationflags=flags,
     )
     _STATE["proc"] = proc
@@ -500,6 +508,7 @@ def sillytavern_proxy_start(args, **kwargs) -> str:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         creationflags=flags,
+        env=hermes_subprocess_env(allowlist_only=True),
     )
     _PROXY_STATE["proc"] = proc
     import time

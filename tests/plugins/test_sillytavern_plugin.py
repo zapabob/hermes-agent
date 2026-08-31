@@ -109,6 +109,64 @@ def test_configure_returns_structured_result(monkeypatch):
     assert payload["local_llama"] is True
 
 
+def test_start_uses_managed_node_and_strict_environment(monkeypatch, tmp_path):
+    module = load_plugin()
+    module._STATE.clear()
+    states = iter((False, True))
+    monkeypatch.setattr(module, "_installed", lambda: True)
+    monkeypatch.setattr(module, "_is_up", lambda: next(states))
+    monkeypatch.setattr(module, "_get_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(
+        module,
+        "_configure",
+        lambda: {"secrets_written": [], "settings_changed": []},
+    )
+    monkeypatch.setattr(
+        module,
+        "find_node_executable",
+        lambda command: "C:/Hermes/node.exe",
+        raising=False,
+    )
+    for key, value in {
+        "HERMES_TEST_SECRET_CANARY": "HERMES_CANARY_DO_NOT_LEAK_8F421",
+        "OPENAI_API_KEY": "sk-test-HERMES-CANARY",
+        "ANTHROPIC_API_KEY": "test-anthropic-canary",
+        "GITHUB_TOKEN": "ghp_test_canary",
+        "HF_TOKEN": "hf_test_canary",
+        "MY_APP_VAR": "must-not-be-inherited",
+    }.items():
+        monkeypatch.setenv(key, value)
+
+    captured = {}
+
+    class FakeProc:
+        pid = 4242
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs.get("env")
+        return FakeProc()
+
+    monkeypatch.setattr(module.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr("time.sleep", lambda _: None)
+
+    payload = json.loads(module.sillytavern_start({}, task_id=None))
+
+    assert payload["ok"] is True
+    assert captured["cmd"][0] == "C:/Hermes/node.exe"
+    assert isinstance(captured["env"], dict)
+    assert "PATH" in captured["env"]
+    for key in (
+        "HERMES_TEST_SECRET_CANARY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GITHUB_TOKEN",
+        "HF_TOKEN",
+        "MY_APP_VAR",
+    ):
+        assert key not in captured["env"]
+
+
 def test_stop_taskkill_sets_stdin(monkeypatch):
     module = load_plugin()
     module._STATE.clear()

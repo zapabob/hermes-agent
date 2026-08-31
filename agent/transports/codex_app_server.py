@@ -76,22 +76,13 @@ class CodexAppServerClient:
         env: Optional[dict[str, str]] = None,
     ) -> None:
         self._codex_bin = codex_bin
-        # codex app-server is a model-driving CLI executor: it runs a
-        # model-chosen agentic loop that executes shell commands, so it
-        # legitimately needs LLM provider credentials (inherit_credentials=True)
-        # to authenticate against the model endpoint. But the previous
-        # `os.environ.copy()` also handed it every Tier-1 Hermes secret — gateway
-        # bot tokens, GitHub auth, Modal/Daytona infra tokens, the dashboard
-        # session token, AUXILIARY_* side-LLM keys, GATEWAY_RELAY_* auth — none
-        # of which a coding subprocess has any use for. Route through the
-        # centralized helper so Tier-1 + dynamic-internal secrets are always
-        # stripped while provider creds still flow, matching copilot_acp_client
-        # (#29157 sibling spawn-site gap).
-        spawn_env = hermes_subprocess_env(inherit_credentials=True)
-        if env:
-            spawn_env.update(env)
+        explicit_env = dict(env or {})
         if codex_home:
-            spawn_env["CODEX_HOME"] = codex_home
+            explicit_env["CODEX_HOME"] = codex_home
+        spawn_env = hermes_subprocess_env(
+            allowlist_only=True,
+            extra=explicit_env,
+        )
 
         app_server_args = list(extra_args or [])
         # Kanban workers must be able to write their handoff/status back to
@@ -397,6 +388,7 @@ def check_codex_binary(
             text=True, encoding='utf-8', errors='replace',
             timeout=10,
             stdin=subprocess.DEVNULL,
+            env=hermes_subprocess_env(allowlist_only=True),
         )
     except FileNotFoundError:
         return False, (

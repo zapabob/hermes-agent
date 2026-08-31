@@ -1,6 +1,7 @@
 """Tests for agent/skill_commands.py — skill slash command scanning and platform filtering."""
 
 import os
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -801,6 +802,44 @@ class TestInlineShellExpansion:
         # The command's intended stdout never made it through — only the
         # timeout marker (which echoes the command text) survives.
         assert "DYN_MARKER" not in msg.replace("sleep 5 && printf DYN_MARKER", "")
+
+    def test_inline_shell_uses_resolved_bash_and_strict_environment(self, monkeypatch):
+        from agent import skill_preprocessing
+
+        for key, value in {
+            "HERMES_TEST_SECRET_CANARY": "HERMES_CANARY_DO_NOT_LEAK_8F421",
+            "OPENAI_API_KEY": "sk-test-HERMES-CANARY",
+            "GITHUB_TOKEN": "ghp_test_canary",
+            "MY_APP_VAR": "must-not-be-inherited",
+        }.items():
+            monkeypatch.setenv(key, value)
+
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            captured["env"] = kwargs.get("env")
+            return subprocess.CompletedProcess(cmd, 0, "ok\n", "")
+
+        monkeypatch.setattr(
+            skill_preprocessing,
+            "_find_bash",
+            lambda: "C:/Program Files/Git/bin/bash.exe",
+            raising=False,
+        )
+        monkeypatch.setattr(skill_preprocessing.subprocess, "run", fake_run)
+
+        assert skill_preprocessing.run_inline_shell("printf ok", None, 5) == "ok"
+        assert captured["cmd"][0] == "C:/Program Files/Git/bin/bash.exe"
+        assert isinstance(captured["env"], dict)
+        assert "PATH" in captured["env"]
+        for key in (
+            "HERMES_TEST_SECRET_CANARY",
+            "OPENAI_API_KEY",
+            "GITHUB_TOKEN",
+            "MY_APP_VAR",
+        ):
+            assert key not in captured["env"]
 
 
 class TestStackedSkillCommands:

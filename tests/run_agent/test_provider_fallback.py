@@ -40,6 +40,47 @@ def _mock_client(base_url="https://openrouter.ai/api/v1", api_key="fb-key"):
     return mock
 
 
+def test_fallback_start_command_uses_strict_env_and_redacts_logs(monkeypatch, caplog):
+    secret = "sk-test-HERMES-CANARY-1234567890"
+    monkeypatch.setenv("OPENAI_API_KEY", secret)
+    monkeypatch.setenv("HERMES_TEST_SECRET_CANARY", "HERMES_CANARY_DO_NOT_LEAK_8F421")
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_test_canary")
+    monkeypatch.setenv("MY_APP_VAR", "must-not-be-inherited")
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["env"] = kwargs.get("env")
+        return MagicMock(
+            returncode=1,
+            stdout=f"stdout contains {secret}",
+            stderr=f"stderr contains {secret}",
+        )
+
+    monkeypatch.setattr(chat_completion_helpers.subprocess, "run", fake_run)
+    agent = MagicMock()
+    start_command = f"runtime-launch --api-key {secret}"
+
+    with caplog.at_level("INFO", logger=chat_completion_helpers.logger.name):
+        result = chat_completion_helpers._run_fallback_start_command(
+            agent,
+            {"start_command": start_command, "start_timeout_seconds": 5},
+            label="fallback-test",
+        )
+
+    assert result is False
+    assert isinstance(captured["env"], dict)
+    assert "PATH" in captured["env"]
+    for key in (
+        "OPENAI_API_KEY",
+        "HERMES_TEST_SECRET_CANARY",
+        "GITHUB_TOKEN",
+        "MY_APP_VAR",
+    ):
+        assert key not in captured["env"]
+    assert secret not in caplog.text
+    assert start_command not in caplog.text
+
+
 # ── Chain initialisation ──────────────────────────────────────────────────
 
 

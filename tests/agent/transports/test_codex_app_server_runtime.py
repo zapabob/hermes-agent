@@ -267,16 +267,11 @@ class TestSpawnEnvIsolation:
 
 class TestSpawnEnvSecretStripping:
     """codex app-server routes its spawn env through hermes_subprocess_env(
-    inherit_credentials=True) instead of a raw os.environ.copy().
+    allowlist_only=True) instead of a raw os.environ.copy().
 
-    codex is a model-driving CLI executor: it legitimately needs LLM provider
-    credentials to authenticate, but it must NOT inherit Tier-1 Hermes secrets
-    (gateway bot tokens, GitHub/infra auth, dashboard session token) or the
-    dynamic-internal secrets (AUXILIARY_*_API_KEY / _BASE_URL side-LLM keys,
-    GATEWAY_RELAY_* relay-auth) — a coding subprocess has no use for those and
-    a model-controlled action could exfiltrate them. This closes the #29157
-    sibling spawn-site gap (copilot_acp_client already routes through the
-    helper; codex app-server predated it).
+    Codex app-server is an independent runtime. It authenticates through the
+    Codex CLI's own auth state and therefore receives no Hermes provider,
+    gateway, infrastructure, or arbitrary parent-process credentials.
     """
 
     @staticmethod
@@ -333,10 +328,23 @@ class TestSpawnEnvSecretStripping:
         ):
             assert var not in env, f"{var} leaked into codex app-server spawn env"
 
-    def test_provider_credentials_still_reach_codex(self, monkeypatch):
-        """codex authenticates against the model endpoint — provider keys must
-        still flow through (inherit_credentials=True)."""
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-codex-needs-this")
-        env = self._capture_spawn_env(monkeypatch)
-        assert env.get("OPENAI_API_KEY") == "sk-codex-needs-this"
+    def test_codex_uses_auth_state_without_parent_provider_credentials(self, monkeypatch):
+        canaries = {
+            "HERMES_TEST_SECRET_CANARY": "HERMES_CANARY_DO_NOT_LEAK_8F421",
+            "OPENAI_API_KEY": "sk-test-HERMES-CANARY",
+            "ANTHROPIC_API_KEY": "test-anthropic-canary",
+            "NVIDIA_API_KEY": "nvapi-test-canary",
+            "OPENCODE_API_KEY": "opencode-test-canary",
+            "GITHUB_TOKEN": "ghp_test_canary",
+            "HF_TOKEN": "hf_test_canary",
+            "MY_APP_VAR": "arbitrary-parent-value",
+        }
+        for key, value in canaries.items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.setenv("CODEX_HOME", "/users/alice/.codex")
 
+        env = self._capture_spawn_env(monkeypatch)
+
+        assert env["CODEX_HOME"] == "/users/alice/.codex"
+        for key in canaries:
+            assert key not in env, f"{key} leaked into the independent Codex runtime"

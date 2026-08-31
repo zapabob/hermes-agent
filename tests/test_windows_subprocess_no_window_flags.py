@@ -311,6 +311,15 @@ def test_lsp_client_spawn_hides_console_window(monkeypatch):
     monkeypatch.setattr(
         lsp_client.asyncio, "create_subprocess_exec", fake_exec
     )
+    for key, value in {
+        "HERMES_TEST_SECRET_CANARY": "HERMES_CANARY_DO_NOT_LEAK_8F421",
+        "OPENAI_API_KEY": "sk-test-HERMES-CANARY",
+        "ANTHROPIC_API_KEY": "test-anthropic-canary",
+        "GITHUB_TOKEN": "ghp_test_canary",
+        "HF_TOKEN": "hf_test_canary",
+        "MY_APP_VAR": "must-not-be-inherited",
+    }.items():
+        monkeypatch.setenv(key, value)
 
     client = lsp_client.LSPClient(
         server_id="test-server",
@@ -328,6 +337,16 @@ def test_lsp_client_spawn_hides_console_window(monkeypatch):
     assert kwargs["stdin"] == asyncio.subprocess.PIPE
     assert kwargs["stdout"] == asyncio.subprocess.PIPE
     assert kwargs["start_new_session"] is True
+    assert "PATH" in kwargs["env"]
+    for key in (
+        "HERMES_TEST_SECRET_CANARY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GITHUB_TOKEN",
+        "HF_TOKEN",
+        "MY_APP_VAR",
+    ):
+        assert key not in kwargs["env"]
 
 
 

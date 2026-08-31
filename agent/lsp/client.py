@@ -57,6 +57,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
 from urllib.parse import quote, unquote
 
 from hermes_cli._subprocess_compat import windows_hide_flags
+from tools.environments.local import hermes_subprocess_env
 
 from agent.lsp.protocol import (
     ERROR_CONTENT_MODIFIED,
@@ -305,9 +306,10 @@ class LSPClient:
         return cmd
 
     async def _spawn(self) -> None:
-        env = dict(os.environ)
-        if self._env:
-            env.update(self._env)
+        env = hermes_subprocess_env(
+            allowlist_only=True,
+            extra=self._env,
+        )
 
         cmd = self._command
         if sys.platform == "win32":

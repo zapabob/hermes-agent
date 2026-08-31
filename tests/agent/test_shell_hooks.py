@@ -167,6 +167,46 @@ class TestMatcher:
 
 class TestCallbackSubprocess:
 
+    def test_spawn_uses_strict_environment(self, monkeypatch):
+        captured = {}
+
+        class FakeProc:
+            returncode = 0
+
+            def communicate(self, input=None, timeout=None):
+                return "{}", ""
+
+        def fake_popen(cmd, **kwargs):
+            captured["env"] = kwargs.get("env")
+            return FakeProc()
+
+        for key, value in {
+            "HERMES_TEST_SECRET_CANARY": "HERMES_CANARY_DO_NOT_LEAK_8F421",
+            "OPENAI_API_KEY": "sk-test-HERMES-CANARY",
+            "GITHUB_TOKEN": "ghp_test_canary",
+            "HF_TOKEN": "hf_test_canary",
+            "MY_APP_VAR": "must-not-be-inherited",
+        }.items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.setattr(shell_hooks.subprocess, "Popen", fake_popen)
+
+        result = shell_hooks._spawn(
+            shell_hooks.ShellHookSpec(event="post_tool_call", command="hook-bin"),
+            "{}",
+        )
+
+        assert result["returncode"] == 0
+        assert isinstance(captured["env"], dict)
+        assert "PATH" in captured["env"]
+        for key in (
+            "HERMES_TEST_SECRET_CANARY",
+            "OPENAI_API_KEY",
+            "GITHUB_TOKEN",
+            "HF_TOKEN",
+            "MY_APP_VAR",
+        ):
+            assert key not in captured["env"]
+
 
 
     def test_block_translation_end_to_end(self, tmp_path):

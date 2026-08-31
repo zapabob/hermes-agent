@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from hermes_constants import get_hermes_home
+from tools.environments.local import hermes_subprocess_env
 
 STATE_NAME = "ai_partner_os_state.json"
 
@@ -78,7 +79,8 @@ def start_exe(exe_path: Path, *, cwd: Path | None = None) -> dict[str, Any]:
             [str(exe_path)],
             cwd=str(workdir),
             creationflags=creationflags,
-            close_fds=False,
+            close_fds=True,
+            env=hermes_subprocess_env(allowlist_only=True),
         )
     except OSError as exc:
         return {"ok": False, "error": str(exc), "exe": str(exe_path)}

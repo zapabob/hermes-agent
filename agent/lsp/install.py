@@ -36,6 +36,7 @@ from typing import Any, Dict, Optional
 
 from hermes_cli._subprocess_compat import windows_hide_flags
 from hermes_constants import find_node_executable
+from tools.environments.local import hermes_subprocess_env
 
 logger = logging.getLogger("agent.lsp.install")
 
@@ -272,6 +273,7 @@ def _install_npm(
             text=True, encoding="utf-8", errors="replace",
             timeout=300,
             stdin=subprocess.DEVNULL,
+            env=hermes_subprocess_env(allowlist_only=True),
             creationflags=windows_hide_flags(),
         )
         if proc.returncode != 0:
@@ -310,8 +312,10 @@ def _install_go(pkg: str, bin_name: str) -> Optional[str]:
         logger.info("[install] cannot install %s: go not on PATH", pkg)
         return None
     staging = hermes_lsp_bin_dir()
-    env = dict(os.environ)
-    env["GOBIN"] = str(staging)
+    env = hermes_subprocess_env(
+        allowlist_only=True,
+        extra={"GOBIN": str(staging)},
+    )
     try:
         logger.info("[install] go install %s (GOBIN=%s)", pkg, staging)
         proc = subprocess.run(

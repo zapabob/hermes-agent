@@ -899,3 +899,39 @@ class TestShippedCatalog:
                     )
 
         assert not problems, "unpinned catalog entries:\n" + "\n".join(problems)
+
+
+def test_bootstrap_uses_strict_environment(monkeypatch, tmp_path):
+    from hermes_cli import mcp_catalog
+
+    for key, value in {
+        "HERMES_TEST_SECRET_CANARY": "HERMES_CANARY_DO_NOT_LEAK_8F421",
+        "OPENAI_API_KEY": "sk-test-HERMES-CANARY",
+        "ANTHROPIC_API_KEY": "test-anthropic-canary",
+        "GITHUB_TOKEN": "ghp_test_canary",
+        "HF_TOKEN": "hf_test_canary",
+        "MY_APP_VAR": "must-not-be-inherited",
+    }.items():
+        monkeypatch.setenv(key, value)
+
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["env"] = kwargs.get("env")
+        return type("Completed", (), {"returncode": 0})()
+
+    monkeypatch.setattr(mcp_catalog.subprocess, "run", fake_run)
+
+    mcp_catalog._run_bootstrap(tmp_path, ["tool install"])
+
+    assert isinstance(captured["env"], dict)
+    assert "PATH" in captured["env"]
+    for key in (
+        "HERMES_TEST_SECRET_CANARY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GITHUB_TOKEN",
+        "HF_TOKEN",
+        "MY_APP_VAR",
+    ):
+        assert key not in captured["env"]

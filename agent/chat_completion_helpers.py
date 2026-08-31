@@ -115,6 +115,9 @@ def _ra():
 
 
 def _run_fallback_start_command(agent, fb: Dict[str, Any], *, label: str) -> bool:
+    from agent.redact import redact_sensitive_text
+    from tools.environments.local import hermes_subprocess_env
+
     start_command = str(fb.get("start_command") or "").strip()
     if not start_command:
         return True
@@ -126,26 +129,38 @@ def _run_fallback_start_command(agent, fb: Dict[str, Any], *, label: str) -> boo
         timeout_seconds = 180
 
     agent._buffer_status(f"🔄 Starting fallback runtime: {label}")
-    logger.info("Starting fallback runtime for %s: %s", label, start_command)
+    logger.info(
+        "Starting fallback runtime for %s: %s",
+        label,
+        redact_sensitive_text(start_command, force=True),
+    )
     try:
         completed = subprocess.run(
             start_command,
             shell=True,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout_seconds,
+            stdin=subprocess.DEVNULL,
+            env=hermes_subprocess_env(allowlist_only=True),
         )
     except subprocess.TimeoutExpired as exc:
         logger.warning(
             "Fallback start command timed out for %s after %ss. stdout=%r stderr=%r",
             label,
             timeout_seconds,
-            (exc.stdout or "")[-2000:],
-            (exc.stderr or "")[-2000:],
+            redact_sensitive_text((exc.stdout or "")[-2000:], force=True),
+            redact_sensitive_text((exc.stderr or "")[-2000:], force=True),
         )
         return False
     except Exception as exc:
-        logger.warning("Fallback start command failed for %s: %s", label, exc)
+        logger.warning(
+            "Fallback start command failed for %s: %s",
+            label,
+            redact_sensitive_text(str(exc), force=True),
+        )
         return False
 
     if completed.returncode != 0:
@@ -153,8 +168,8 @@ def _run_fallback_start_command(agent, fb: Dict[str, Any], *, label: str) -> boo
             "Fallback start command exited %s for %s. stdout=%r stderr=%r",
             completed.returncode,
             label,
-            (completed.stdout or "")[-2000:],
-            (completed.stderr or "")[-2000:],
+            redact_sensitive_text((completed.stdout or "")[-2000:], force=True),
+            redact_sensitive_text((completed.stderr or "")[-2000:], force=True),
         )
         return False
     return True

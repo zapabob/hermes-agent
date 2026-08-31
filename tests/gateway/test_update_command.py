@@ -5,6 +5,8 @@ the _send_update_notification startup hook (sends results after restart).
 """
 
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock, AsyncMock
@@ -153,6 +155,75 @@ class TestHandleUpdateCommand:
         assert data["message_id"] == "m-update"
         assert "timestamp" in data
         assert not (hermes_home / ".update_exit_code").exists()
+
+    @pytest.mark.asyncio
+    @pytest.mark.windows_only
+    async def test_windows_helper_and_grandchild_use_strict_environment(self, tmp_path):
+        runner = _make_runner()
+        event = _make_event()
+        fake_root = tmp_path / "project"
+        (fake_root / ".git").mkdir(parents=True)
+        (fake_root / "gateway").mkdir()
+        fake_file = fake_root / "gateway" / "slash_commands.py"
+        fake_file.touch()
+        hermes_home = tmp_path / "hermes"
+        hermes_home.mkdir()
+
+        canaries = {
+            "HERMES_TEST_SECRET_CANARY": "HERMES_CANARY_DO_NOT_LEAK_8F421",
+            "OPENAI_API_KEY": "sk-test-HERMES-CANARY",
+            "ANTHROPIC_API_KEY": "test-anthropic-canary",
+            "GITHUB_TOKEN": "ghp_test_canary",
+            "HF_TOKEN": "hf_test_canary",
+            "MY_APP_VAR": "must-not-be-inherited",
+        }
+        captured = {}
+
+        def fake_popen(cmd, **kwargs):
+            captured["cmd"] = cmd
+            captured["env"] = kwargs.get("env")
+            return MagicMock(pid=4242)
+
+        with (
+            patch.dict(os.environ, canaries),
+            patch("gateway.run._hermes_home", hermes_home),
+            patch("gateway.slash_commands.__file__", str(fake_file)),
+            patch("gateway.run._resolve_hermes_bin", return_value=[sys.executable]),
+            patch("subprocess.Popen", side_effect=fake_popen),
+        ):
+            result = await runner._handle_update_command(event)
+
+        assert "Starting Hermes update" in result
+        assert isinstance(captured["env"], dict)
+        assert captured["env"]["PYTHONUNBUFFERED"] == "1"
+        for key in canaries:
+            assert key not in captured["env"]
+
+        helper = captured["cmd"][2]
+        assert "dict(os.environ)" not in helper
+        output_path = tmp_path / "grandchild-output.json"
+        exit_path = tmp_path / "grandchild-exit.txt"
+        probe = "import json, os; print(json.dumps(dict(os.environ), sort_keys=True))"
+        subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                helper,
+                str(output_path),
+                str(exit_path),
+                captured["cmd"][5],
+                sys.executable,
+                "-c",
+                probe,
+            ],
+            check=True,
+            env=captured["env"],
+            cwd=str(fake_root),
+        )
+        grandchild_env = json.loads(output_path.read_text(encoding="utf-8"))
+        assert grandchild_env["PYTHONUNBUFFERED"] == "1"
+        for key in canaries:
+            assert key not in grandchild_env
 
 
     @pytest.mark.asyncio

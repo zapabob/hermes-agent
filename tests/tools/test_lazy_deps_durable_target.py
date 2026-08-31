@@ -227,6 +227,48 @@ class TestInstallArgConstruction:
         assert "exclude-newer" in result.stderr
         assert len(calls) == 1
 
+    def test_pip_and_ensurepip_fallbacks_use_strict_environment(self, monkeypatch):
+        monkeypatch.delenv(ld._LAZY_TARGET_ENV, raising=False)
+        for key, value in {
+            "HERMES_TEST_SECRET_CANARY": "HERMES_CANARY_DO_NOT_LEAK_8F421",
+            "OPENAI_API_KEY": "sk-test-HERMES-CANARY",
+            "ANTHROPIC_API_KEY": "test-anthropic-canary",
+            "GITHUB_TOKEN": "ghp_test_canary",
+            "HF_TOKEN": "hf_test_canary",
+            "MY_APP_VAR": "must-not-be-inherited",
+        }.items():
+            monkeypatch.setenv(key, value)
+
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            if "--version" in cmd:
+                return subprocess.CompletedProcess(cmd, 1, "", "pip unavailable")
+            return subprocess.CompletedProcess(cmd, 0, "ok", "")
+
+        monkeypatch.setattr("hermes_cli.managed_uv.resolve_uv", lambda: None)
+        monkeypatch.setattr(ld.shutil, "which", lambda _: None)
+        monkeypatch.setattr(ld.subprocess, "run", fake_run)
+
+        result = ld._venv_pip_install(("somepkg==1.2.3",))
+
+        assert result.success
+        assert len(calls) == 3
+        for _, kwargs in calls:
+            env = kwargs.get("env")
+            assert isinstance(env, dict)
+            assert "PATH" in env
+            for key in (
+                "HERMES_TEST_SECRET_CANARY",
+                "OPENAI_API_KEY",
+                "ANTHROPIC_API_KEY",
+                "GITHUB_TOKEN",
+                "HF_TOKEN",
+                "MY_APP_VAR",
+            ):
+                assert key not in env
+
 
 @pytest.mark.skipif(
     os.environ.get("HERMES_RUN_NETWORK_TESTS") != "1",

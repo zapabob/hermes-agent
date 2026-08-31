@@ -38,12 +38,23 @@ def test_install_npm_works_without_extras(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 
     captured = {}
+    for key, value in {
+        "HERMES_TEST_SECRET_CANARY": "HERMES_CANARY_DO_NOT_LEAK_8F421",
+        "OPENAI_API_KEY": "sk-test-HERMES-CANARY",
+        "NVIDIA_API_KEY": "nvapi-test-canary",
+        "OPENCODE_API_KEY": "opencode-test-canary",
+        "GITHUB_TOKEN": "ghp_test_canary",
+        "HF_TOKEN": "hf_test_canary",
+        "MY_APP_VAR": "must-not-be-inherited",
+    }.items():
+        monkeypatch.setenv(key, value)
 
     real_run = subprocess.run
 
     def fake_run(cmd, **kwargs):
         if isinstance(cmd, list) and "install" in cmd:
             captured["cmd"] = cmd
+            captured["env"] = kwargs.get("env")
             return MagicMock(returncode=0, stderr="")
         return real_run(cmd, **kwargs)
 
@@ -62,6 +73,51 @@ def test_install_npm_works_without_extras(tmp_path, monkeypatch):
         cmd[0],
     }]
     assert install_targets == ["pyright"]
+    assert isinstance(captured["env"], dict)
+    assert "PATH" in captured["env"]
+    for key in (
+        "HERMES_TEST_SECRET_CANARY",
+        "OPENAI_API_KEY",
+        "NVIDIA_API_KEY",
+        "OPENCODE_API_KEY",
+        "GITHUB_TOKEN",
+        "HF_TOKEN",
+        "MY_APP_VAR",
+    ):
+        assert key not in captured["env"]
+
+
+def test_install_go_uses_strict_environment_with_explicit_gobin(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    for key, value in {
+        "HERMES_TEST_SECRET_CANARY": "HERMES_CANARY_DO_NOT_LEAK_8F421",
+        "OPENAI_API_KEY": "sk-test-HERMES-CANARY",
+        "GITHUB_TOKEN": "ghp_test_canary",
+        "MY_APP_VAR": "must-not-be-inherited",
+    }.items():
+        monkeypatch.setenv(key, value)
+
+    from agent.lsp import install as install_mod
+
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["env"] = kwargs.get("env")
+        return MagicMock(returncode=1, stderr="expected test stop")
+
+    monkeypatch.setattr(install_mod.shutil, "which", lambda command: "/usr/bin/go")
+    monkeypatch.setattr(install_mod.subprocess, "run", fake_run)
+
+    assert install_mod._install_go("example.invalid/lsp@v1", "fake-lsp") is None
+    assert isinstance(captured["env"], dict)
+    assert captured["env"]["GOBIN"] == str(install_mod.hermes_lsp_bin_dir())
+    for key in (
+        "HERMES_TEST_SECRET_CANARY",
+        "OPENAI_API_KEY",
+        "GITHUB_TOKEN",
+        "MY_APP_VAR",
+    ):
+        assert key not in captured["env"]
 
 
 

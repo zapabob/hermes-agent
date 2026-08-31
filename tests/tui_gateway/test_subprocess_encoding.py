@@ -14,6 +14,7 @@ the crash class cannot silently regress.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from unittest.mock import MagicMock, patch
 
@@ -93,7 +94,18 @@ def test_shell_exec_uses_utf8_replace():
     subprocess.run; it must pass encoding="utf-8" and errors="replace"
     (#53137)."""
     handler = server._methods["shell.exec"]
-    with patch("subprocess.run", return_value=_make_completed_process()) as mock_run:
+    parent_env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": os.environ.get("HOME", "/tmp/hermes-test"),
+        "HERMES_TEST_SECRET_CANARY": "HERMES_CANARY_DO_NOT_LEAK_8F421",
+        "OPENAI_API_KEY": "sk-test-HERMES-CANARY",
+        "ANTHROPIC_API_KEY": "test-anthropic-canary",
+        "GITHUB_TOKEN": "ghp_test_canary",
+        "HF_TOKEN": "hf_test_canary",
+        "MY_APP_VAR": "must-not-be-inherited",
+    }
+    with patch.dict(os.environ, parent_env, clear=True), \
+         patch("subprocess.run", return_value=_make_completed_process()) as mock_run:
         # A harmless, non-dangerous command that passes the approval gate.
         with patch("tools.approval.detect_hardline_command", return_value=(False, "")), \
              patch("tools.approval.detect_dangerous_command", return_value=(False, None, "")):
@@ -106,6 +118,18 @@ def test_shell_exec_uses_utf8_replace():
         assert kwargs.get("errors") == "replace", (
             f"shell.exec subprocess.run must set errors='replace' (got {kwargs.get('errors')!r})"
         )
+        env = kwargs.get("env")
+        assert isinstance(env, dict), "shell.exec must pass an explicit child environment"
+        assert env.get("PATH") == parent_env["PATH"]
+        for key in (
+            "HERMES_TEST_SECRET_CANARY",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "GITHUB_TOKEN",
+            "HF_TOKEN",
+            "MY_APP_VAR",
+        ):
+            assert key not in env, f"{key} leaked into shell.exec"
 
 
 # ── quick-command exec path (via command.dispatch) ───────────────────────

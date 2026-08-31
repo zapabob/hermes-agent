@@ -607,6 +607,8 @@ def _spawn(spec: ShellHookSpec, stdin_json: str) -> Dict[str, Any]:
         {"creationflags": windows_hide_flags()} if IS_WINDOWS else {"process_group": 0}
     )
     try:
+        from tools.environments.local import hermes_subprocess_env
+
         proc = subprocess.Popen(
             argv,
             stdin=subprocess.PIPE,
@@ -614,6 +616,7 @@ def _spawn(spec: ShellHookSpec, stdin_json: str) -> Dict[str, Any]:
             stderr=subprocess.PIPE,
             text=True, encoding='utf-8', errors='replace',
             shell=False,
+            env=hermes_subprocess_env(allowlist_only=True),
             **_popen_kwargs,
         )
     except FileNotFoundError:

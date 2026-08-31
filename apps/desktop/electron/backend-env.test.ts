@@ -7,6 +7,7 @@ import {
   appendUniquePathEntries,
   buildDesktopBackendEnv,
   buildDesktopBackendPath,
+  buildDesktopUpdaterEnv,
   hermesManagedNodePathEntries,
   normalizeHermesHomeRoot,
   pathEnvKey,
@@ -188,4 +189,48 @@ test('Windows PATH casing and delimiter are preserved without POSIX sane entries
 
 test('appendUniquePathEntries drops empty entries and keeps first occurrence', () => {
   assert.equal(appendUniquePathEntries([':/a::/b', ['/a', '/c']], { delimiter: ':' }), '/a:/b:/c')
+})
+
+test('desktop updater env excludes parent credentials and unrelated values', () => {
+  const env = buildDesktopUpdaterEnv({
+    currentEnv: {
+      Path: 'C:\\Windows\\System32',
+      SystemRoot: 'C:\\Windows',
+      TEMP: 'C:\\Temp',
+      HERMES_TEST_SECRET_CANARY: 'HERMES_CANARY_DO_NOT_LEAK_8F421',
+      OPENAI_API_KEY: 'sk-test-HERMES-CANARY',
+      ANTHROPIC_API_KEY: 'test-anthropic-canary',
+      NVIDIA_API_KEY: 'nvapi-test-canary',
+      OPENCODE_API_KEY: 'opencode-test-canary',
+      GITHUB_TOKEN: 'ghp_test_canary',
+      HF_TOKEN: 'hf_test_canary',
+      UNRELATED_PARENT_SETTING: 'must-not-leak'
+    },
+    extra: {
+      HERMES_HOME: 'C:\\Users\\test\\.hermes',
+      HERMES_UPDATE_STARTED_AT: '1770000000',
+      PATH: 'C:\\Hermes\\node;C:\\Windows\\System32'
+    },
+    platform: 'win32'
+  })
+
+  assert.equal(env.SystemRoot, 'C:\\Windows')
+  assert.equal(env.TEMP, 'C:\\Temp')
+  assert.equal(env.PATH, 'C:\\Hermes\\node;C:\\Windows\\System32')
+  assert.equal(env.Path, undefined)
+  assert.equal(env.HERMES_HOME, 'C:\\Users\\test\\.hermes')
+  assert.equal(env.HERMES_UPDATE_STARTED_AT, '1770000000')
+
+  for (const key of [
+    'HERMES_TEST_SECRET_CANARY',
+    'OPENAI_API_KEY',
+    'ANTHROPIC_API_KEY',
+    'NVIDIA_API_KEY',
+    'OPENCODE_API_KEY',
+    'GITHUB_TOKEN',
+    'HF_TOKEN',
+    'UNRELATED_PARENT_SETTING'
+  ]) {
+    assert.equal(env[key], undefined, `${key} must not cross the updater boundary`)
+  }
 })

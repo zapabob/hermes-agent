@@ -46,6 +46,7 @@ from hermes_cli.config import (
     save_env_value,
 )
 from hermes_cli.cli_output import prompt as _prompt_input
+from tools.environments.local import hermes_subprocess_env
 
 _MANIFEST_VERSION = 1
 
@@ -473,7 +474,12 @@ def _run_bootstrap(cwd: Path, commands: List[str]) -> None:
     """
     for cmd in commands:
         print(color(f"  $ {cmd}", Colors.DIM))
-        proc = subprocess.run(cmd, cwd=str(cwd), shell=True)
+        proc = subprocess.run(
+            cmd,
+            cwd=str(cwd),
+            shell=True,
+            env=hermes_subprocess_env(allowlist_only=True),
+        )
         if proc.returncode != 0:
             raise CatalogError(
                 f"bootstrap step failed (exit {proc.returncode}): {cmd}"
