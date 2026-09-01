@@ -31,10 +31,9 @@ import { createBootstrapCoordinator } from './ssh-bootstrap-coordinator'
 const CORRELATION = '12345678-1234-4678-9234-567812345678'
 const exec = promisify(execCallback)
 const posixObserverTest = process.platform === 'win32' ? test.skip : test
+
 const posixShell =
-  process.platform === 'win32'
-    ? process.env.OMO_CODEX_GIT_BASH_PATH || 'C:/Program Files/Git/bin/bash.exe'
-    : '/bin/sh'
+  process.platform === 'win32' ? process.env.OMO_CODEX_GIT_BASH_PATH || 'C:/Program Files/Git/bin/bash.exe' : '/bin/sh'
 
 function posixTestPath(value: string): string {
   const normalized = value.split(String.fromCharCode(92)).join('/')
@@ -88,11 +87,14 @@ test('inactive SSH crash recovery keeps ordinary dials fenced until positive cle
   let durableOwner: string | null = CORRELATION
   const relaunchedGate = new ManagedConnectionUpdateGate(id => (id === 'homelab' ? durableOwner : null))
   let releaseClearance!: () => void
+
   const clearance = new Promise<void>(resolve => {
     releaseClearance = resolve
   })
+
   let restoreCalls = 0
   let journalCleared = false
+
   const recovery = recoverManagedSshScopes({
     scopes: [] as Array<{ profile: string }>,
     awaitClearance: () => clearance,
@@ -121,11 +123,14 @@ test('managed update joins a pre-claim bootstrap until its final gate check roll
   const gate = new ManagedConnectionUpdateGate()
   const coordinator = createBootstrapCoordinator()
   let releaseLifecycle!: () => void
+
   const lifecycle = new Promise<void>(resolve => {
     releaseLifecycle = resolve
   })
+
   let serveLive = false
   let rollbackComplete = false
+
   const startPromise = coordinator.start(
     '',
     'fingerprint',
@@ -143,6 +148,7 @@ test('managed update joins a pre-claim bootstrap until its final gate check roll
     },
     { managedScope: 'primary', registryConnectionId: 'homelab' }
   )
+
   // The fence rethrows managed-update-in-progress after rolling back — that
   // rejection propagating out of start() is the CONTRACT under test, not an
   // accident. Swallow it here so vitest doesn't flag the floating promise as
@@ -299,6 +305,7 @@ test('POSIX managed launcher executes the updater command and atomically publish
       },
       CORRELATION
     )
+
     const { stdout } = await exec(command, { shell: posixShell })
     const statusPath = path.join(localHome, `.update_exit_code.${CORRELATION}`)
     let status = ''
@@ -329,6 +336,7 @@ test('Windows managed launcher starts a hidden child and leaves exit 75 to the e
     },
     CORRELATION
   )
+
   const outer = Buffer.from(command.split(' ').at(-1) || '', 'base64').toString('utf16le')
   const wrapperBase64 = outer.match(/"-EncodedCommand",'([^']+)'/)?.[1]
 
@@ -382,6 +390,7 @@ posixObserverTest('POSIX observer reads the exact correlation receipt and termin
         post_update: { sha: 'new' }
       })
     )
+
     const command = buildRemoteUpdateObservationCommand(
       {
         ssh: { exec: async () => '' },
@@ -391,6 +400,7 @@ posixObserverTest('POSIX observer reads the exact correlation receipt and termin
       },
       CORRELATION
     )
+
     const { stdout } = await exec(command, { shell: posixShell })
     const parsed = parseRemoteUpdateObservation(stdout, CORRELATION)
 
@@ -412,6 +422,7 @@ posixObserverTest('managed observer unwraps a named profile home for the install
   try {
     await mkdir(localProfileHome, { recursive: true })
     await writeFile(path.join(localRoot, '.hermes-update-in-progress'), `${process.pid}\n1\n`)
+
     const command = buildRemoteUpdateObservationCommand(
       {
         ssh: { exec: async () => '' },
@@ -421,6 +432,7 @@ posixObserverTest('managed observer unwraps a named profile home for the install
       },
       CORRELATION
     )
+
     const { stdout } = await exec(command, { shell: posixShell })
     const parsed = parseRemoteUpdateObservation(stdout, CORRELATION)
 
@@ -450,7 +462,9 @@ test('Windows coordinator handoff is pending until its marker clears and correla
       coordinatorReady: { correlationId: CORRELATION, pid: 88 }
     })
   ]
+
   let calls = 0
+
   const target = {
     platform: 'Windows' as const,
     hermesPath: 'C:\\Hermes\\hermes.exe',
@@ -478,6 +492,7 @@ test('Windows coordinator handoff is pending until its marker clears and correla
 
 test('terminal status without its durable receipt fails instead of claiming success', async () => {
   let now = 0
+
   const target = {
     platform: 'Linux' as const,
     hermesPath: '~/.local/bin/hermes',
@@ -500,12 +515,14 @@ test('terminal status without its durable receipt fails instead of claiming succ
 test('live or malformed remote markers fail actionably at bounded update and recovery deadlines', async () => {
   for (const marker of ['live', 'malformed'] as const) {
     let now = 0
+
     const target = {
       platform: 'Linux' as const,
       hermesPath: '~/.local/bin/hermes',
       hermesHome: '~/.hermes',
       ssh: { exec: async () => observation({ marker, ...(marker === 'live' ? { markerPid: 44 } : {}) }) }
     }
+
     const clock = {
       timeoutMs: 5,
       pollMs: 1,
@@ -523,6 +540,7 @@ test('live or malformed remote markers fail actionably at bounded update and rec
 
 test('a journaled launch requires correlated terminal proof or an observed live-owner transition before restore', async () => {
   let now = 0
+
   const target = {
     platform: 'Linux' as const,
     hermesPath: '~/.local/bin/hermes',
@@ -556,6 +574,7 @@ test('a journaled launch requires correlated terminal proof or an observed live-
 
 test('remote launch intent fences crash recovery even before the local journal records launch proof', async () => {
   let now = 0
+
   const target = {
     platform: 'Linux' as const,
     hermesPath: '~/.local/bin/hermes',
@@ -587,11 +606,14 @@ test('before-quit join observes operations added while an earlier update settles
   let releaseFirst!: () => void
   let releaseSecond!: () => void
   const operations = new Set<Promise<void>>()
+
   const first = new Promise<void>(resolve => {
     releaseFirst = resolve
   })
+
   operations.add(first)
   const joined = waitForManagedUpdateOperations(() => operations)
+
   const second = new Promise<void>(resolve => {
     releaseSecond = resolve
   })
@@ -614,6 +636,7 @@ test('before-quit join observes operations added while an earlier update settles
 
 test('managed lifecycle restores every captured profile after update failure before releasing the gate', async () => {
   const events: string[] = []
+
   const scopes = [
     { key: 'conn:home::default', profile: 'default' },
     { key: 'conn:home::research', profile: 'research' }
@@ -673,6 +696,7 @@ test('managed lifecycle restores every captured profile after update failure bef
 
 test('inactive managed update journals before launch and clears only after remote clearance', async () => {
   const events: string[] = []
+
   const result = await runManagedSshUpdate({
     connectionId: 'homelab',
     correlationId: CORRELATION,
@@ -731,6 +755,7 @@ test('managed lifecycle attempts every drain and every restore when one ownershi
     preflightRemote: async () => {},
     drainScope: async scope => {
       drained.push(scope.profile)
+
       if (scope.profile === 'default') {
         throw new Error('foreign owner')
       }
@@ -759,6 +784,7 @@ test('managed lifecycle attempts every drain and every restore when one ownershi
 
 test('managed lifecycle journals before drain and leaves scopes stopped when clearance cannot be proved', async () => {
   const events: string[] = []
+
   const result = await runManagedSshUpdate({
     connectionId: 'home',
     correlationId: CORRELATION,
@@ -830,6 +856,7 @@ test('journal cleanup failure prevents a false successful update result', async 
 
 test('preflight refusal leaves a healthy primary scope untouched and releases without waiting', async () => {
   const events: string[] = []
+
   const result = await runManagedSshUpdate({
     connectionId: 'home',
     correlationId: CORRELATION,

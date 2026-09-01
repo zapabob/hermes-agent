@@ -1447,9 +1447,7 @@ const POOL_IDLE_MS = Math.max(60_000, Number(process.env.HERMES_DESKTOP_POOL_IDL
 //     "is this backend plausibly still alive" question for LRU eviction,
 //     not when the idle reaper definitively tears a backend down.
 
-const POOL_KEEPALIVE_FRESH_MS = resolvePoolKeepaliveFreshMs(
-  process.env.HERMES_DESKTOP_POOL_KEEPALIVE_FRESH_MS
-)
+const POOL_KEEPALIVE_FRESH_MS = resolvePoolKeepaliveFreshMs(process.env.HERMES_DESKTOP_POOL_KEEPALIVE_FRESH_MS)
 
 let poolIdleReaper = null
 let backendOrphanReapPromise = null
@@ -9702,7 +9700,6 @@ function clearManagedSshRecovery(connectionId, correlationId) {
   }
 }
 
-
 const sshBootstrapCoordinator = createBootstrapCoordinator()
 
 let sshQuitTeardownDone = false
@@ -9930,7 +9927,14 @@ async function effectiveSshConfigFingerprint(sshConfig) {
   return crypto.createHash('sha256').update(output).digest('hex')
 }
 
-async function bootstrapSshConnection(profile, sshConfig, reuseToken, source, resolvedEffectiveFingerprint?, metadata: any = {}) {
+async function bootstrapSshConnection(
+  profile,
+  sshConfig,
+  reuseToken,
+  source,
+  resolvedEffectiveFingerprint?,
+  metadata: any = {}
+) {
   const scope = sshScopeKey(profile)
   const effectiveConfigFingerprint = resolvedEffectiveFingerprint || (await effectiveSshConfigFingerprint(sshConfig))
   const resolvedConfig = { ...sshConfig, effectiveConfigFingerprint }
