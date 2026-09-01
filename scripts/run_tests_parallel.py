@@ -354,10 +354,15 @@ def _spawn_pytest_once(
         # Avoid concurrent bytecode writes from many per-file pytest workers.
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
         # POSIX: place the child at the head of its own process group so
-        # _kill_tree can SIGKILL the group atomically.
-        # Windows: this maps to CREATE_NEW_PROCESS_GROUP in CPython 3.12+;
-        # _kill_tree handles the Windows path via taskkill /F /T.
-        start_new_session=True,
+        # _kill_tree can SIGKILL the group atomically. Windows runners still
+        # use Python 3.11, where start_new_session does not reliably isolate
+        # console control events, so isolate the child explicitly.
+        start_new_session=sys.platform != "win32",
+        creationflags=(
+            subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+            if sys.platform == "win32"
+            else 0
+        ),
     )
 
     # Capture the pgid NOW, before the leader can exit and be reaped. Once
@@ -534,11 +539,13 @@ def _run_one_file_once(
             stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace",
             env=env,
-            # POSIX: place the child at the head of its own process group so
-            # _kill_tree can SIGKILL the group atomically.
-            # Windows: this maps to CREATE_NEW_PROCESS_GROUP in CPython 3.12+;
-            # _kill_tree handles the Windows path via taskkill /F /T.
-            start_new_session=True,
+            # Match the collection subprocess isolation above.
+            start_new_session=sys.platform != "win32",
+            creationflags=(
+                subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+                if sys.platform == "win32"
+                else 0
+            ),
         )
 
         pgid: int | None = None
