@@ -34,7 +34,7 @@ def _git(repo: Path, *args: str) -> str:
 
 
 @pytest.fixture
-def divergent_repo(tmp_path: Path) -> tuple[Path, str, str]:
+def divergent_repo(tmp_path: Path) -> tuple[Path, str, str, str]:
     _git(tmp_path, "init")
     _git(tmp_path, "config", "user.name", "Snapshot Test")
     _git(tmp_path, "config", "user.email", "snapshot@example.invalid")
@@ -53,15 +53,15 @@ def divergent_repo(tmp_path: Path) -> tuple[Path, str, str]:
     _git(tmp_path, "add", "upstream.txt")
     _git(tmp_path, "commit", "-m", "fix: upstream")
     upstream = _git(tmp_path, "rev-parse", "HEAD")
-    return tmp_path, downstream, upstream
+    return tmp_path, base, downstream, upstream
 
 
 def test_report_only_is_deterministic_and_read_only(
-    divergent_repo: tuple[Path, str, str],
+    divergent_repo: tuple[Path, str, str, str],
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     module = _load_module()
-    repo, downstream, upstream = divergent_repo
+    repo, base, downstream, upstream = divergent_repo
     args = [
         "--repo",
         str(repo),
@@ -69,6 +69,8 @@ def test_report_only_is_deterministic_and_read_only(
         upstream,
         "--downstream-ref",
         downstream,
+        "--base-sha",
+        base,
         "--report-only",
     ]
 
@@ -84,10 +86,10 @@ def test_report_only_is_deterministic_and_read_only(
 
 
 def test_apply_writes_campaign_metadata(
-    divergent_repo: tuple[Path, str, str],
+    divergent_repo: tuple[Path, str, str, str],
 ) -> None:
     module = _load_module()
-    repo, downstream, upstream = divergent_repo
+    repo, base, downstream, upstream = divergent_repo
 
     result = module.main([
         "--repo",
@@ -96,6 +98,8 @@ def test_apply_writes_campaign_metadata(
         upstream,
         "--downstream-ref",
         downstream,
+        "--base-sha",
+        base,
         "--captured-at",
         "2026-08-26T18:25:00+09:00",
         "--apply",
@@ -111,17 +115,18 @@ def test_apply_writes_campaign_metadata(
     assert snapshot["upstream_head_sha"] == upstream
     assert snapshot["downstream_start_sha"] == downstream
     assert snapshot["merge_base_sha"] == _git(repo, "merge-base", downstream, upstream)
+    assert snapshot["comparison_base_sha"] == base
     assert snapshot["captured_at"] == "2026-08-26T18:25:00+09:00"
     assert (repo / "_docs" / "upstream-integration-20260826.md").is_file()
     assert _git(repo, "rev-parse", "HEAD") == upstream
 
 
 def test_moving_upstream_ref_is_rejected(
-    divergent_repo: tuple[Path, str, str],
+    divergent_repo: tuple[Path, str, str, str],
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     module = _load_module()
-    repo, downstream, _ = divergent_repo
+    repo, _, downstream, _ = divergent_repo
 
     result = module.main([
         "--repo",
@@ -150,3 +155,68 @@ def test_sensitive_intersection_requires_composition() -> None:
     assert "SECURITY_CRITICAL" in categories
     assert "CREDENTIAL_BOUNDARY" in categories
     assert "FEATURE_OVERLAP" in categories
+
+
+def test_generated_artifact_is_rejected() -> None:
+    module = _load_module()
+
+    _, decision = module._classify(
+        "chore: add local output",
+        ["tmp/result.log"],
+        [],
+    )
+
+    assert decision == "REJECT_GENERATED_ARTIFACT"
+
+
+def test_apply_archives_previous_campaign_immutably(
+    divergent_repo: tuple[Path, str, str, str],
+) -> None:
+    module = _load_module()
+    repo, base, downstream, upstream = divergent_repo
+    previous = {
+        "captured_at": "2026-08-28T02:33:55+09:00",
+        "upstream_head_sha": base,
+    }
+    seed = {
+        ".codex/UPSTREAM_SNAPSHOT.json": json.dumps(previous) + "\n",
+        ".codex/UPSTREAM_POLICY.md": "old policy\n",
+        "UPSTREAM_ADOPTION.yaml": "old adoption\n",
+        "FEATURES.yaml": "old features\n",
+        "CARRY.yaml": "old carry\n",
+    }
+    for relative, content in seed.items():
+        path = repo / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+    result = module.main([
+        "--repo",
+        str(repo),
+        "--upstream-sha",
+        upstream,
+        "--downstream-ref",
+        downstream,
+        "--base-sha",
+        base,
+        "--captured-at",
+        "2026-09-01T18:00:00+09:00",
+        "--archive-existing",
+        "--apply",
+    ])
+
+    assert result == 0
+    archive = repo / "_docs" / "upstream-campaigns" / "2026-08-28"
+    for relative, content in seed.items():
+        assert (archive / relative).read_text(encoding="utf-8") == content
+    manifest = json.loads(
+        (archive / "archive-manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["upstream_head_sha"] == base
+
+    (archive / "CARRY.yaml").write_text("tampered\n", encoding="utf-8")
+    for relative, content in seed.items():
+        path = repo / relative
+        path.write_text(content, encoding="utf-8")
+    with pytest.raises(module.SnapshotSyncError, match="immutable archive conflict"):
+        module._archive_existing_campaign(repo, archived_at="2026-09-01T18:00:00+09:00")

@@ -13,7 +13,7 @@
   },
   "upstream": {
     "slug": "NousResearch/hermes-agent",
-    "snapshot_sha": "5fc308a70719a83cccdbba4c0e39c23f5a8239d5"
+    "snapshot_sha": "5a8e8a6b87487c0e0785cd9eb561cc6a96c64f5e"
   },
   "platform": {
     "os": "windows",
