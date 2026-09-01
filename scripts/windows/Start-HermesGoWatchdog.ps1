@@ -36,8 +36,10 @@ function Invoke-GoWatchdogBuildBounded {
     $argList = @()
     if ($SkipTest) { $argList += "-SkipTest" }
     Write-Host ("Building Go watchdog (timeout={0}s, SkipTest={1})..." -f $TimeoutSec, [bool]$SkipTest)
+    $quotedBuildScript = '"{0}"' -f $BuildScript.Replace('"', '\"')
+    $processArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $quotedBuildScript) + $argList
     $proc = Start-Process -FilePath "powershell.exe" `
-        -ArgumentList (@("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $BuildScript) + $argList) `
+        -ArgumentList ($processArgs -join " ") `
         -WorkingDirectory $ScriptDir `
         -PassThru `
         -WindowStyle Hidden

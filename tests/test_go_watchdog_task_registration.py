@@ -82,3 +82,11 @@ def test_watchdog_task_registration_still_forwards_explicit_port_overrides() -> 
             template.replace("$ManagedBackendPort", str(port)) for template in templates
         ]
         assert rendered == [f"-managed-backend-port={port}"] * 2
+
+
+def test_watchdog_build_quotes_script_paths_with_spaces() -> None:
+    go_start = GO_START.read_text(encoding="utf-8")
+
+    assert "$quotedBuildScript" in go_start
+    assert '-ArgumentList ($processArgs -join " ")' in go_start
+    assert '-File", $BuildScript' not in go_start
