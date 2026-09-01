@@ -15,12 +15,17 @@ const skin = {
 
 function readyContext(active: boolean): GatewayEventContext {
   return {
-    deps: { activeGatewayProfile: 'default' },
-    event: { profile: 'default', type: 'gateway.ready' },
+    deps: { activeGatewayProfile: 'default' } as GatewayEventContext['deps'],
+    event: { profile: 'default', type: 'gateway.ready' } as GatewayEventContext['event'],
+    explicitSid: '',
     fromActiveSource: () => active,
-    payload: { skin },
+    isActiveEvent: true,
+    occurredAt: 0,
+    payload: { skin } as GatewayEventContext['payload'],
+    scheduleConfigRefresh: () => undefined,
+    sessionId: null,
     sourceScope: gatewayScope('desktop', 'default')
-  } as GatewayEventContext
+  }
 }
 
 describe('gateway.ready skin adoption', () => {
