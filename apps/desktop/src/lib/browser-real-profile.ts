@@ -5,8 +5,8 @@ export function readUseRealProfile(record: Record<string, unknown> | undefined):
 
   return Boolean(
     browser &&
-      typeof browser === 'object' &&
-      !Array.isArray(browser) &&
-      (browser as Record<string, unknown>).use_real_profile === true
+    typeof browser === 'object' &&
+    !Array.isArray(browser) &&
+    (browser as Record<string, unknown>).use_real_profile === true
   )
 }

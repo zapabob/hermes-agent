@@ -163,7 +163,8 @@ export const ja = defineLocale({
       openaiRejectedApiKey: 'OpenAI が API キーを拒否しました。',
       openaiRejectedApiKeyWithStatus: status => `OpenAI が API キーを拒否しました (${status} invalid_api_key)。`,
       openaiTtsNeedsKey: 'OpenAI TTS には VOICE_TOOLS_OPENAI_KEY または OPENAI_API_KEY が必要です。',
-      codeSkewRestartRequired: 'アップデート後、このバックエンドは古いコードのままです。再起動して新しいコードを読み込んでください。'
+      codeSkewRestartRequired:
+        'アップデート後、このバックエンドは古いコードのままです。再起動して新しいコードを読み込んでください。'
     },
     voice: {
       configureSpeechToText: '音声モードを使用するには音声認識を設定してください。',
@@ -1039,7 +1040,8 @@ export const ja = defineLocale({
       model: 'モデル',
       applying: '適用中...',
       loadFailed: 'モデルを読み込めませんでした',
-      restartRequired: 'アップデート後、このバックエンドは古いコードのままです。再起動して新しいコードを読み込んでください。',
+      restartRequired:
+        'アップデート後、このバックエンドは古いコードのままです。再起動して新しいコードを読み込んでください。',
       restartBackend: 'バックエンドを再起動',
       restartingBackend: 'バックエンドを再起動中...',
       restartFailed: 'バックエンドを再起動できませんでした',
@@ -3180,7 +3182,8 @@ export const ja = defineLocale({
     editTurnUnavailable: 'このターンはサーバー履歴にありません（圧縮で削除された可能性があります）。',
     resumeFailed: '再開に失敗しました',
     readOnlyTranscriptTitle: '読み取り専用で開きました',
-    readOnlyTranscriptBody: 'この古いチャットを所有するバックエンドがまだ接続されていないため、読み取り専用のトランスクリプトとして開きました。履歴は無事です。バックエンドが所有を認識するまで送信は無効です。',
+    readOnlyTranscriptBody:
+      'この古いチャットを所有するバックエンドがまだ接続されていないため、読み取り専用のトランスクリプトとして開きました。履歴は無事です。バックエンドが所有を認識するまで送信は無効です。',
     readOnlyTranscriptSendBlocked: 'このチャットは読み取り専用トランスクリプトとして開いています。送信は無効です。',
     resumeStrandedTitle: 'このセッションを読み込めませんでした',
     resumeStrandedBody:
