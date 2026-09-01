@@ -17,12 +17,12 @@
   "schema_version": 1,
   "snapshot_sha": "5fc308a70719a83cccdbba4c0e39c23f5a8239d5",
   "summary": {
-    "all_fork_specific_loc": 477484,
-    "carry_surface_files": 1323,
-    "cwc": 435356,
-    "fork_owned_loc": 320853,
-    "upstream_owned_fork_loc": 156631,
-    "utr": 0.328034
+    "all_fork_specific_loc": 485073,
+    "carry_surface_files": 1367,
+    "cwc": 451105,
+    "fork_owned_loc": 324931,
+    "upstream_owned_fork_loc": 160142,
+    "utr": 0.33014
   },
   "top_carry_risks": [
     {
@@ -35,19 +35,19 @@
       "upstream_frequency": 19
     },
     {
-      "added": 337,
-      "cwc": 51900,
-      "deleted": 528,
-      "patch_size": 865,
+      "added": 368,
+      "cwc": 55080,
+      "deleted": 550,
+      "patch_size": 918,
       "path": "apps/desktop/electron/main.ts",
       "semantic_coupling": 3,
       "upstream_frequency": 20
     },
     {
-      "added": 1214,
-      "cwc": 48930,
-      "deleted": 417,
-      "patch_size": 1631,
+      "added": 1227,
+      "cwc": 49410,
+      "deleted": 420,
+      "patch_size": 1647,
       "path": "hermes_cli/web_server.py",
       "semantic_coupling": 2,
       "upstream_frequency": 15
@@ -62,13 +62,22 @@
       "upstream_frequency": 18
     },
     {
-      "added": 280,
-      "cwc": 16240,
+      "added": 282,
+      "cwc": 16280,
       "deleted": 532,
-      "patch_size": 812,
+      "patch_size": 814,
       "path": "tui_gateway/server.py",
       "semantic_coupling": 2,
       "upstream_frequency": 10
+    },
+    {
+      "added": 557,
+      "cwc": 10512,
+      "deleted": 27,
+      "patch_size": 584,
+      "path": "hermes_cli/models.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 9
     },
     {
       "added": 101,
@@ -80,10 +89,10 @@
       "upstream_frequency": 10
     },
     {
-      "added": 255,
-      "cwc": 8514,
-      "deleted": 132,
-      "patch_size": 387,
+      "added": 280,
+      "cwc": 9152,
+      "deleted": 136,
+      "patch_size": 416,
       "path": "hermes_cli/main.py",
       "semantic_coupling": 2,
       "upstream_frequency": 11
@@ -107,10 +116,10 @@
       "upstream_frequency": 6
     },
     {
-      "added": 14,
-      "cwc": 6314,
-      "deleted": 273,
-      "patch_size": 287,
+      "added": 40,
+      "cwc": 6974,
+      "deleted": 277,
+      "patch_size": 317,
       "path": "tools/browser_tool.py",
       "semantic_coupling": 2,
       "upstream_frequency": 11
@@ -141,15 +150,6 @@
       "path": "gateway/run.py",
       "semantic_coupling": 2,
       "upstream_frequency": 7
-    },
-    {
-      "added": 280,
-      "cwc": 5238,
-      "deleted": 11,
-      "patch_size": 291,
-      "path": "hermes_cli/models.py",
-      "semantic_coupling": 2,
-      "upstream_frequency": 9
     },
     {
       "added": 80,
@@ -197,6 +197,15 @@
       "upstream_frequency": 2
     },
     {
+      "added": 136,
+      "cwc": 4080,
+      "deleted": 34,
+      "patch_size": 170,
+      "path": "hermes_cli/browser_connect.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 12
+    },
+    {
       "added": 236,
       "cwc": 3992,
       "deleted": 263,
@@ -231,15 +240,6 @@
       "path": "package-lock.json",
       "semantic_coupling": 2,
       "upstream_frequency": 1
-    },
-    {
-      "added": 92,
-      "cwc": 3000,
-      "deleted": 33,
-      "patch_size": 125,
-      "path": "hermes_cli/browser_connect.py",
-      "semantic_coupling": 2,
-      "upstream_frequency": 12
     },
     {
       "added": 750,
