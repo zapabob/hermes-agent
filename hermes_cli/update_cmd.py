@@ -2058,9 +2058,7 @@ def _update_via_zip(args, *, had_desktop_app_before_update: bool = False) -> boo
         )
         _m().sys.exit(1)
     _abort_zip_update_if_dirty_tree()
-    zip_url = (
-        f"https://github.com/NousResearch/hermes-agent/archive/refs/heads/{branch}.zip"
-    )
+    zip_url = _distribution_archive_url(branch)
 
     print("→ Downloading latest version...")
     tmp_dir = tempfile.mkdtemp(prefix="hermes-update-")
@@ -2984,6 +2982,40 @@ OFFICIAL_REPO_URL = "https://github.com/NousResearch/hermes-agent.git"
 
 SKIP_UPSTREAM_PROMPT_FILE = ".skip_upstream_prompt"
 
+
+def _normalize_repo_url(url: str) -> str:
+    normalized = url.strip().rstrip("/").lower()
+    return normalized[:-4] if normalized.endswith(".git") else normalized
+
+
+def _distribution_repo_urls() -> set[str]:
+    from downstream.distribution import load_distribution
+
+    repository = load_distribution().repository
+    return {repository.web, repository.https, repository.ssh}
+
+
+def _is_distribution_origin(origin_url: Optional[str]) -> bool:
+    if not origin_url:
+        return False
+    normalized = _normalize_repo_url(origin_url)
+    return any(
+        normalized == _normalize_repo_url(candidate)
+        for candidate in _distribution_repo_urls()
+    )
+
+
+def _distribution_archive_url(branch: str) -> str:
+    try:
+        from downstream.distribution import update_archive_url
+
+        return update_archive_url(branch)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise RuntimeError(
+            "downstream distribution metadata is required for ZIP updates"
+        ) from exc
+
+
 def _get_origin_url(git_cmd: list[str], cwd: Path) -> Optional[str]:
     """Get the URL of the origin remote, or None if not set."""
     try:
@@ -3002,6 +3034,8 @@ def _get_origin_url(git_cmd: list[str], cwd: Path) -> Optional[str]:
 def _is_fork(origin_url: Optional[str]) -> bool:
     """Check if the origin remote points to a fork (not the official repo)."""
     if not origin_url:
+        return False
+    if _is_distribution_origin(origin_url):
         return False
     # Normalize URL for comparison (strip trailing .git if present)
     normalized = origin_url.rstrip("/")
@@ -4425,7 +4459,8 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
     )
     depth_args = ["--depth", "1"] if is_shallow else []
 
-    if branch == "main":
+    origin_url = _get_origin_url(git_cmd, _m().PROJECT_ROOT)
+    if branch == "main" and not _is_distribution_origin(origin_url):
         # Probe locally (~6 ms) whether an 'upstream' remote exists at all
         # before spending a network fetch on it. Non-fork installs have no
         # 'upstream' remote, and the old flow burned a failed network attempt
