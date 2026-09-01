@@ -16,7 +16,6 @@ import hashlib
 import json
 import logging
 import os
-import posixpath
 import re
 import shlex
 import signal
@@ -303,13 +302,50 @@ def normalize_updated_at(value: Any) -> Optional[str]:
     return None
 
 
-def terminate_pid(pid: int, *, force: bool = False) -> None:
+def _assert_process_start_time_matches(
+    pid: int, expected_start_time: Optional[float]
+) -> None:
+    """Fail closed unless ``pid`` still names the recorded process object."""
+    if expected_start_time is None:
+        raise OSError(
+            f"refusing to force-kill PID {pid} without a process start-time guard"
+        )
+    current_start_time = _get_process_start_time(pid)
+    if current_start_time is None:
+        raise OSError(
+            f"refusing to force-kill PID {pid}; process start time is unavailable"
+        )
+    try:
+        expected = float(expected_start_time)
+        current = float(current_start_time)
+    except (TypeError, ValueError) as exc:
+        raise OSError(f"refusing to force-kill PID {pid}; malformed start time") from exc
+    if expected <= 0 or current <= 0 or abs(expected - current) > 0.001:
+        raise OSError(f"refusing to force-kill PID {pid}; process identity changed")
+
+
+def terminate_pid(
+    pid: int,
+    *,
+    force: bool = False,
+    expected_start_time: Optional[float] = None,
+) -> None:
     """Terminate a PID with platform-appropriate force semantics.
 
     POSIX uses SIGTERM/SIGKILL. Windows uses taskkill /T /F for true force-kill
     because os.kill(..., SIGTERM) is not equivalent to a tree-killing hard stop.
+
+    Identity guard: on Windows, ``force=True`` REQUIRES a matching
+    ``expected_start_time`` (fail closed — taskkill /T /F on a recycled PID
+    has killed svchost.exe and blue-screened the host, #89614). On POSIX an
+    expectation is optional, but when the caller provides one and it no
+    longer matches the live process, the kill is refused on every platform —
+    a mismatched fingerprint always means the PID was recycled.
     """
+    if force and expected_start_time is not None and not _IS_WINDOWS:
+        _assert_process_start_time_matches(pid, expected_start_time)
     if force and _IS_WINDOWS:
+        _assert_process_start_time_matches(pid, expected_start_time)
         # CREATE_NO_WINDOW: terminate_pid runs from the windowless pythonw.exe
         # gateway/desktop backend, so a bare taskkill spawn would flash a
         # conhost window on every force-kill.
@@ -469,7 +505,6 @@ def _gateway_command_subcommand(command: str | None) -> str | None:
     joined = " ".join(tokens)
     has_gateway_entry = (
         "hermes_cli.main" in joined
-        or "hermes_cli" in tokens
         or "hermes_cli/main.py" in joined
         or any(t.rsplit("/", 1)[-1] in ("hermes", "hermes.exe") for t in tokens)
     )
@@ -554,31 +589,6 @@ def _profile_name_for_home(profile_home: Path) -> Optional[str]:
     return None
 
 
-def _command_line_tokens(command: str) -> list[str]:
-    try:
-        return [token.lower() for token in shlex.split(command)]
-    except ValueError:
-        return [token.lower() for token in command.split()]
-
-
-def _profile_arg_value(tokens: list[str]) -> Optional[str]:
-    for idx, token in enumerate(tokens):
-        if token in {"--profile", "-p"}:
-            if idx + 1 < len(tokens):
-                return tokens[idx + 1]
-            return None
-        if token.startswith("--profile=") or token.startswith("-p="):
-            return token.split("=", 1)[1]
-    return None
-
-
-def _hermes_home_arg_value(tokens: list[str]) -> Optional[str]:
-    for token in tokens:
-        if token.startswith("hermes_home="):
-            return token.split("=", 1)[1]
-    return None
-
-
 def _command_line_belongs_to_profile(command: str, profile_home: Path) -> bool:
     """Return True when a gateway command line belongs to ``profile_home``.
 
@@ -592,22 +602,19 @@ def _command_line_belongs_to_profile(command: str, profile_home: Path) -> bool:
     explicit ``HERMES_HOME=<path>``) on its argv; the default/root gateway runs
     bare with no profile flag.
     """
-    tokens = _command_line_tokens(command.replace("\\", "/"))
+    # Normalize separators before the substring match: on Windows,
+    # str(Path) renders backslashes while a HERMES_HOME= value on the argv
+    # may carry forward slashes (Git Bash, JSON configs) — and vice versa.
+    command_lc = command.lower().replace("\\", "/")
     profile_name = _profile_name_for_home(profile_home)
-    home_variants = {
-        posixpath.normpath(str(profile_home).lower().replace("\\", "/")),
-        posixpath.normpath(profile_home.as_posix().lower()),
-    }
-    profile_arg = _profile_arg_value(tokens)
-    hermes_home_arg = _hermes_home_arg_value(tokens)
-    if hermes_home_arg is not None:
-        hermes_home_arg = posixpath.normpath(hermes_home_arg.replace("\\", "/"))
+    home_lc = str(profile_home).lower().replace("\\", "/")
 
     if profile_name is not None and profile_name != "default":
         profile_lc = profile_name.lower()
         return (
-            profile_arg == profile_lc
-            or (hermes_home_arg is not None and hermes_home_arg in home_variants)
+            f"--profile {profile_lc}" in command_lc
+            or f"-p {profile_lc}" in command_lc
+            or f"hermes_home={home_lc}" in command_lc
         )
 
     # Default/root profile: the gateway runs with no profile flag. Accept unless
@@ -615,9 +622,9 @@ def _command_line_belongs_to_profile(command: str, profile_home: Path) -> bool:
     # a non-matching explicit HERMES_HOME= on the argv. HERMES_HOME is usually
     # passed via the environment (not visible on the command line), so its mere
     # absence is not disqualifying — only a conflicting explicit value is.
-    if profile_arg is not None:
+    if "--profile " in command_lc or " -p " in command_lc:
         return False
-    if hermes_home_arg is not None and hermes_home_arg not in home_variants:
+    if "hermes_home=" in command_lc and f"hermes_home={home_lc}" not in command_lc:
         return False
     return True
 
@@ -689,6 +696,30 @@ def _get_code_identity_fields() -> dict[str, Any]:
         }
     except Exception:
         return {}
+
+
+def _pid_record_belongs_to_current_profile(
+    record: Optional[dict[str, Any]],
+) -> bool:
+    """Return True when the PID record's ``hermes_home`` matches the current process.
+
+    PID records written by ``_build_pid_record()`` include the gateway's
+    ``hermes_home`` at write time. If a profile gateway was started (or recorded)
+    under a different HERMES_HOME, the record belongs to a different profile
+    and must be ignored — otherwise the default-profile gateway can mistakenly
+    assume the identity of another profile (issue #74872).
+
+    Records that predate the ``hermes_home`` field (pre-#74872 gateways) are
+    accepted conservatively (no field → assume current profile).
+    """
+    if not isinstance(record, dict):
+        return False
+    record_home = record.get("hermes_home")
+    if not record_home:
+        # Records without hermes_home belong to a pre-#74872 gateway;
+        # accept them conservatively.
+        return True
+    return _same_hermes_home(record_home, _get_process_hermes_home())
 
 
 def _build_runtime_status_record() -> dict[str, Any]:
@@ -1030,6 +1061,20 @@ def release_gateway_runtime_lock() -> None:
     _clear_running_pid_cache()
 
 
+def owns_gateway_runtime_lock() -> bool:
+    """Return True when THIS process holds the gateway runtime lock.
+
+    ``is_gateway_runtime_lock_active`` answers "does *anyone* hold the lock?"
+    and deliberately returns True for the lock's own owner — a caller deciding
+    whether to yield to a *fresh* gateway (e.g. the cron tick's stale-code
+    gate) must distinguish self-ownership from another process's lock, and
+    re-probing the lock file cannot: acquiring a probe handle on a lock this
+    process already holds succeeds on POSIX. The in-process handle is the only
+    discriminator, so expose it as a tiny predicate.
+    """
+    return _gateway_lock_handle is not None
+
+
 def is_gateway_runtime_lock_active(lock_path: Optional[Path] = None) -> bool:
     """Return True when some process currently owns the gateway runtime lock."""
     global _gateway_lock_handle
@@ -1128,7 +1173,6 @@ def write_runtime_status(
     exit_reason: Any = _UNSET,
     restart_requested: Any = _UNSET,
     active_agents: Any = _UNSET,
-    platforms: Any = _UNSET,
     platform: Any = _UNSET,
     platform_state: Any = _UNSET,
     error_code: Any = _UNSET,
@@ -1151,25 +1195,14 @@ def write_runtime_status(
         # must not inherit those entries from the prior process: they would
         # otherwise keep /api/status degraded until every old adapter emitted
         # a new state (and removed profiles would remain degraded forever).
-        stored_platforms = payload["platforms"]
-        if not isinstance(stored_platforms, dict):
-            stored_platforms = {}
+        platforms = payload["platforms"]
+        if not isinstance(platforms, dict):
+            platforms = {}
         payload["platforms"] = {
             key: value
-            for key, value in stored_platforms.items()
+            for key, value in platforms.items()
             if not isinstance(key, str) or ":" not in key
         }
-        # Keep the cleanup atomic even when the caller supplies a complete
-        # platform mapping in the same update.  Do not let the incoming
-        # mapping reintroduce profile-qualified entries that were just
-        # removed from the persisted state.
-        if platforms is not _UNSET:
-            requested_platforms = platforms if isinstance(platforms, dict) else {}
-            platforms = {
-                key: value
-                for key, value in requested_platforms.items()
-                if not isinstance(key, str) or ":" not in key
-            }
     payload["kind"] = current_record["kind"]
     payload["pid"] = current_record["pid"]
     payload["argv"] = current_record["argv"]
@@ -1188,8 +1221,6 @@ def write_runtime_status(
         payload["restart_requested"] = bool(restart_requested)
     if active_agents is not _UNSET:
         payload["active_agents"] = parse_active_agents(active_agents)
-    if platforms is not _UNSET:
-        payload["platforms"] = dict(platforms or {})
     if served_profiles is not _UNSET:
         # Profiles this gateway multiplexes (multi-profile mode). Absent/empty
         # for a single-profile gateway. Lets `hermes status` show per-profile
@@ -1380,28 +1411,6 @@ class GatewayLiveness:
     probe_error: bool = False
 
 
-def scan_gateway_process_pid() -> Optional[int]:
-    """Fall back to a live process scan when the PID file is missing.
-
-    PID file races (crash/restart) can leave the gateway alive with no
-    ``gateway.pid``. Desktop / dashboard status must stay truthful in that
-    case (fork: ``1f147e98bf``). Resolve via the ``hermes_cli.gateway``
-    module attribute so tests can monkeypatch ``find_gateway_pids``.
-    """
-    try:
-        from hermes_cli import gateway as gateway_cli
-
-        pids = gateway_cli.find_gateway_pids()
-    except Exception:
-        return None
-    if not pids:
-        return None
-    try:
-        return int(next(iter(pids)))
-    except (TypeError, ValueError, StopIteration):
-        return None
-
-
 def resolve_gateway_liveness(
     *,
     profile_dir: Optional[Path] = None,
@@ -1411,7 +1420,6 @@ def resolve_gateway_liveness(
     pid_probe: Optional[Callable[..., Optional[int]]] = None,
     runtime_reader: Optional[Callable[..., Optional[dict[str, Any]]]] = None,
     runtime_pid_probe: Optional[Callable[..., Optional[int]]] = None,
-    process_scan: Optional[Callable[[], Optional[int]]] = None,
 ) -> GatewayLiveness:
     """Single source of truth for "is the gateway up?" across dashboard surfaces.
 
@@ -1436,11 +1444,6 @@ def resolve_gateway_liveness(
     3. **Runtime status PID** — validated against the live process table with
        ``expected_home`` so a recycled PID belonging to a *different*
        profile's gateway is never reported as this one's.
-    4. **Process scan** (opt-in) — when ``process_scan`` is supplied and earlier
-       rungs decline, scan for a live gateway process. Used by the dashboard
-       so Desktop status stays truthful when ``gateway.pid`` is missing after
-       a crash/restart race (fork: ``1f147e98bf``). Off by default so the
-       shared ladder stays hermetic for unit tests and non-dashboard callers.
 
     Rung 3 only ever runs against a LOCAL state record: the probe body's PID
     belongs to another host, and ``os.kill``-ing a remote PID is both wrong
@@ -1452,8 +1455,6 @@ def resolve_gateway_liveness(
     passes its ``hermes_cli.web_server`` bindings so the long-standing
     monkeypatch seam in the test-suite keeps working; production callers
     leave them ``None`` and get this module's implementations.
-    ``process_scan`` is opt-in (pass ``scan_gateway_process_pid`` or a test
-    double); monkeypatch ``hermes_cli.gateway.find_gateway_pids`` as needed.
     """
     _pid_probe = pid_probe or (
         get_running_pid_cached if use_cache else get_running_pid
@@ -1521,24 +1522,6 @@ def resolve_gateway_liveness(
             health_body=health_body,
         )
 
-    # Opt-in process scan (dashboard / Desktop): PID file can be missing after
-    # a crash/restart race while the gateway process is still alive
-    # (fork: 1f147e98bf). Off unless the caller passes process_scan=.
-    if process_scan is not None:
-        try:
-            scanned_pid = process_scan()
-        except Exception:
-            scanned_pid = None
-            probe_error = True
-        if scanned_pid is not None:
-            return GatewayLiveness(
-                running=True,
-                pid=scanned_pid,
-                source="process_scan",
-                health_body=health_body,
-                probe_error=probe_error,
-            )
-
     return GatewayLiveness(
         running=False,
         pid=None,
@@ -1585,6 +1568,13 @@ def get_runtime_status_running_pid(
         and current_start is not None
         and current_start != recorded_start
     ):
+        return None
+
+    # When no explicit expected_home is given (active profile context),
+    # verify the persisted record's hermes_home matches the current process.
+    # This prevents the default-profile gateway from assuming another
+    # profile's identity via a stale runtime status record (#74872).
+    if expected_home is None and not _pid_record_belongs_to_current_profile(payload):
         return None
 
     if _record_matches_live_gateway_pid(payload, pid, expected_home=expected_home):
@@ -2312,7 +2302,11 @@ def _terminate_scoped_lock_owner_once(
             return None
 
         try:
-            terminate_pid(owner_pid, force=True)
+            terminate_pid(
+                owner_pid,
+                force=True,
+                expected_start_time=owner_start_time,
+            )
         except ProcessLookupError:
             return owner_pid
         except (PermissionError, OSError):
@@ -2467,6 +2461,9 @@ def get_running_pid(
         recorded_start = record.get("start_time")
         current_start = _get_process_start_time(pid)
         if recorded_start is not None and current_start is not None and current_start != recorded_start:
+            continue
+
+        if not _pid_record_belongs_to_current_profile(record):
             continue
 
         if _record_matches_live_gateway_pid(record, pid):

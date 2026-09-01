@@ -105,6 +105,7 @@ func main() {
 	cfg.LogPath = filepath.Join(logDir, "hermes-go-watchdog.log")
 	cfg.LockPath = filepath.Join(cfg.DataDir, "watchdog.lock")
 	cfg.StatePath = filepath.Join(cfg.DataDir, "watchdog.state.json")
+	cfg.MaintenancePath = filepath.Join(cfg.DataDir, "maintenance.json")
 
 	logger := NewLogger(cfg.LogPath)
 	release, ok := acquireLock(cfg.LockPath, root, logger)

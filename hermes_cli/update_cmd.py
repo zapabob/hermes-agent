@@ -37,9 +37,80 @@ from pathlib import Path
 from typing import Optional
 
 from hermes_cli.config import get_hermes_home
-from hermes_constants import venv_python_path
+from hermes_constants import get_default_hermes_root, venv_python_path
 
 logger = logging.getLogger(__name__)
+
+_ACTIVE_WATCHDOG_MAINTENANCE = None
+_WATCHDOG_MAINTENANCE_ATEXIT_REGISTERED = False
+
+
+def _begin_watchdog_update_maintenance() -> None:
+    """Suspend outer watchdog mutations for the planned Windows update."""
+    global _ACTIVE_WATCHDOG_MAINTENANCE
+    global _WATCHDOG_MAINTENANCE_ATEXIT_REGISTERED
+
+    if not _m()._is_windows() or _ACTIVE_WATCHDOG_MAINTENANCE is not None:
+        return
+    from hermes_cli.watchdog_maintenance import acquire
+
+    try:
+        repo_root = Path(_m().PROJECT_ROOT)
+    except TypeError:
+        # Test sentinels deliberately mark the boundary after the venv guard.
+        # A real PROJECT_ROOT is always path-like.
+        return
+    if not (repo_root / "pyproject.toml").is_file():
+        # Do not publish a global maintenance lease for incomplete/test roots.
+        return
+    _ACTIVE_WATCHDOG_MAINTENANCE = acquire(
+        repo_root,
+        reason="Hermes updater owns planned shutdown and recovery",
+    )
+    if not _WATCHDOG_MAINTENANCE_ATEXIT_REGISTERED:
+        import atexit
+
+        atexit.register(_release_watchdog_update_maintenance_at_exit)
+        _WATCHDOG_MAINTENANCE_ATEXIT_REGISTERED = True
+
+
+def _transition_watchdog_update_maintenance(state: str, *, reason: str) -> None:
+    lease = _ACTIVE_WATCHDOG_MAINTENANCE
+    if lease is None:
+        return
+    from hermes_cli.watchdog_maintenance import transition
+
+    transition(lease, state, reason=reason)
+
+
+def _finish_watchdog_update_maintenance(*, reason: str) -> None:
+    global _ACTIVE_WATCHDOG_MAINTENANCE
+
+    lease = _ACTIVE_WATCHDOG_MAINTENANCE
+    if lease is None:
+        return
+    from hermes_cli.watchdog_maintenance import release
+
+    release(lease, reason=reason)
+    _ACTIVE_WATCHDOG_MAINTENANCE = None
+
+
+def _release_watchdog_update_maintenance_at_exit() -> None:
+    """Last-resort release after registered gateway recovery handlers run."""
+    if _ACTIVE_WATCHDOG_MAINTENANCE is None:
+        return
+    try:
+        from hermes_cli.watchdog_maintenance import RECOVERY
+
+        _transition_watchdog_update_maintenance(
+            RECOVERY,
+            reason="Updater exited; outer watchdog recovery may resume",
+        )
+        _finish_watchdog_update_maintenance(
+            reason="Updater exit recovery handoff complete",
+        )
+    except Exception as exc:
+        logger.error("Could not release watchdog maintenance lease at exit: %s", exc)
 
 
 def _m():
@@ -287,6 +358,235 @@ def _migrate_sibling_profile_configs() -> list[tuple[str, int, int]]:
         logger.debug("Sibling profile enumeration failed: %s", exc)
     return migrated
 
+def _check_and_apply_config_migration(
+    *,
+    assume_yes: bool = False,
+    gateway_mode: bool = False,
+    pre_update_snapshot_id: str | None = None,
+) -> None:
+    """Check and apply configuration migrations on an update completion path (#91360).
+
+    CRITICAL: ``check_config_version`` and ``migrate_config`` must use
+    freshly-reloaded modules, not the ``sys.modules`` cache (see
+    ``_reload_config_modules``). This must run on EVERY update completion
+    path — the normal post-pull path, the venv-repair retry and the
+    Node-deps repair on the ``commit_count == 0`` "Already up to date"
+    branch — so an interrupted update that previously pulled new code does
+    not strand the user on an older config version.
+    """
+    print()
+    print("→ Checking configuration for new options...")
+
+    # Reload config modules BEFORE any config reads so get_missing_*,
+    # check_config_version, and migrate_config all use the updated code.
+    _reload_config_modules()
+
+    from hermes_cli.config import (
+        get_missing_env_vars,
+        get_missing_config_fields,
+    )
+
+    # Defensive (#91360): this helper runs on repair/retry completion paths
+    # too — a config-check failure must not break an otherwise-successful
+    # update. Log, point at the manual command, and return.
+    try:
+        missing_env = get_missing_env_vars(required_only=True)
+        missing_config = get_missing_config_fields()
+        current_ver, latest_ver = _run_config_check_fresh()
+    except Exception as exc:
+        logger.debug("Config check during update failed: %s", exc)
+        print("  ⚠️  Could not check config version.")
+        print("     Run 'hermes config migrate' to check manually.")
+        return
+
+    has_new_options = bool(missing_env or missing_config)
+    version_bump_only = (
+        not has_new_options and current_ver < latest_ver
+    )
+    needs_migration = has_new_options or current_ver < latest_ver
+
+    if version_bump_only:
+        # Nothing for the user to fill in — only the config format version
+        # changed (new defaults already merge in transparently). Asking
+        # "configure new options now?" here is misleading: saying yes just
+        # bumps the version and looks like a no-op (issue: ScottFive /
+        # Tt2021). Apply it silently and say what actually happened.
+        print()
+        print(
+            f"  ℹ Updating config format (v{current_ver} → v{latest_ver})…"
+        )
+        try:
+            _mig_results = _run_migrate_config_fresh(
+                interactive=False, quiet=True
+            )
+            print("  ✓ Config format updated (no new settings to configure)")
+            # quiet=True also mutes migration steps that RESET or REMOVE an
+            # existing setting (e.g. the v33→v34 personality reset from
+            # #81946, which records its note only in the results dict).
+            # Re-surface those notes so an unattended update never silently
+            # changes user configuration (#86656). In this branch
+            # missing_config is empty, so config_added can only contain
+            # migration-step mutations, not missing-key listings.
+            for _note in _mig_results.get("config_added") or []:
+                print(f"  ℹ {_note}")
+            for _warn in _mig_results.get("warnings") or []:
+                print(f"  ⚠️  {_warn}")
+        except Exception as _mig_err:
+            print(f"  ⚠️  Config format update failed: {_mig_err}")
+            print("     Run 'hermes config migrate' to retry.")
+    elif needs_migration:
+        print()
+        # Show WHAT changed, not just a count, so the user can make an
+        # informed yes/no decision (previously the prompt named nothing).
+        def _print_items(items, label, key, fallback_key=None):
+            if not items:
+                return
+            print(f"  {label}:")
+            shown = items[:8]
+            for it in shown:
+                if isinstance(it, dict):
+                    name = it.get(key) or (fallback_key and it.get(fallback_key)) or "?"
+                    desc = (it.get("description") or "").strip()
+                else:
+                    # Defensive: some callers/mocks pass bare name strings.
+                    name = str(it)
+                    desc = ""
+                if desc:
+                    print(f"      • {name} — {desc}")
+                else:
+                    print(f"      • {name}")
+            extra = len(items) - len(shown)
+            if extra > 0:
+                print(f"      … and {extra} more")
+
+        if missing_env:
+            print(
+                f"  ⚠️  {len(missing_env)} new required setting(s) need configuration"
+            )
+            _print_items(missing_env, "New settings", "name")
+        if missing_config:
+            print(f"  ℹ️  {len(missing_config)} new config option(s) available")
+            _print_items(missing_config, "New options", "key")
+
+        print()
+        if assume_yes:
+            print(
+                "  ℹ --yes: auto-applying config migration (skipping API-key prompts)."
+            )
+            response = "y"
+        elif gateway_mode:
+            response = (
+                _gateway_prompt(
+                    "Would you like to configure new options now? [Y/n]", "n"
+                )
+                .strip()
+                .lower()
+            )
+        elif not (sys.stdin.isatty() and sys.stdout.isatty()):
+            print("  ℹ Non-interactive session — applying safe config migrations.")
+            response = "auto"
+        else:
+            try:
+                response = (
+                    input("Would you like to configure them now? [Y/n]: ")
+                    .strip()
+                    .lower()
+                )
+            except EOFError:
+                response = "n"
+            except UnicodeDecodeError:
+                # input() can raise this when the terminal encoding can't
+                # decode the byte sequence (e.g. a non-UTF-8 locale, or an
+                # embedded terminal). Without this, the exception escapes
+                # here and crashes the update at this prompt.
+                print(
+                    "  ⚠ Could not read input (encoding issue). Skipping. "
+                    "Run 'hermes config migrate' manually to configure."
+                )
+                response = "n"
+
+        if response in {"", "y", "yes", "auto"}:
+            print()
+            # Gateway mode, --yes, and non-interactive update contexts
+            # (dashboard / web server actions) cannot prompt for API keys.
+            # Still run the non-interactive migration pass before restarting
+            # so new default config fields and version bumps are written
+            # before the freshly updated gateway validates config at startup.
+            interactive_migration = not (
+                gateway_mode or assume_yes or response == "auto"
+            )
+            results = _run_migrate_config_fresh(interactive=interactive_migration, quiet=False)
+
+            if results["env_added"] or results["config_added"]:
+                print()
+                print("✓ Configuration updated!")
+            if (gateway_mode or assume_yes or response == "auto") and missing_env:
+                print("  ℹ API keys require manual entry: hermes config migrate")
+        else:
+            print()
+            print("Skipped. Run 'hermes config migrate' later to configure.")
+    else:
+        print("  ✓ Configuration is up to date")
+
+    # Fleet-wide config migration (#91277 Phase 2; #20438 earliest report,
+    # #54926, #79048): the shared checkout serves EVERY profile, but the
+    # migration above only touched the active profile's config.yaml.
+    # Sibling profiles kept their old _config_version and silently
+    # drifted (field repro: sibling gateway restarted onto new code but
+    # stayed at config v33 vs v37). Run the same NON-INTERACTIVE safe
+    # migration for every sibling profile home, scoped via the
+    # context-local HERMES_HOME override (never os.environ — other
+    # threads must not see it).
+    try:
+        _migrated_siblings = _migrate_sibling_profile_configs()
+        for _name, _from_ver, _to_ver in _migrated_siblings:
+            print(
+                f"  ✓ Profile '{_name}': config format updated "
+                f"(v{_from_ver} → v{_to_ver})"
+            )
+    except Exception as exc:
+        logger.debug("Sibling config migration failed: %s", exc)
+
+    # Safety net: config-version migrations have been observed to leave
+    # cron/jobs.json valid-but-empty, silently dropping every scheduled
+    # job (issue #34600). The desktop scheduler can also overwrite with
+    # its own small set, causing partial loss (issue #52144). If the
+    # live file now has fewer jobs than the pre-update snapshot, restore
+    # it and warn loudly.
+    try:
+        from hermes_cli.backup import restore_cron_jobs_if_emptied
+
+        cron_restore = restore_cron_jobs_if_emptied(pre_update_snapshot_id)
+        if cron_restore:
+            print()
+            print(
+                "  ⚠️  cron/jobs.json lost jobs during this update — "
+                f"restored {cron_restore['job_count']} job(s) from "
+                f"pre-update snapshot {cron_restore['snapshot_id']}."
+            )
+    except Exception as exc:
+        # Never let the cron safety net break an otherwise-good update.
+        logger.debug("Cron jobs auto-restore check failed: %s", exc)
+
+    # #66140: run the same cron-jobs safety net for every sibling
+    # profile against ITS OWN pre-update snapshot (same-generation by
+    # construction — both taken by this run).
+    try:
+        from hermes_cli.backup import restore_cron_jobs_all_profiles
+
+        for _restored in restore_cron_jobs_all_profiles(
+            _LAST_SIBLING_SNAPSHOTS
+        ):
+            print()
+            print(
+                f"  ⚠️  Profile '{_restored['profile']}': cron/jobs.json "
+                f"lost jobs during this update — restored "
+                f"{_restored['job_count']} job(s) from pre-update "
+                f"snapshot {_restored['snapshot_id']}."
+            )
+    except Exception as exc:
+        logger.debug("Sibling cron auto-restore check failed: %s", exc)
+
 
 # Critical files that Hermes must be able to import immediately after an
 # update/install. Most are imported on every CLI startup; ``web_server.py``
@@ -369,6 +669,29 @@ def _editable_install_is_current(git_cmd, cwd, pre_pull_sha: str | None) -> bool
         return False
     return not result.stdout.strip()
 
+def _validate_python_files_syntax(
+    root, relpaths
+) -> tuple[bool, str | None, str | None]:
+    """Compile *relpaths* under *root* without writing bytecode into the tree."""
+    import py_compile
+    import tempfile
+
+    root = Path(root)
+    with tempfile.TemporaryDirectory(prefix="hermes-syntax-check-") as tmpdir:
+        for relpath in relpaths:
+            path = root / relpath
+            if not path.exists():
+                continue
+            cfile = Path(tmpdir) / (str(relpath).replace("/", "__") + "c")
+            try:
+                py_compile.compile(str(path), cfile=str(cfile), doraise=True)
+            except py_compile.PyCompileError as exc:
+                return False, str(path), str(exc)
+            except OSError as exc:
+                return False, str(path), f"could not read: {exc}"
+    return True, None, None
+
+
 def _validate_critical_files_syntax(root) -> tuple[bool, str | None, str | None]:
     """Compile each file in ``_UPDATE_CRITICAL_FILES`` to catch SyntaxErrors.
 
@@ -388,27 +711,7 @@ def _validate_critical_files_syntax(root) -> tuple[bool, str | None, str | None]
     Returns ``(ok, failing_path, error_message)``. ``ok=True`` means every
     file parsed cleanly.
     """
-    import py_compile
-    import tempfile
-
-    root = Path(root)
-    with tempfile.TemporaryDirectory(prefix="hermes-syntax-check-") as tmpdir:
-        for relpath in _UPDATE_CRITICAL_FILES:
-            path = root / relpath
-            if not path.exists():
-                # Missing file is suspicious but not necessarily fatal — a future
-                # refactor may legitimately remove one of these. Skip and move on.
-                continue
-            # Mirror the relative path under the tmpdir so two different
-            # files with the same basename don't collide on the cfile name.
-            cfile = Path(tmpdir) / (relpath.replace("/", "__") + "c")
-            try:
-                py_compile.compile(str(path), cfile=str(cfile), doraise=True)
-            except py_compile.PyCompileError as exc:
-                return False, str(path), str(exc)
-            except OSError as exc:
-                return False, str(path), f"could not read: {exc}"
-    return True, None, None
+    return _validate_python_files_syntax(root, _UPDATE_CRITICAL_FILES)
 
 
 # Modules imported on every agent startup. Unlike _UPDATE_CRITICAL_FILES (which
@@ -423,7 +726,9 @@ _UPDATE_CRITICAL_MODULES = (
 )
 
 
-def _validate_critical_modules_import(root) -> tuple[bool, str | None, str | None]:
+def _critical_module_import_failures(
+    root, *, report_runtime_errors: bool = False
+) -> dict[str, tuple[str, str]]:
     """Import each module in ``_UPDATE_CRITICAL_MODULES`` in a subprocess.
 
     ``_validate_critical_files_syntax`` only *parses* files, so it cannot see
@@ -446,12 +751,20 @@ def _validate_critical_modules_import(root) -> tuple[bool, str | None, str | Non
     different Python than the install's own, and probing the wrong
     interpreter would test a tree the user never runs.
 
-    Returns ``(ok, failing_module, error_message)``.
+    Returns every failing module in probe order. Generic import-time exceptions
+    remain tolerated by default because they can depend on local config or
+    environment. ``report_runtime_errors=True`` exposes them so a caller can
+    compare two states of the same checkout without an earlier failure masking
+    a later one.
     """
     from hermes_constants import FIRST_PARTY_MODULE_ROOTS
 
+    import secrets
+
+    marker = f"__HERMES_IMPORT_HEALTH_{secrets.token_hex(16)}__"
     probe = (
-        "import importlib, sys\n"
+        "import importlib, json, sys\n"
+        "failures = []\n"
         "for name in %r:\n"
         "    try:\n"
         "        importlib.import_module(name)\n"
@@ -461,16 +774,23 @@ def _validate_critical_modules_import(root) -> tuple[bool, str | None, str | Non
         # The root set is injected from hermes_constants so this can't drift
         # from the hint the user is shown (they disagreed once already).
         "        missing = (getattr(exc, 'name', '') or '').split('.')[0]\n"
-        "        if missing in %r or missing.startswith('hermes_'):\n"
-        "            sys.stdout.write(name + '\\n' + str(exc))\n"
-        "            raise SystemExit(3)\n"
+        "        if missing in %r or missing.startswith('hermes_') or %r:\n"
+        "            failures.append((name, type(exc).__name__, str(exc)))\n"
         "    except ImportError as exc:\n"
-        "        sys.stdout.write(name + '\\n' + str(exc))\n"
-        "        raise SystemExit(3)\n"
-        "    except Exception:\n"
-        "        pass\n"  # non-import errors (config/env) aren't update breakage
-        "raise SystemExit(0)\n"
-        % (_UPDATE_CRITICAL_MODULES, tuple(sorted(FIRST_PARTY_MODULE_ROOTS)))
+        "        failures.append((name, type(exc).__name__, str(exc)))\n"
+        "    except Exception as exc:\n"
+        "        if %r:\n"
+        "            failures.append((name, type(exc).__name__, str(exc)))\n"
+        "    except BaseException as exc:\n"
+        "        failures.append((name, type(exc).__name__, str(exc)))\n"
+        "sys.stdout.write('\\n%s' + json.dumps(failures))\n"
+        % (
+            _UPDATE_CRITICAL_MODULES,
+            tuple(sorted(FIRST_PARTY_MODULE_ROOTS)),
+            report_runtime_errors,
+            report_runtime_errors,
+            marker,
+        )
     )
     try:
         interpreter = sys.executable
@@ -491,14 +811,59 @@ def _validate_critical_modules_import(root) -> tuple[bool, str | None, str | Non
             errors="replace",
             timeout=120,
         )
+    except subprocess.TimeoutExpired:
+        return {
+            "critical-module probe": (
+                "TimeoutExpired",
+                "timed out before reporting import health",
+            )
+        }
     except (OSError, subprocess.SubprocessError):
         # Can't run the probe — don't block the update on our own tooling.
-        return True, None, None
-    if result.returncode == 3:
-        parts = (result.stdout or "").split("\n", 1)
-        module = parts[0].strip() or "unknown"
-        detail = parts[1].strip() if len(parts) > 1 else ""
-        return False, module, detail
+        return {}
+    output = result.stdout or ""
+    if marker not in output:
+        return {
+            "critical-module probe": (
+                "ProbeTerminated",
+                "terminated before reporting import health "
+                f"(exit code {result.returncode})",
+            )
+        }
+    try:
+        import json
+
+        failures = json.loads(output.rsplit(marker, 1)[1])
+        if not isinstance(failures, list) or any(
+            not isinstance(item, list)
+            or len(item) != 3
+            or not all(isinstance(value, str) for value in item)
+            for item in failures
+        ):
+            raise ValueError("invalid import-health payload")
+        return {
+            str(module): (str(kind), str(detail))
+            for module, kind, detail in failures
+        }
+    except (TypeError, ValueError):
+        return {
+            "critical-module probe": (
+                "MalformedPayload",
+                "reported malformed import health data",
+            )
+        }
+
+
+def _validate_critical_modules_import(
+    root, *, report_runtime_errors: bool = False
+) -> tuple[bool, str | None, str | None]:
+    """Return the first critical-module import failure, if any."""
+    failures = _critical_module_import_failures(
+        root, report_runtime_errors=report_runtime_errors
+    )
+    if failures:
+        module = next(iter(failures))
+        return False, module, failures[module][1]
     return True, None, None
 
 def _gateway_prompt(prompt_text: str, default: str = "", timeout: float = 300.0) -> str:
@@ -1374,7 +1739,14 @@ def _zip_overlay_block_reason(
     result = subprocess.run(
         # -uall: a user-level ``status.showUntrackedFiles = no`` git config
         # would otherwise hide untracked files and silently blind this guard.
-        git_cmd + ["status", "--porcelain", "--untracked-files=all"],
+        # --ignored=matching: gitignored files are still USER DATA the ZIP
+        # overlay would permanently delete (logs, scratch files, local data)
+        # — a .gitignore entry must not blind the guard either (#87392).
+        # ``matching`` reports an ignored directory as one ``dir/`` line
+        # instead of enumerating its contents (cheaper, same verdict for the
+        # top-level filter below). NOTE: ``--ignored=all`` is NOT a valid
+        # git mode — it exits 128 and would fail-close every ZIP update.
+        git_cmd + ["status", "--porcelain", "--untracked-files=all", "--ignored=matching"],
         cwd=root,
         capture_output=True,
         text=True,
@@ -1386,6 +1758,11 @@ def _zip_overlay_block_reason(
         suffix = f" ({detail[0]})" if detail else ""
         return f"could not check the working tree{suffix}"
     lines = [line for line in (result.stdout or "").splitlines() if line.strip()]
+    # --ignored=all reports the ZIP path's own preserved entries (venv,
+    # node_modules are gitignored on every normal install). The swap never
+    # touches those top-level entries, so they must not turn into a false
+    # dirty-tree refusal. Everything else — including ignored files — blocks.
+    lines = [line for line in lines if not _is_zip_preserved_entry_status_line(line)]
     if ignore_staging_artifacts:
         lines = [
             line for line in lines if not _is_zip_staging_artifact_status_line(line)
@@ -1396,6 +1773,33 @@ def _zip_overlay_block_reason(
 
 
 _ZIP_STAGING_ARTIFACT_SUFFIXES = (".hermes-update-staging", ".hermes-update-old")
+# Single source of truth for the top-level entries the ZIP swap preserves —
+# consumed by both the dirty-tree filter below and _update_via_zip's swap loop.
+_ZIP_PRESERVED_TOP_LEVEL = {"venv", "node_modules", ".git", ".env"}
+
+
+def _is_zip_preserved_entry_status_line(line: str) -> bool:
+    """True when every path on a porcelain status line sits under a top-level
+    entry the ZIP swap preserves.
+
+    The ``" -> "`` two-path split applies ONLY to rename/copy status codes
+    (R/C): porcelain v1 does not quote a plain filename containing spaces,
+    so an ignored file literally named ``venv -> node_modules`` on an
+    ``!!``/``??`` line must be treated as ONE path — splitting it would
+    filter it as two preserved tops and fail-open into the destructive swap.
+    Requiring EVERY path preserved keeps renames leaving a preserved dir
+    (``R venv/x -> src/x``) blocking, fail-closed.
+    """
+    status, payload = (line[:2], line[3:]) if len(line) >= 3 else ("", line)
+    is_rename = any(code in "RC" for code in status)
+    paths = payload.split(" -> ") if is_rename else [payload]
+    for path in paths:
+        top_level = (
+            path.strip().strip('"').replace("\\", "/").rstrip("/").split("/", 1)[0]
+        )
+        if top_level not in _ZIP_PRESERVED_TOP_LEVEL:
+            return False
+    return True
 
 
 def _is_zip_staging_artifact_status_line(line: str) -> bool:
@@ -1458,16 +1862,87 @@ def _update_complete_message(pre_version: str | None) -> str:
     return "✓ Update complete!"
 
 
+def _post_update_sqlite_runtime_status():
+    """Return whether the interpreter used after update has safe SQLite."""
+    from hermes_constants import project_venv_dir
+    from hermes_cli.sqlite_runtime import probe_sqlite_runtime
+
+    venv_dir = project_venv_dir(_m().PROJECT_ROOT)
+    python = (
+        venv_python_path(venv_dir, windows=_m()._is_windows())
+        if venv_dir is not None
+        else Path(sys.executable)
+    )
+    info = probe_sqlite_runtime(python)
+    return info is not None and not info.wal_reset_vulnerable, info
+
+
+def _print_verified_update_completion(message: str) -> bool:
+    """Print a success completion only after probing the next Hermes runtime."""
+    if not message.startswith("✓"):
+        _print_update_completion(message)
+        return False
+    sqlite_runtime_ok, sqlite_info = _post_update_sqlite_runtime_status()
+    if sqlite_info is None:
+        # Grace path: an unprobeable interpreter (no venv in a dev checkout,
+        # probe subprocess unavailable) must not fail an otherwise-successful
+        # update — only a POSITIVE vulnerable probe withholds success
+        # (same contract as _venv_core_imports_healthy's unknown states).
+        logger.debug("Post-update SQLite runtime probe unavailable; not blocking")
+        _print_update_completion(message)
+        return True
+    if sqlite_runtime_ok:
+        _print_update_completion(message)
+        return True
+    print()
+    detail = (
+        f"SQLite {sqlite_info.sqlite_version_string} still has the "
+        "WAL-reset corruption bug"
+    )
+    print(f"⚠ Update partially complete — {detail}.")
+    print(
+        "  Rebuild the Hermes venv with a uv-managed Python, restart Hermes, "
+        "then verify with `hermes doctor`."
+    )
+    return False
+
+
+def _clear_stale_sqlite_sidecars(db_path: Path) -> None:
+    """Delete the WAL / shared-memory / rollback-journal files next to *db_path*.
+
+    Call this immediately before overwriting a database file with a snapshot
+    image. Quick snapshots are produced by ``backup._safe_copy_db`` through
+    ``sqlite3.backup()``, so the image is already checkpointed and owns no WAL —
+    which is exactly why ``backup._EXCLUDED_SUFFIXES`` refuses to ship sidecars
+    inside a snapshot. Copying the image over the destination replaces only the
+    main database file, so any ``-wal`` / ``-shm`` left behind by the *old*
+    database (a crashed writer, or a second Hermes process the updater's drain
+    did not stop) survives and is replayed over the fresh image on the next
+    open. The result passes ``PRAGMA integrity_check`` while serving the old
+    database's contents, and the first checkpoint folds it in permanently.
+
+    Removing them is safe here specifically: they belong to a database the
+    caller has already declared corrupt and is about to discard.
+    """
+    for suffix in ("-wal", "-shm", "-journal"):
+        db_path.with_name(db_path.name + suffix).unlink(missing_ok=True)
+
+
 def _print_update_summary(
     *,
     node_failures: list,
     desktop_build_ok: bool,
     pre_update_version: str | None,
-) -> None:
+) -> bool:
     """Final update banner. A failed Desktop rebuild is non-fatal for the
     Python side, but must not print ``✓ Update complete!`` (#88251)."""
+    sqlite_runtime_ok, sqlite_info = _post_update_sqlite_runtime_status()
+    if sqlite_info is None:
+        # Grace path: an unprobeable interpreter must not fail the update —
+        # only a POSITIVE vulnerable probe demotes success to partial.
+        sqlite_runtime_ok = True
     print()
-    if node_failures or not desktop_build_ok:
+    if node_failures or not desktop_build_ok or not sqlite_runtime_ok:
         parts = []
         if node_failures:
             parts.append(
@@ -1477,14 +1952,27 @@ def _print_update_summary(
             parts.append(
                 "the desktop app was not rebuilt and is still on the previous build"
             )
+        if not sqlite_runtime_ok and sqlite_info is not None:
+            parts.append(
+                f"SQLite {sqlite_info.sqlite_version_string} still has the "
+                "WAL-reset corruption bug"
+            )
         print("⚠ Update partially complete — " + "; ".join(parts) + ".")
         if node_failures:
             print("  Code and Python deps are updated, but the dashboard/TUI may")
             print("  be in a mixed state until the Node deps are rebuilt.")
         if not desktop_build_ok:
             print("  Run `hermes desktop` to retry the desktop rebuild.")
+        if not sqlite_runtime_ok:
+            print(
+                "  The Python runtime remediation did not complete. Run `hermes "
+                "update` again; if SQLite is unchanged, rebuild the Hermes venv "
+                "with a uv-managed Python, restart Hermes, then verify with "
+                "`hermes doctor`."
+            )
     else:
         _print_update_completion(_update_complete_message(pre_update_version))
+    return desktop_build_ok and sqlite_runtime_ok
 
 
 def _write_gateway_update_exit_code(ok: bool) -> None:
@@ -1493,6 +1981,43 @@ def _write_gateway_update_exit_code(ok: bool) -> None:
         path.write_text("0" if ok else "1", encoding="utf-8")
     except OSError:
         pass
+
+
+def _restore_state_db_from_snapshot(state_path: Path, snap_state: Path) -> bool:
+    """Replace *state_path* with the snapshot image at *snap_state*.
+
+    Shared by both post-update auto-restore paths (the ZIP update and the git
+    pull). The destination's stale sidecars are cleared before the copy, so the
+    restored image cannot be silently overwritten by the corrupt database's WAL
+    replay — see :func:`_clear_stale_sqlite_sidecars`.
+
+    Refuses (returns ``False``) while another process still holds the database
+    or its sidecars open: copying a snapshot over a live writer's inode makes
+    the writer's page cache and WAL index disagree with the file bytes, and
+    its next checkpoint writes pages at offsets that no longer mean what it
+    thinks — the #90950 page-1 clobber. ``None`` (scan unavailable) proceeds:
+    the updater has already drained gateways, and refusing on "unknown" would
+    disable auto-restore on every non-Linux host.
+
+    Returns ``True`` when the restored file passes an integrity check. Raises
+    ``OSError`` if the copy itself fails, which callers already report.
+    """
+    from hermes_cli.backup import _foreign_db_holder_pids, verify_sqlite_integrity
+
+    holders = _foreign_db_holder_pids(state_path)
+    if holders:
+        print(
+            f"  ✗ Auto-restore refused: process(es) {holders} still hold "
+            "state.db or its WAL open. Stop them (hermes gateway stop), "
+            "then restore manually with /snapshot restore."
+        )
+        return False
+    _clear_stale_sqlite_sidecars(state_path)
+    shutil.copy2(snap_state, state_path)
+    restored = verify_sqlite_integrity(
+        state_path, check_header=True, run_pragma=True
+    )
+    return bool(restored.get("valid"))
 
 
 def _update_via_zip(args, *, had_desktop_app_before_update: bool = False) -> bool:
@@ -1533,7 +2058,9 @@ def _update_via_zip(args, *, had_desktop_app_before_update: bool = False) -> boo
         )
         _m().sys.exit(1)
     _abort_zip_update_if_dirty_tree()
-    zip_url = _distribution_archive_url(branch)
+    zip_url = (
+        f"https://github.com/NousResearch/hermes-agent/archive/refs/heads/{branch}.zip"
+    )
 
     print("→ Downloading latest version...")
     tmp_dir = tempfile.mkdtemp(prefix="hermes-update-")
@@ -1579,7 +2106,7 @@ def _update_via_zip(args, *, had_desktop_app_before_update: bool = False) -> boo
                     break
 
         # Copy updated files over existing installation, preserving venv/node_modules/.git
-        preserve = {"venv", "node_modules", ".git", ".env"}
+        preserve = _ZIP_PRESERVED_TOP_LEVEL
         entries = [i for i in os.listdir(extracted) if i not in preserve]
 
         # Two-phase replace (#76104). Phase 1 copies every entry — directories
@@ -1874,15 +2401,9 @@ def _update_via_zip(args, *, had_desktop_app_before_update: bool = False) -> boo
                             )
                             if _snap_ok.get("valid"):
                                 try:
-                                    import shutil as _shutil
-
-                                    _shutil.copy2(_snap_state, _state_path)
-                                    _restored_ok = verify_sqlite_integrity(
-                                        _state_path,
-                                        check_header=True,
-                                        run_pragma=True,
-                                    )
-                                    if _restored_ok.get("valid"):
+                                    if _restore_state_db_from_snapshot(
+                                        _state_path, _snap_state
+                                    ):
                                         print(
                                             "  ✓ Auto-restored from snapshot "
                                             f"{_snap_dir.name}"
@@ -1903,7 +2424,7 @@ def _update_via_zip(args, *, had_desktop_app_before_update: bool = False) -> boo
             "Post-update state.db integrity check (zip path) failed: %s", exc
         )
 
-    _print_update_summary(
+    update_complete = _print_update_summary(
         node_failures=node_failures,
         desktop_build_ok=desktop_build_ok,
         pre_update_version=pre_update_version,
@@ -1923,11 +2444,11 @@ def _update_via_zip(args, *, had_desktop_app_before_update: bool = False) -> boo
         from hermes_cli.update_receipt import finalize_update_receipt
 
         finalize_update_receipt(
-            "success" if (desktop_build_ok and not node_failures) else "partial"
+            "success" if update_complete and not node_failures else "partial"
         )
     except Exception as _receipt_exc:
         logger.debug("Update receipt finalize (zip path) failed: %s", _receipt_exc)
-    return desktop_build_ok
+    return update_complete
 
 def _stash_local_changes_if_needed(git_cmd: list[str], cwd: Path) -> Optional[str]:
     status = subprocess.run(
@@ -2101,6 +2622,127 @@ def _park_stashed_changes(stash_ref: str) -> None:
     print(f"  Restore manually with: git stash apply {stash_ref}")
 
 
+def _git_untracked_paths(git_cmd: list[str], cwd: Path) -> set[str] | None:
+    """Return untracked paths, or ``None`` when Git cannot enumerate them."""
+    try:
+        result = subprocess.run(
+            git_cmd + ["ls-files", "--others", "--exclude-standard", "-z"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
+        )
+    except (OSError, subprocess.SubprocessError):
+        result = None
+    if result is None or result.returncode != 0:
+        print(
+            "  ⚠ Could not enumerate untracked files while validating the "
+            "restored stash."
+        )
+        return None
+    return {path for path in result.stdout.split("\0") if path}
+
+
+def _restored_python_paths(
+    git_cmd: list[str], cwd: Path
+) -> tuple[str, ...] | None:
+    """Return restored ``.py`` paths changed from ``HEAD``.
+
+    This deliberately validates Python source only; non-Python entry scripts
+    remain outside the executable import-health check.
+    """
+    try:
+        changed = subprocess.run(
+            git_cmd + ["diff", "--name-only", "-z", "HEAD", "--", "*.py"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
+        )
+    except (OSError, subprocess.SubprocessError):
+        changed = None
+    if changed is None or changed.returncode != 0:
+        print("  ⚠ Could not enumerate tracked Python files restored from the stash.")
+        return None
+    paths = set(changed.stdout.split("\0"))
+    untracked = _git_untracked_paths(git_cmd, cwd)
+    if untracked is None:
+        return None
+    paths.update(path for path in untracked if path.endswith(".py"))
+    paths.discard("")
+    return tuple(sorted(paths))
+
+
+def _reject_unsafe_stash_restore(
+    git_cmd: list[str],
+    cwd: Path,
+    stash_ref: str,
+    preexisting_untracked: set[str],
+    failing_target: str,
+    detail: str | None,
+) -> None:
+    """Restore the clean updated tree, preserve the stash, and abort the update."""
+    print()
+    print("✗ Restored local changes made the Hermes agent unexecutable.")
+    print(f"  Health check failed: {failing_target}")
+    if detail:
+        for line in str(detail).splitlines()[:6]:
+            print(f"    {line}")
+
+    current_untracked = _git_untracked_paths(git_cmd, cwd)
+    restored_untracked = (
+        current_untracked - preexisting_untracked
+        if current_untracked is not None
+        else set()
+    )
+    try:
+        reset = subprocess.run(
+            git_cmd + ["reset", "--hard", "HEAD"], cwd=cwd, capture_output=True
+        )
+    except (OSError, subprocess.SubprocessError):
+        reset = None
+
+    clean = None
+    if restored_untracked:
+        try:
+            clean = subprocess.run(
+                git_cmd + ["clean", "-fd", "--", *sorted(restored_untracked)],
+                cwd=cwd,
+                capture_output=True,
+            )
+        except (OSError, subprocess.SubprocessError):
+            clean = None
+    cleanup_ok = (
+        current_untracked is not None
+        and reset is not None
+        and reset.returncode == 0
+        and (not restored_untracked or (clean is not None and clean.returncode == 0))
+    )
+    if cleanup_ok:
+        try:
+            verify = subprocess.run(
+                git_cmd + ["diff", "--quiet", "HEAD", "--"],
+                cwd=cwd,
+                capture_output=True,
+            )
+            cleanup_ok = verify.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            cleanup_ok = False
+
+    if cleanup_ok:
+        print("  The clean updated tree has been restored; the gateway was not restarted.")
+    else:
+        print("  ⚠ The clean updated tree could not be fully restored automatically.")
+        print("    Inspect `git status` and run `git reset --hard HEAD` before retrying.")
+    print("  Platform connectivity alone does not mean the agent can execute turns.")
+    print(f"  Your local changes remain preserved in stash: {stash_ref}")
+    print(f"  Inspect them with: git stash show --stat {stash_ref}")
+    print(f"  Restore manually after fixing them: git stash apply {stash_ref}")
+    raise SystemExit(1)
+
+
 def _restore_stashed_changes(
     git_cmd: list[str],
     cwd: Path,
@@ -2109,15 +2751,17 @@ def _restore_stashed_changes(
     input_fn=None,
 ) -> bool:
     if prompt_user:
+        remote_prompt = input_fn is not None
+        prompt_suffix = "[y/N]" if remote_prompt else "[Y/n]"
         print()
         print("⚠ Local changes were stashed before updating.")
         print(
             "  Restoring them may reapply local customizations onto the updated codebase."
         )
         print("  Review the result afterward if Hermes behaves unexpectedly.")
-        print("Restore local changes now? [Y/n]")
+        print(f"Restore local changes now? {prompt_suffix}")
         if input_fn is not None:
-            response = input_fn("Restore local changes now? [Y/n]", "y")
+            response = input_fn(f"Restore local changes now? {prompt_suffix}", "n")
         else:
             try:
                 response = input().strip().lower()
@@ -2128,12 +2772,21 @@ def _restore_stashed_changes(
                 # skip-restore path below, which already explains how to
                 # restore manually from git stash.
                 response = "n"
-        if response not in {"", "y", "yes"}:
+        accepted = response in {"y", "yes"} or (not remote_prompt and response == "")
+        if not accepted:
             print("Skipped restoring local changes.")
             print("Your changes are still preserved in git stash.")
             print(f"Restore manually with: git stash apply {stash_ref}")
             return False
 
+    preexisting_untracked = _git_untracked_paths(git_cmd, cwd)
+    if preexisting_untracked is None:
+        print("  The stash was not restored because its cleanup baseline is unknown.")
+        print(f"  Restore manually with: git stash apply {stash_ref}")
+        return False
+    clean_import_failures = _critical_module_import_failures(
+        cwd, report_runtime_errors=True
+    )
     print("→ Restoring local changes...")
     restore = subprocess.run(
         git_cmd + ["stash", "apply", stash_ref],
@@ -2194,6 +2847,51 @@ def _restore_stashed_changes(
         # restore had conflicts.  Let cmd_update continue with pip install,
         # skill sync, and gateway restart.
         return False
+
+    restored_python = _restored_python_paths(git_cmd, cwd)
+    if restored_python is None:
+        _reject_unsafe_stash_restore(
+            git_cmd,
+            cwd,
+            stash_ref,
+            preexisting_untracked,
+            "restored Python source discovery",
+            "could not determine which restored Python files require validation",
+        )
+    syntax_ok, failing_path, syntax_error = _validate_python_files_syntax(
+        cwd, restored_python
+    )
+    if not syntax_ok:
+        _reject_unsafe_stash_restore(
+            git_cmd,
+            cwd,
+            stash_ref,
+            preexisting_untracked,
+            failing_path or "restored Python source",
+            syntax_error,
+        )
+
+    restored_import_failures = _critical_module_import_failures(
+        cwd, report_runtime_errors=True
+    )
+    changed_import_failure = next(
+        (
+            (module, error)
+            for module, error in restored_import_failures.items()
+            if clean_import_failures.get(module) != error
+        ),
+        None,
+    )
+    if changed_import_failure is not None:
+        failing_module, import_error = changed_import_failure
+        _reject_unsafe_stash_restore(
+            git_cmd,
+            cwd,
+            stash_ref,
+            preexisting_untracked,
+            f"agent import {failing_module or 'unknown'}",
+            import_error[1],
+        )
 
     stash_selector = _resolve_stash_selector(git_cmd, cwd, stash_ref)
     if stash_selector is None:
@@ -2286,39 +2984,6 @@ OFFICIAL_REPO_URL = "https://github.com/NousResearch/hermes-agent.git"
 
 SKIP_UPSTREAM_PROMPT_FILE = ".skip_upstream_prompt"
 
-
-def _normalize_repo_url(url: str) -> str:
-    normalized = url.strip().rstrip("/").lower()
-    return normalized[:-4] if normalized.endswith(".git") else normalized
-
-
-def _distribution_repo_urls() -> set[str]:
-    from downstream.distribution import load_distribution
-
-    repository = load_distribution().repository
-    return {repository.web, repository.https, repository.ssh}
-
-
-def _is_distribution_origin(origin_url: Optional[str]) -> bool:
-    if not origin_url:
-        return False
-    normalized = _normalize_repo_url(origin_url)
-    return any(
-        normalized == _normalize_repo_url(candidate)
-        for candidate in _distribution_repo_urls()
-    )
-
-
-def _distribution_archive_url(branch: str) -> str:
-    try:
-        from downstream.distribution import update_archive_url
-
-        return update_archive_url(branch)
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        raise RuntimeError(
-            "downstream distribution metadata is required for ZIP updates"
-        ) from exc
-
 def _get_origin_url(git_cmd: list[str], cwd: Path) -> Optional[str]:
     """Get the URL of the origin remote, or None if not set."""
     try:
@@ -2337,8 +3002,6 @@ def _get_origin_url(git_cmd: list[str], cwd: Path) -> Optional[str]:
 def _is_fork(origin_url: Optional[str]) -> bool:
     """Check if the origin remote points to a fork (not the official repo)."""
     if not origin_url:
-        return False
-    if _is_distribution_origin(origin_url):
         return False
     # Normalize URL for comparison (strip trailing .git if present)
     normalized = origin_url.rstrip("/")
@@ -2424,7 +3087,13 @@ def _sync_fork_with_upstream(git_cmd: list[str], cwd: Path) -> bool:
     except Exception:
         return False
 
-def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
+def _sync_with_upstream_if_needed(
+    git_cmd: list[str],
+    cwd: Path,
+    *,
+    assume_yes: bool = False,
+    input_fn=None,
+) -> bool:
     """Check if fork is behind upstream and sync if safe.
 
     This implements the fork upstream sync logic:
@@ -2432,26 +3101,53 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
     - Compare origin/main with upstream/main
     - If origin/main is strictly behind upstream/main, pull from upstream
     - Try to sync fork back to origin if possible
+
+    Returns True when origin/main was actually verified against the official
+    upstream/main, False when the check never happened (prompt skipped or
+    declined, remote add failed, fetch or compare failed) so the caller can
+    avoid reporting the checkout as up to date on the strength of an origin
+    comparison alone (#97052 review).
     """
     has_upstream = _has_upstream_remote(git_cmd, cwd)
 
     if not has_upstream:
         # Check if user previously declined
         if _should_skip_upstream_prompt():
-            return
+            return False
 
-        # Ask user if they want to add upstream
         print()
         print("ℹ Your fork is not tracking the official Hermes repository.")
         print("  This means you may miss updates from NousResearch/hermes-agent.")
         print()
-        try:
-            response = (
-                input("Add official repo as 'upstream' remote? [Y/n]: ").strip().lower()
+
+        if assume_yes or (
+            input_fn is None and not (sys.stdin.isatty() and sys.stdout.isatty())
+        ):
+            # --yes means "don't block", not "mutate my git remotes". Skip
+            # without persisting the decline so interactive runs still get asked.
+            print("  Skipping upstream setup (non-interactive run).")
+            print(
+                "  Add it later with: git remote add upstream https://github.com/NousResearch/hermes-agent.git"
             )
-        except (EOFError, KeyboardInterrupt, UnicodeDecodeError):
-            print()
-            response = "n"
+            return False
+
+        # Ask user if they want to add upstream
+        if input_fn is not None:
+            response = (
+                input_fn("Add official repo as 'upstream' remote? [y/N]", "n")
+                .strip()
+                .lower()
+            )
+        else:
+            try:
+                response = (
+                    input("Add official repo as 'upstream' remote? [Y/n]: ")
+                    .strip()
+                    .lower()
+                )
+            except (EOFError, KeyboardInterrupt, UnicodeDecodeError):
+                print()
+                response = "n"
 
         if response in {"", "y", "yes"}:
             print("→ Adding upstream remote...")
@@ -2462,13 +3158,13 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
                 has_upstream = True
             else:
                 print("  ✗ Failed to add upstream remote. Skipping upstream sync.")
-                return
+                return False
         else:
             print(
                 "  Skipped. Run 'git remote add upstream https://github.com/NousResearch/hermes-agent.git' to add later."
             )
             _mark_skip_upstream_prompt()
-            return
+            return False
 
     # Fetch upstream main only. This sync compares upstream/main with
     # origin/main, so there's no reason to pull every upstream ref — and a bare
@@ -2484,7 +3180,7 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
         )
     except subprocess.CalledProcessError:
         print("  ✗ Failed to fetch upstream. Skipping upstream sync.")
-        return
+        return False
 
     # Compare origin/main with upstream/main
     origin_ahead = _count_commits_between(git_cmd, cwd, "upstream/main", "origin/main")
@@ -2494,7 +3190,7 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
 
     if origin_ahead < 0 or upstream_ahead < 0:
         print("  ✗ Could not compare branches. Skipping upstream sync.")
-        return
+        return False
 
     # If origin/main has commits not on upstream, don't trample
     if origin_ahead > 0:
@@ -2503,12 +3199,12 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
         print("  Skipping upstream sync to preserve your changes.")
         print("  If you want to merge upstream changes, run:")
         print("    git pull upstream main")
-        return
+        return True
 
     # If upstream is not ahead, fork is up to date
     if upstream_ahead == 0:
         print("  ✓ Fork is up to date with upstream")
-        return
+        return True
 
     # origin/main is strictly behind upstream/main (can fast-forward)
     print()
@@ -2525,7 +3221,7 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
         print(
             "  ✗ Failed to pull from upstream. You may need to resolve conflicts manually."
         )
-        return
+        return False
 
     print("  ✓ Updated from upstream")
 
@@ -2538,6 +3234,7 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
             "  ℹ Got updates from upstream but couldn't push to fork (no write access?)"
         )
         print("    Your local repo is updated, but your fork on GitHub may be behind.")
+    return True
 
 def _invalidate_update_cache():
     """Delete the update-check cache for ALL profiles so no banner
@@ -2585,6 +3282,309 @@ def _write_update_incomplete_marker() -> None:
 def _write_lazy_refresh_incomplete_marker() -> None:
     """Drop the interrupted lazy-refresh breadcrumb. Never raises."""
     _write_marker_file(_m()._lazy_refresh_marker_path(), label="lazy-refresh-incomplete")
+
+
+# ``fleet_restart_pending`` lives under HERMES_HOME (not next to the venv).
+# The existing ``.update-incomplete`` / ``.lazy-refresh-incomplete`` markers
+# gate dependency/venv repair; this one is the fleet-restart obligation after
+# a git pull that advanced HEAD (#95294). Cleared only when the restart phase
+# completes or there were no running services to restart.
+_FLEET_RESTART_PENDING_NAME = "fleet_restart_pending"
+
+
+def _fleet_restart_pending_marker_path() -> Path:
+    """HERMES_HOME breadcrumb for a pull that has not yet restarted the fleet."""
+    return get_hermes_home() / _FLEET_RESTART_PENDING_NAME
+
+
+def _write_fleet_restart_pending_marker(*, expected_sha: str = "") -> None:
+    """Drop the pull→restart obligation breadcrumb. Never raises."""
+    path = _fleet_restart_pending_marker_path()
+    if _m()._pytest_owns_live_checkout(path.parent):
+        logger.debug("Skipping fleet-restart-pending marker under pytest (live checkout)")
+        return
+    try:
+        lines = [f"started={_time.time()}", f"pid={os.getpid()}"]
+        if expected_sha:
+            lines.append(f"expected_sha={expected_sha}")
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except OSError as exc:
+        logger.debug("Could not write fleet-restart-pending marker: %s", exc)
+
+
+def _clear_fleet_restart_pending_marker() -> None:
+    """Remove the pull→restart obligation breadcrumb. Never raises."""
+    _m()._clear_marker_file(
+        _fleet_restart_pending_marker_path(), label="fleet-restart-pending"
+    )
+
+
+def _current_checkout_sha() -> str | None:
+    """Current on-disk checkout HEAD, or None if it cannot be resolved."""
+    try:
+        from hermes_cli.build_info import get_code_identity
+
+        sha = (get_code_identity(refresh=True) or {}).get("sha")
+        return str(sha) if sha else None
+    except Exception:
+        return _capture_head_sha(["git"], _m().PROJECT_ROOT)
+
+
+def _receipt_looks_unfinished(receipt: dict) -> bool:
+    """True when *receipt* is from an update that did not finish cleanly."""
+    if receipt.get("stop_reason"):
+        return True
+    exit_code = receipt.get("exit_code")
+    if exit_code not in (0, None):
+        return True
+    outcome = receipt.get("outcome")
+    if outcome in ("failed", "partial", "running"):
+        return True
+    gateway_restart = receipt.get("gateway_restart")
+    if isinstance(gateway_restart, dict) and gateway_restart.get("incomplete"):
+        return True
+    return False
+
+
+def _receipt_reports_stale_runtime(expected_sha: str | None = None) -> bool:
+    """True when ``update_receipts/latest.json`` records a runtime SHA skew.
+
+    ``plan.runtimes[].code_sha`` is captured *before* the pull of that run,
+    so a successful update's receipt always shows pre-update runtime SHAs.
+    Those must not retrigger a restart on the next invocation. Use the
+    post-restart ``fleet`` matrix when present; fall back to the plan only
+    for an unfinished receipt (interrupt / failed / incomplete restart) —
+    the #95294 smoking-gun shape.
+    """
+    try:
+        from hermes_cli.update_receipt import read_latest_receipt
+
+        receipt = read_latest_receipt()
+    except Exception:
+        receipt = None
+    if not isinstance(receipt, dict):
+        return False
+    if not expected_sha:
+        expected_sha = _current_checkout_sha()
+    if not expected_sha:
+        return False
+
+    def _sha_mismatch(code_sha) -> bool:
+        return bool(code_sha) and str(code_sha) != str(expected_sha)
+
+    fleet = receipt.get("fleet")
+    if isinstance(fleet, list) and fleet:
+        for entry in fleet:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("state") == "stale":
+                return True
+            if _sha_mismatch(entry.get("code_sha")):
+                return True
+        return False
+
+    if not _receipt_looks_unfinished(receipt):
+        return False
+    plan = receipt.get("plan")
+    if not isinstance(plan, dict):
+        return False
+    for runtime in plan.get("runtimes") or []:
+        if isinstance(runtime, dict) and _sha_mismatch(runtime.get("code_sha")):
+            return True
+    return False
+
+
+def _pending_fleet_restart_needed() -> bool:
+    """True when a prior pull still owes the fleet a restart (#95294)."""
+    try:
+        if _fleet_restart_pending_marker_path().is_file():
+            return True
+    except OSError:
+        pass
+    return _receipt_reports_stale_runtime()
+
+
+def _warn_pending_fleet_restart(*, startup: bool = False) -> None:
+    """Print the specific interrupted-update fleet-restart warning."""
+    stream = sys.stderr if startup else sys.stdout
+    print(
+        "⚠ A previous `hermes update` pulled new code but did not "
+        "restart running gateways.",
+        file=stream,
+    )
+    print(
+        "  Gateways may still be serving pre-update modules (mixed sys.modules).",
+        file=stream,
+    )
+    if startup:
+        print(
+            "  Run `hermes update` or `hermes gateway restart`.",
+            file=stream,
+        )
+
+
+def _warn_pending_fleet_restart_on_startup() -> None:
+    """Cheap CLI-startup hint. Never restarts; never raises."""
+    try:
+        if not _pending_fleet_restart_needed():
+            return
+        _warn_pending_fleet_restart(startup=True)
+    except Exception:
+        pass
+
+
+def _restart_systemd_gateway_units_best_effort(failed: list) -> None:
+    """Best-effort ``systemctl restart`` of every hermes-gateway/serve unit."""
+    for scope, scope_cmd in (
+        ("user", ["systemctl", "--user"]),
+        ("system", ["systemctl"]),
+    ):
+        try:
+            result = subprocess.run(
+                scope_cmd
+                + [
+                    "list-units",
+                    "hermes-gateway*",
+                    "hermes-serve*",
+                    "--plain",
+                    "--no-legend",
+                    "--no-pager",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=10,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode != 0:
+            continue
+
+        def process_unit(svc_name: str, _scope=scope, _cmd=scope_cmd) -> None:
+            restart_cmd = list(_cmd) + ["--no-ask-password", "restart", svc_name]
+            if (
+                _scope == "system"
+                and hasattr(os, "geteuid")
+                and os.geteuid() != 0  # windows-footgun: ok — systemd path, Linux-only
+            ):
+                restart_cmd = ["sudo", "-n"] + restart_cmd
+            subprocess.run(
+                restart_cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+            )
+
+        def on_timeout(svc_name: str, exc: subprocess.TimeoutExpired) -> None:
+            failed.append(svc_name)
+
+        _for_each_systemd_gateway_unit(
+            result.stdout,
+            process_unit=process_unit,
+            on_unit_timeout=on_timeout,
+        )
+
+
+def _run_pending_fleet_restart() -> bool:
+    """Catch-up restart for gateways left on pre-update code (#95294).
+
+    Returns True when restart completed or no services were running.
+    Returns False if restart was incomplete. Never raises.
+    """
+    print("→ Restarting gateways left on pre-update code...")
+    try:
+        _m()._purge_stale_hermes_modules()
+    except Exception:
+        pass
+    try:
+        from hermes_cli.gateway import (
+            find_gateway_pids,
+            is_macos,
+            is_windows,
+            kill_gateway_processes,
+            supports_systemd_services,
+            _wait_for_gateway_exit,
+        )
+    except Exception as exc:
+        _warn_gateway_restart_phase_aborted(exc, None)
+        return False
+
+    try:
+        pids = list(find_gateway_pids(all_profiles=True))
+    except Exception as exc:
+        logger.debug("Pending fleet restart: gateway probe failed: %s", exc)
+        pids = None
+
+    if pids == []:
+        print("  ✓ No running gateways — nothing to restart.")
+        return True
+
+    failed: list = []
+    try:
+        if supports_systemd_services():
+            _restart_systemd_gateway_units_best_effort(failed)
+        if is_macos():
+            restarted: list = []
+            try:
+                _restart_macos_launchd_gateways(restarted, failed, 45.0)
+            except Exception as exc:
+                logger.debug("Pending fleet restart: launchd failed: %s", exc)
+                failed.append("launchd")
+        if is_windows():
+            try:
+                from hermes_cli import gateway_windows
+
+                if gateway_windows.is_installed():
+                    gateway_windows.restart()
+            except Exception as exc:
+                logger.debug("Pending fleet restart: Windows failed: %s", exc)
+                failed.append("windows-gateway")
+        leftover: list = []
+        try:
+            leftover = list(find_gateway_pids(all_profiles=True))
+        except Exception:
+            leftover = list(pids or [])
+        if leftover:
+            try:
+                kill_gateway_processes(all_profiles=True)
+                _wait_for_gateway_exit(timeout=5.0, force_after=None)
+            except Exception as exc:
+                logger.debug("Pending fleet restart: PID stop failed: %s", exc)
+        if failed:
+            _warn_incomplete_gateway_fleet_restart(failed)
+            return False
+        print("  ✓ Pending fleet restart completed.")
+        return True
+    except Exception as exc:
+        surviving = None
+        try:
+            surviving = list(find_gateway_pids(all_profiles=True))
+        except Exception:
+            surviving = pids
+        _warn_gateway_restart_phase_aborted(exc, surviving)
+        return False
+
+
+def _apply_pending_fleet_restart_catchup() -> None:
+    """On an already-up-to-date ``hermes update``, finish a skipped restart.
+
+    No-op when nothing is pending. Exits 1 when the catch-up restart is
+    incomplete so automation does not treat the fleet as healthy.
+    """
+    if not _pending_fleet_restart_needed():
+        return
+    print()
+    _warn_pending_fleet_restart()
+    print("→ Running the pending fleet restart...")
+    if _run_pending_fleet_restart():
+        _clear_fleet_restart_pending_marker()
+        return
+    print("  ⚠ Fleet restart incomplete. Recover with: hermes gateway restart")
+    sys.exit(1)
+
 
 def _format_concurrent_instances_message(
     matches: list[tuple[int, str]], scripts_dir: Path
@@ -3114,7 +4114,14 @@ def _record_npm_lockfile_hash(hermes_root: Path) -> None:
     except OSError:
         logger.debug("Could not write npm lockfile hash cache")
 
-def _repair_node_deps_on_current_checkout(print_completion) -> None:
+def _repair_node_deps_on_current_checkout(
+    print_completion,
+    *,
+    assume_yes: bool = False,
+    gateway_mode: bool = False,
+    pre_update_snapshot_id: str | None = None,
+    completion_message: str = "✓ Already up to date!",
+) -> bool:
     """Repair Node deps on the ``commit_count == 0`` path (#77211).
 
     A current checkout does not imply healthy Node deps: a previous npm
@@ -3134,12 +4141,17 @@ def _repair_node_deps_on_current_checkout(print_completion) -> None:
         print_completion(
             "⚠ Checkout is current, but Node.js dependencies could not be repaired."
         )
-        return
+        return False
     # Pair the refresh with the web build like every other
     # _update_node_dependencies call site; it staleness-checks internally,
     # so this is a no-op when nothing changed.
     _m()._build_web_ui(_m().PROJECT_ROOT / "web")
-    print_completion("✓ Already up to date!")
+    _check_and_apply_config_migration(
+        assume_yes=assume_yes,
+        gateway_mode=gateway_mode,
+        pre_update_snapshot_id=pre_update_snapshot_id,
+    )
+    return bool(print_completion(completion_message))
 
 
 def _update_node_dependencies() -> list[str]:
@@ -3352,24 +4364,19 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
     Installs that can't honor non-default branches (e.g. Docker) surface a
     one-line notice instead of silently dropping the flag.
     """
-    from hermes_cli.config import (
-        detect_install_method,
-        is_nix_install_method,
-        recommended_update_command_for_method,
+    # Shared admission gate (#91277 Phase 3): same marker-first decision as
+    # the apply path, so --check can never report git state for an install
+    # whose real update mechanism is an image pull.
+    from hermes_cli.update_contract import (
+        evaluate_update_admission,
+        record_refusal_receipt,
     )
-    method = detect_install_method(_m().PROJECT_ROOT)
-    if method == "docker":
-        # Docker can't ``git fetch`` from within the container.  Surface the
-        # same long-form ``docker pull`` guidance ``hermes update`` (apply
-        # path) uses — telling the user to "reinstall via curl" or that
-        # ".git is missing" would point them at the wrong remediation.
-        from hermes_cli.config import format_docker_update_message
-        print(format_docker_update_message())
-        sys.exit(1)
 
-    if is_nix_install_method(method) or method == "apt":
-        print(recommended_update_command_for_method(method))
-        sys.exit(1)
+    refusal = evaluate_update_admission(_m().PROJECT_ROOT)
+    if refusal is not None:
+        print(refusal.message)
+        record_refusal_receipt(refusal)
+        sys.exit(2)
 
     git_dir = _m().PROJECT_ROOT / ".git"
     if not git_dir.exists():
@@ -3384,11 +4391,17 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
     # lock file) behind; every later fetch then fails with "File exists" and
     # the check reports a hard failure (or, in the banner path, silently
     # compares stale refs). Self-heal abandoned locks before fetching.
-    from hermes_cli.gitlock import clear_stale_git_locks
+    from hermes_cli.gitlock import clear_stale_git_locks, clear_stale_tmp_packs
 
     cleared = clear_stale_git_locks(_m().PROJECT_ROOT)
     for lock_path in cleared:
         print(f"  (removed stale git lock: {lock_path})")
+    # Aborted fetches on flaky lines also strand tmp_pack_* debris in
+    # .git/objects/pack — unchecked it reached 6 GB and corrupted the pack
+    # dir outright (#93732). Same age+process safety contract as the locks.
+    swept = clear_stale_tmp_packs(_m().PROJECT_ROOT)
+    if swept:
+        print(f"  (removed {len(swept)} aborted-fetch pack temp file(s))")
 
     # Fetch only the branch we compare against; prefer upstream as the canonical
     # reference. A bare `git fetch <remote>` pulls every ref, and this repo has
@@ -3412,8 +4425,7 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
     )
     depth_args = ["--depth", "1"] if is_shallow else []
 
-    origin_url = _get_origin_url(git_cmd, _m().PROJECT_ROOT)
-    if branch == "main" and not _is_distribution_origin(origin_url):
+    if branch == "main":
         # Probe locally (~6 ms) whether an 'upstream' remote exists at all
         # before spending a network fetch on it. Non-fork installs have no
         # 'upstream' remote, and the old flow burned a failed network attempt
@@ -4119,7 +5131,12 @@ def _detect_venv_python_processes(
 
     matches: list[tuple[int, str, str]] = []
     try:
-        proc_iter = psutil.process_iter(["pid", "exe", "name", "cmdline", "cwd"])
+        # On Windows, prefetching cmdline and cwd performs two expensive
+        # per-process queries. A busy workstation can have 500+ processes, so
+        # querying those fields for every unrelated process can exceed the
+        # Desktop preflight watchdog. First collect only cheap identity fields;
+        # fetch cmdline/cwd lazily for plausible Python/uv/Hermes candidates.
+        proc_iter = psutil.process_iter(["pid", "exe", "name"])
     except Exception:
         return []
     for proc in proc_iter:
@@ -4135,13 +5152,23 @@ def _detect_venv_python_processes(
             exe_norm = str(Path(exe).resolve()).lower()
         except (OSError, ValueError):
             exe_norm = str(exe).lower()
-        cmdline_raw = " ".join(info.get("cmdline") or [])
-        cmdline_low = cmdline_raw.lower()
-        cwd_low = str(info.get("cwd") or "").lower().rstrip(os.sep) + os.sep
-
         # Primary match: the executable itself lives under this venv
         # (venv\Scripts\python(w).exe — the desktop backend / gateway case).
         is_holder = exe_norm.startswith(venv_prefix)
+        name = str(info.get("name") or Path(exe).name)
+        name_low = name.lower()
+
+        if not is_holder and not (
+            name_low.startswith(("python", "pypy"))
+            or name_low in {"uv.exe", "uvx.exe", "hermes.exe"}
+        ):
+            continue
+
+        try:
+            cmdline_raw = " ".join(proc.cmdline() or [])
+        except Exception:
+            cmdline_raw = ""
+        cmdline_low = cmdline_raw.lower()
         # Fallback: uv/base-interpreter trampolines run a python whose exe is
         # OUTSIDE the venv but which still imports from it and holds its .pyd
         # files. Catch those by what they're running: a cmdline that references
@@ -4150,6 +5177,10 @@ def _detect_venv_python_processes(
         if not is_holder and venv_prefix in cmdline_low:
             is_holder = True
         if not is_holder and "hermes_cli.main" in cmdline_low:
+            try:
+                cwd_low = str(proc.cwd() or "").lower().rstrip(os.sep) + os.sep
+            except Exception:
+                cwd_low = os.sep
             if root_prefix in cmdline_low or cwd_low.startswith(root_prefix):
                 is_holder = True
         if not is_holder:
@@ -4595,9 +5626,165 @@ def _leftover_pausable_gateway_pids(
     return pids
 
 
+def _refuse_gateway_ancestor_tree_kill(
+    pids: list[int], *, gateway_mode: bool
+) -> bool:
+    """Refuse a plain Windows update that would kill its own process tree.
+
+    A chat agent can launch plain ``hermes update`` through its terminal tool.
+    In that topology the updater is a child of the gateway.  The leftover
+    holder recovery below uses ``taskkill /T /F`` on Windows, so force-stopping
+    that gateway also kills the updater before it can mutate the checkout
+    (#98814).
+
+    ``/update`` uses the supported ``--gateway`` hand-off and is deliberately
+    exempt: it detaches the updater and provides file-based progress/result
+    delivery.  For every other invocation, refuse only when a nominated
+    gateway is positively identified as this process's ancestor.  If ancestry
+    cannot be established, preserve the existing holder recovery behavior.
+    """
+    if gateway_mode or not pids:
+        return False
+
+    try:
+        from hermes_cli.gateway import _is_pid_ancestor_of_current_process
+
+        ancestors = [
+            int(pid)
+            for pid in pids
+            if _is_pid_ancestor_of_current_process(int(pid))
+        ]
+    except Exception as exc:
+        logger.debug("Could not inspect gateway ancestry before tree-kill: %s", exc)
+        return False
+
+    if not ancestors:
+        return False
+
+    rendered = ", ".join(str(pid) for pid in ancestors)
+    print(
+        "✗ Refusing to stop the gateway process tree because this updater "
+        f"is running inside it (gateway PID(s): {rendered})."
+    )
+    print(
+        "  On Windows, taskkill /T would terminate the updater before the "
+        "update can run."
+    )
+    print("  From a chat platform, use `/update` instead.")
+    print("  Otherwise, run `hermes update` from a separate terminal.")
+    return True
+
+
+def _ledger_manual_serve_holders(
+    matches: list[tuple[int, str, str]],
+) -> list[dict]:
+    """Ledger entries for venv holders that are MANUAL serve/dashboard backends.
+
+    Positive identity only (#63206): the process self-registered in the spawn
+    ledger with purpose serve/dashboard, its (pid, create_time) still matches
+    a live process, and its recorded spawner is NOT alive (a Desktop-owned
+    backend keeps its live Electron spawner and must keep the refusal — the
+    app would respawn what we kill; a PowerShell-launched serve has no live
+    Hermes spawner). Returns the full ledger entries so the relauncher can
+    rebuild the launch command from structured host/port/profile instead of
+    parsing argv.
+    """
+    try:
+        from hermes_cli.process_identity import ledger_entries, spawner_is_dead
+    except Exception:
+        return []
+    holder_pids = {int(pid) for pid, _name, _cmd in matches}
+    out: list[dict] = []
+    for entry in ledger_entries():
+        if entry.get("purpose") not in ("serve", "dashboard"):
+            continue
+        pid = entry.get("pid")
+        if not isinstance(pid, int) or pid not in holder_pids:
+            continue
+        if spawner_is_dead(entry) is False:
+            continue  # live Desktop supervisor owns it — keep refusing
+        out.append(entry)
+    return out
+
+
+def _serve_relaunch_commands(entries: list[dict]) -> list[list[str]]:
+    """Rebuild launch commands for stopped serves from structured identity.
+
+    Uses the ledger's host/port/profile fields — never argv parsing (a
+    joined argv string cannot round-trip Windows paths with spaces). Entries
+    without a recorded port are skipped; the caller prints the manual hint
+    for those.
+    """
+    commands: list[list[str]] = []
+    hermes = None
+    try:
+        scripts_dir = _m()._venv_scripts_dir()
+        if scripts_dir is not None:
+            for name in ("hermes.exe", "hermes"):
+                candidate = scripts_dir / name
+                if candidate.is_file():
+                    hermes = str(candidate)
+                    break
+    except Exception:
+        hermes = None
+    if hermes is None:
+        hermes = "hermes"
+    for entry in entries:
+        port = entry.get("port")
+        if not isinstance(port, int) or port <= 0:
+            continue
+        cmd = [hermes]
+        profile = str(entry.get("profile") or "")
+        if profile and profile != "default":
+            cmd += ["--profile", profile]
+        cmd.append(str(entry.get("purpose")))
+        host = str(entry.get("host") or "")
+        if host:
+            cmd += ["--host", host]
+        cmd += ["--port", str(port)]
+        commands.append(cmd)
+    return commands
+
+
+def _relaunch_stopped_serves(token: dict) -> None:
+    """Idempotent atexit relaunch of manual serves stopped by the venv guard.
+
+    Mirrors the gateway resume token contract: `pending` flips False on the
+    first invocation so the explicit call and the atexit registration cannot
+    double-spawn (#63206).
+    """
+    if not token.get("pending"):
+        return
+    token["pending"] = False
+    entries = token.get("entries") or []
+    if not entries:
+        return
+    commands = _serve_relaunch_commands(entries)
+    skipped = len(entries) - len(commands)
+    failed: list = []
+    if commands:
+        print("  ⟲ Relaunching stopped serve/dashboard backend(s)")
+        failed = _m()._respawn_dashboard_processes(commands)
+    if skipped or failed:
+        print(
+            "  ⚠ Some stopped backends could not be relaunched automatically; "
+            "restart them manually (hermes serve --host <ip> --port <port>)."
+        )
+    try:
+        from hermes_cli.update_receipt import record_step
+
+        record_step(
+            "serve_relaunch",
+            not failed and not skipped,
+            f"relaunched={len(commands) - len(failed)} failed={len(failed)} skipped={skipped}",
+        )
+    except Exception:
+        pass
+
+
 def _orphaned_desktop_backend_pids(
     matches: list[tuple[int, str, str]],
-) -> list[int] | None:
+) -> list[tuple[int, int]] | None:
     """PIDs from *matches* when every remaining holder is an ORPHANED backend.
 
     The venv-holder guard refuses on the Desktop app's ``serve`` backend by
@@ -4645,7 +5832,7 @@ def _orphaned_desktop_backend_pids(
         )
 
     # Pass 1: find orphaned backend ROOTS among the holders.
-    roots: list[int] = []
+    roots: list[tuple[int, int]] = []
     remaining: list[tuple[int, str]] = []  # (pid, argv_low) still to justify
     for pid, _name, cmdline in matches:
         argv = cmdline
@@ -4663,6 +5850,21 @@ def _orphaned_desktop_backend_pids(
             continue
         try:
             proc = psutil.Process(int(pid))
+            # Fingerprint from the SAME psutil handle used for classification
+            # below, quantized to centiseconds — the exact scheme
+            # gateway.status.get_process_start_time uses on Windows, so the
+            # value round-trips through pid_is_hermes at kill time. (Reading
+            # /proc/<pid>/stat here instead would consult the HOST process
+            # table and use different units.)
+            process_start_time = int(round(proc.create_time() * 100))
+        except psutil.NoSuchProcess:
+            # The candidate itself exited during classification; there is
+            # nothing left to reap and no identity to pass to taskkill.
+            continue
+        except Exception:
+            return None
+
+        try:
             ppid = proc.ppid()
             parent = psutil.Process(ppid) if ppid else None
             if parent is not None and parent.is_running():
@@ -4681,12 +5883,12 @@ def _orphaned_desktop_backend_pids(
             pass  # parent gone → orphan
         except Exception:
             return None
-        roots.append(int(pid))
+        roots.append((int(pid), process_start_time))
 
     # Pass 2: every non-backend holder must be a descendant of an accepted
     # orphan root — then it dies with the root's tree reap. Anything else
     # (operator REPL, stray script) keeps the refusal.
-    root_set = set(roots)
+    root_set = {pid for pid, _start_time in roots}
     for pid, _low in remaining:
         if not root_set:
             return None
@@ -4816,7 +6018,9 @@ def _handoff_reapable_backend_pids(
     return roots or None
 
 
-def _stop_process_trees(pids: list[int]) -> None:
+def _stop_process_trees(
+    pids: list[int] | list[tuple[int, int]],
+) -> None:
     """Force-stop each PID with its full child tree (Windows).
 
     ``taskkill /T /F`` mirrors the Desktop's ``forceKillProcessTree`` and
@@ -4824,12 +6028,38 @@ def _stop_process_trees(pids: list[int]) -> None:
     ``.hermes-runtime`` interpreter child alive and holding the install open
     (#70026). Best effort; never raises.
     """
-    for pid in pids:
+    from gateway.status import get_process_start_time
+    from hermes_cli._subprocess_compat import pid_is_hermes, windows_hide_flags
+
+    for entry in pids:
+        if isinstance(entry, tuple):
+            pid, expected_start_time = entry
+        else:
+            pid = int(entry)
+            expected_start_time = get_process_start_time(pid)
         try:
+            if expected_start_time is None:
+                logger.debug(
+                    "Skipping taskkill of PID %s: process identity unavailable",
+                    pid,
+                )
+                continue
+            if not pid_is_hermes(
+                pid,
+                expected_start_time=expected_start_time,
+            ):
+                logger.debug(
+                    "Skipping taskkill of non-Hermes or changed PID %s",
+                    pid,
+                )
+                continue
             subprocess.run(
-                ["taskkill", "/PID", str(int(pid)), "/T", "/F"],
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
                 check=False,
-                capture_output=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                creationflags=windows_hide_flags(),
             )
         except Exception as exc:
             logger.debug("Could not stop process tree %s: %s", pid, exc)
@@ -5086,7 +6316,7 @@ def _pause_windows_gateways_for_update() -> dict | None:
         return None
 
     try:
-        from gateway.status import terminate_pid
+        from gateway.status import get_process_start_time, terminate_pid
         from hermes_cli.gateway import (
             _capture_gateway_argv,
             _get_restart_drain_timeout,
@@ -5276,8 +6506,13 @@ def _pause_windows_gateways_for_update() -> dict | None:
     force_killed = []
     for pid in sorted(set(survivors).union(unmapped_pids).union(launcher_pids)):
         try:
-            terminate_pid(int(pid), force=True)
-            force_killed.append(int(pid))
+            pid_int = int(pid)
+            terminate_pid(
+                pid_int,
+                force=True,
+                expected_start_time=get_process_start_time(pid_int),
+            )
+            force_killed.append(pid_int)
         except (ProcessLookupError, PermissionError, OSError):
             pass
 
@@ -5730,6 +6965,263 @@ def _surviving_gateway_pids_after_failed_restart():
         logger.debug("Could not probe for surviving gateways after update: %s", exc)
         return None
 
+
+_FRESH_RESTART_SUPERVISORS = frozenset({"systemd", "launchd", "service", "s6"})
+
+
+def _gateway_service_matches_profile(profile: str, service: object) -> bool:
+    """Match an exact gateway service/label to a profile.
+
+    Profile names must not be matched as substrings: ``foo`` must not claim
+    that ``hermes-gateway-foobar.service`` was already restarted.  These are
+    the service/label shapes produced by the existing systemd, launchd, and
+    s6 lifecycle implementations.
+    """
+    name = str(service).removesuffix(".service")
+    if profile == "default":
+        return name in {
+            "hermes-gateway",
+            "ai.hermes.gateway",
+            "gateway",
+            "gateway-default",
+        }
+    return name in {
+        f"hermes-gateway-{profile}",
+        f"ai.hermes.gateway-{profile}",
+        f"gateway-{profile}",
+    }
+
+
+def _gateway_recovery_partition(
+    plan, *, skip_profiles: set[str] | None = None
+) -> tuple[dict[str, str], list[dict]]:
+    """Partition pre-update runtimes into fresh-restart candidates and skips.
+
+    The update inventory is captured before the checkout changes.  It is the
+    only safe source here: re-importing ``hermes_cli.gateway`` in the failing
+    interpreter is exactly what can raise the original ``ImportError``.
+
+    Returns ``(candidates, skipped)`` where ``candidates`` maps profile →
+    supervisor for supervised gateway runtimes the fresh process may restart,
+    and ``skipped`` lists every other inventoried runtime the recovery pass
+    deliberately does NOT touch, each with an explicit reason.  Nothing from
+    the spawn ledger may vanish from the recovery pass silently: manual
+    gateways have no relaunch authority, and serve/dashboard runtimes (the
+    ``update_inventory`` serve collector) are owned by the Desktop app or a
+    human terminal, not by this recovery boundary.
+    """
+    skip_profiles = skip_profiles or set()
+    candidates: dict[str, str] = {}
+    skipped: list[dict] = []
+    try:
+        for runtime in getattr(plan, "runtimes", ()) or ():
+            kind = getattr(runtime, "kind", None)
+            profile = getattr(runtime, "profile", None)
+            supervisor = getattr(runtime, "supervisor", None)
+            if not isinstance(profile, str) or not profile:
+                continue
+            if kind == "gateway":
+                if profile in skip_profiles:
+                    continue
+                if supervisor in _FRESH_RESTART_SUPERVISORS:
+                    candidates.setdefault(profile, str(supervisor))
+                else:
+                    skipped.append(
+                        {
+                            "profile": profile,
+                            "kind": "gateway",
+                            "supervisor": str(supervisor),
+                            "reason": (
+                                "manual gateway has no supervisor relaunch"
+                                " authority; left running for explicit operator"
+                                " restart"
+                            ),
+                        }
+                    )
+            elif kind in ("serve", "dashboard"):
+                if supervisor == "desktop":
+                    reason = (
+                        "desktop app owns and respawns this serve backend;"
+                        " the recovery pass must not restart it out from under"
+                        " its supervisor"
+                    )
+                else:
+                    reason = (
+                        "manually launched serve/dashboard has no relaunch"
+                        " authority; left running for explicit operator"
+                        " restart"
+                    )
+                skipped.append(
+                    {
+                        "profile": profile,
+                        "kind": str(kind),
+                        "supervisor": str(supervisor),
+                        "reason": reason,
+                    }
+                )
+    except Exception as exc:
+        logger.debug("Could not prepare fresh gateway restart profiles: %s", exc)
+    return candidates, skipped
+
+
+def _gateway_restart_recovery_profiles(
+    plan, *, skip_profiles: set[str] | None = None
+) -> list[str]:
+    """Return supervised gateway profiles that a fresh process may restart."""
+    candidates, _ = _gateway_recovery_partition(plan, skip_profiles=skip_profiles)
+    return sorted(candidates)
+
+
+def _recover_gateway_restart_after_abort(
+    plan, *, gateway_mode: bool, skip_profiles: set[str] | None = None
+) -> dict[str, list]:
+    """Retry supervised gateway restarts from a clean Python process.
+
+    ``hermes update`` normally performs the fleet restart in the interpreter
+    that started before ``git pull``.  If that phase raises while importing the
+    new tree, a warning alone leaves the old gateway alive against new files on
+    disk.  The recovery boundary launches the existing per-profile
+    ``gateway restart`` command through a new interpreter, preserving its
+    platform-specific drain and service-manager logic without inheriting the
+    stale ``sys.modules`` graph.
+
+    Only profiles classified as supervisor-owned by the pre-update inventory
+    are handed off.  A manual gateway must remain running and be reported for
+    explicit operator action rather than being killed without a relaunch
+    authority; serve/dashboard runtimes from the spawn ledger are likewise
+    recorded as skipped with a reason instead of vanishing from the pass.
+    The returned protocol is persisted in the update receipt so operators can
+    distinguish a spawn failure from a per-profile failure.
+
+    Outcome honesty: ``verified`` means the fresh child independently observed
+    the profile's systemd unit active after the relaunch.  A zero exit from
+    ``gateway restart`` alone is NOT observed proof that the new code
+    generation is serving, so those outcomes are reported as
+    ``relaunch_attempted`` and never claim supervisor coverage.
+    """
+    candidates, skipped = _gateway_recovery_partition(
+        plan, skip_profiles=skip_profiles
+    )
+    profiles = sorted(candidates)
+    if not profiles:
+        return {
+            "requested": [],
+            "verified": [],
+            "relaunch_attempted": [],
+            "failed": [],
+            "skipped": skipped,
+        }
+
+    def _all_failed() -> dict[str, list]:
+        return {
+            "requested": profiles,
+            "verified": [],
+            "relaunch_attempted": [],
+            "failed": profiles,
+            "skipped": skipped,
+        }
+
+    command = [
+        sys.executable,
+        "-m",
+        "hermes_cli.update_restart_recovery",
+        "--stdin",
+    ]
+    env = os.environ.copy()
+    env["HERMES_UPDATE_RESTART_RECOVERY"] = "1"
+    for marker in ("_HERMES_GATEWAY", "HERMES_GATEWAY", "HERMES_GATEWAY_MODE"):
+        env.pop(marker, None)
+
+    # A gateway-triggered update may run inside the gateway's systemd cgroup.
+    # Put the recovery process in a transient user scope before it asks systemd
+    # to restart that gateway, otherwise KillMode can terminate the recovery
+    # process together with the old service. If systemd-run is unavailable,
+    # fail closed rather than pretending the in-cgroup child is independent.
+    if gateway_mode and sys.platform == "linux":
+        systemd_run = shutil.which("systemd-run")
+        if not systemd_run:
+            logger.warning("Cannot isolate fresh gateway recovery from the gateway cgroup")
+            return _all_failed()
+        command = [
+            systemd_run,
+            "--user",
+            "--scope",
+            "--quiet",
+            "--collect",
+            "--",
+            *command,
+        ]
+
+    kwargs = {
+        "input": json.dumps({"profiles": profiles, "supervisors": candidates}),
+        "capture_output": True,
+        "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
+        "check": False,
+        "env": env,
+        "timeout": max(120, 30 + 90 * len(profiles)),
+    }
+    if sys.platform == "win32":
+        kwargs["creationflags"] = (
+            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            | getattr(subprocess, "DETACHED_PROCESS", 0)
+        )
+    else:
+        kwargs["start_new_session"] = True
+
+    try:
+        result = subprocess.run(command, **kwargs)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.warning("Fresh gateway restart recovery failed: %s", exc)
+        return _all_failed()
+
+    if result.returncode != 0:
+        logger.warning("Fresh gateway restart recovery exited %s", result.returncode)
+        return _all_failed()
+
+    try:
+        recovery_result = json.loads(result.stdout or "")
+        verified = recovery_result.get("verified")
+        relaunch_attempted = recovery_result.get("relaunch_attempted")
+        failed = recovery_result.get("failed")
+    except (AttributeError, TypeError, ValueError):
+        logger.warning("Fresh gateway restart recovery returned invalid JSON")
+        return _all_failed()
+
+    buckets = (verified, relaunch_attempted, failed)
+    reported: list[str] = []
+    if all(isinstance(bucket, list) for bucket in buckets):
+        reported = [*verified, *relaunch_attempted, *failed]
+    if (
+        not all(isinstance(bucket, list) for bucket in buckets)
+        or any(not isinstance(profile, str) for profile in reported)
+        or set(reported) != set(profiles)
+        or len(reported) != len(set(reported))
+    ):
+        logger.warning("Fresh gateway restart recovery returned incomplete profiles")
+        return _all_failed()
+
+    if verified:
+        print(
+            "  ✓ Restarted supervised gateway(s) in a fresh process"
+            " (systemd-verified active): " + ", ".join(sorted(verified))
+        )
+    if relaunch_attempted:
+        print(
+            "  ⚠ Relaunch attempted in a fresh process but not"
+            " supervisor-verified (check these gateways manually): "
+            + ", ".join(sorted(relaunch_attempted))
+        )
+    return {
+        "requested": profiles,
+        "verified": sorted(verified),
+        "relaunch_attempted": sorted(relaunch_attempted),
+        "failed": sorted(failed),
+        "skipped": skipped,
+    }
+
+
 def _warn_gateway_restart_phase_aborted(exc: BaseException, pids) -> None:
     """Print a recovery warning when the whole restart phase raised.
 
@@ -5860,7 +7352,7 @@ def _refresh_bootstrap_cache_scripts(branch: str = "main") -> None:
     except Exception as exc:
         logger.debug("Could not refresh bootstrap-cache scripts after update: %s", exc)
 
-def _resume_windows_gateways_after_update(token: dict | None) -> None:
+def _resume_windows_gateways_after_update_impl(token: dict | None) -> None:
     """Restart Windows profile gateways previously paused for update."""
     if not token or not token.get("resume_needed"):
         return
@@ -5998,6 +7490,128 @@ def _resume_windows_gateways_after_update(token: dict | None) -> None:
         print(
             f"  ✓ Restarting {unmapped_relaunched} unmapped Windows gateway process(es)"
         )
+
+
+def _resume_windows_gateways_after_update(token: dict | None) -> None:
+    """Restore the official Windows fleet, then return outer supervision."""
+    from hermes_cli.watchdog_maintenance import RECOVERY
+
+    _transition_watchdog_update_maintenance(
+        RECOVERY,
+        reason="Official updater is restoring Windows gateway ownership",
+    )
+    _resume_windows_gateways_after_update_impl(token)
+    _finish_watchdog_update_maintenance(
+        reason="Official updater completed Windows recovery",
+    )
+
+def _git_is_trampoline(git_cmd: list) -> bool:
+    """Whether *git_cmd* resolves to a Git-for-Windows trampoline launcher.
+
+    Git for Windows ships two ~46KB shims (``bin\\git.exe``, ``cmd\\git.exe``)
+    that re-exec the real ``mingw64\\libexec\\git-core\\git.exe``. When the
+    shim's re-exec target is missing or PATH resolves to the shim in a
+    context where it cannot find git-core, every git call dies with the
+    launcher's own guard message instead of running — a broken PATH entry,
+    not a network or filesystem problem (#87876). Never raises; unknown
+    states report False so a probe failure can't block an update.
+    """
+    try:
+        result = subprocess.run(
+            git_cmd + ["--version"],
+            capture_output=True,
+            text=True, encoding="utf-8", errors="replace",
+            timeout=15,
+        )
+    except Exception:
+        return False
+    output = ((result.stdout or "") + (result.stderr or "")).lower()
+    return "fork bomb" in output
+
+
+def _portable_git_candidates() -> list:
+    """PortableGit candidate paths: shared root first, then profile home.
+
+    The Hermes-managed PortableGit tree lives under the SHARED root
+    (``<root>/git/...``), not the profile-scoped HERMES_HOME
+    (``<root>/profiles/<name>``), so a profile-scoped ``hermes update`` must
+    look there (monerostar review, #87876). The profile-home candidate is
+    kept as a fallback for custom layouts that place it there.
+    """
+    candidates = []
+    try:
+        for root in (get_default_hermes_root(), Path(get_hermes_home())):
+            candidates.append(
+                root / "git" / "mingw64" / "libexec" / "git-core" / "git.exe"
+            )
+    except Exception:
+        pass
+    return candidates
+
+
+def _locate_real_git() -> Optional[Path]:
+    """Find a real Git-for-Windows binary that is not a broken trampoline.
+
+    The trampoline symptom is PATH-level: ``bin\\git.exe`` / ``cmd\\git.exe``
+    (both ~46KB shims) fail to re-exec git-core, while the real binary at
+    ``mingw64\\libexec\\git-core\\git.exe`` (≈4.4MB) works when invoked
+    directly (#87876). Check the standard Git for Windows locations plus the
+    Hermes-managed PortableGit copy; accept the first candidate that runs and
+    does NOT print the trampoline guard. Returns None when nothing suitable
+    is found — callers then keep the broken command and let the existing
+    fetch-failure ZIP fallback handle it.
+    """
+    candidates = [
+        Path(r"C:\Program Files\Git\mingw64\libexec\git-core\git.exe"),
+        Path(r"C:\Program Files (x86)\Git\mingw64\libexec\git-core\git.exe"),
+    ] + _portable_git_candidates()
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        try:
+            result = subprocess.run(
+                [str(candidate), "--version"],
+                capture_output=True,
+                text=True, encoding="utf-8", errors="replace",
+                timeout=15,
+            )
+        except Exception:
+            continue
+        output = ((result.stdout or "") + (result.stderr or "")).lower()
+        if "fork bomb" in output:
+            continue
+        return candidate
+    return None
+
+
+def _ensure_non_trampoline_git(git_cmd: list) -> list:
+    """Swap a broken Git-for-Windows trampoline for a real git binary.
+
+    Runs up front, right after the git command is built. When the resolved
+    ``git`` is a broken trampoline, locate the real binary and rebuild the
+    command with it so fetch/pull/checkout keep working with a real git
+    instead of degrading to the ZIP fallback. When no real binary can be
+    found, leave the command untouched — the existing fetch-failure handler
+    already falls back to the ZIP path on Windows. No-op off Windows (the
+    trampoline is a Git-for-Windows artifact) and when git is healthy.
+    """
+    if sys.platform != "win32":
+        return git_cmd
+    if not _git_is_trampoline(git_cmd):
+        return git_cmd
+    real_git = _locate_real_git()
+    if real_git is None:
+        print(
+            "⚠ Detected a broken git trampoline and could not locate a real "
+            "git binary — the update will fall back to the ZIP path."
+        )
+        return git_cmd
+    print(
+        f"⚠ Detected a broken git trampoline; switching to real git at "
+        f"{real_git}"
+    )
+    return [str(real_git)] + list(git_cmd[1:])
+
 
 def _discard_lockfile_churn(git_cmd, repo_root):
     """Restore tracked ``package-lock.json`` files that npm dirtied locally.
@@ -6237,6 +7851,121 @@ def _rebuild_desktop_after_update(
     return True
 
 
+def _path_uid(path) -> Optional[int]:
+    """Owner uid of ``path`` via ``os.stat`` — ``None`` when unreadable.
+
+    Separate seam so tests can simulate root-owned files without chown
+    (which needs root). Never raises.
+    """
+    try:
+        return os.stat(path, follow_symlinks=False).st_uid
+    except OSError:
+        return None
+
+
+def _venv_foreign_owned_paths(venv_root, limit: int = 5) -> list:
+    """Bounded scan for venv entries not owned by the current user (#83529).
+
+    A venv that was ever touched by ``sudo pip`` / ``sudo hermes`` contains
+    root-owned files (classically ``*.dist-info/INSTALLER``). A later normal
+    ``hermes update`` then dies mid-mutation inside ``uv pip install -e .``
+    ("Permission denied (os error 13)") with ``venv/bin/hermes`` already
+    deleted — the CLI is bricked. Same philosophy as the contended-venv gate
+    (#87331): a venv we cannot safely mutate is never mutated at all.
+
+    Checks a deliberately BOUNDED set (no full recursion — must never be
+    slow): the venv root, each direct entry of ``venv/bin``, the top-level
+    entries of the first ``lib/python*/site-packages`` found, and the direct
+    children of each ``*.dist-info`` there. Caps stat calls at ~2000 and
+    returned paths at ``limit``. POSIX-only: returns ``[]`` on Windows
+    (no ``os.geteuid``) and when running as root. Swallows every per-entry
+    ``OSError`` and returns ``[]`` on any structural surprise — this helper
+    must NEVER raise and must never add noticeable latency to update.
+
+    Returns a list of ``(path_str, uid)`` tuples, at most ``limit`` long.
+    """
+    try:
+        if not hasattr(os, "geteuid"):
+            return []  # windows-footgun: ok — POSIX ownership concept only
+        euid = os.geteuid()  # windows-footgun: ok — guarded by hasattr above
+        if euid == 0:
+            return []  # root can rewrite anything; nothing to refuse
+
+        venv_root = Path(venv_root)
+        budget = 2000  # max stat() calls — hard bound on preflight cost
+        foreign: list = []
+
+        def _check(p) -> bool:
+            """stat one path; True while scan should continue."""
+            nonlocal budget
+            if budget <= 0 or len(foreign) >= limit:
+                return False
+            budget -= 1
+            uid = _path_uid(p)
+            if uid is not None and uid != euid:
+                foreign.append((str(p), uid))
+            return budget > 0 and len(foreign) < limit
+
+        def _scan_dir(d, recurse_dist_info: bool = False) -> None:
+            try:
+                entries = list(os.scandir(d))
+            except OSError:
+                return
+            for entry in entries:
+                if not _check(entry.path):
+                    return
+                if recurse_dist_info and entry.name.endswith(".dist-info"):
+                    try:
+                        children = list(os.scandir(entry.path))
+                    except OSError:
+                        continue
+                    for child in children:
+                        if not _check(child.path):
+                            return
+
+        if not _check(venv_root):
+            return foreign[:limit]
+        _scan_dir(venv_root / "bin")
+
+        # First lib/python*/site-packages (POSIX venv layout).
+        site_packages = next(
+            iter(sorted(venv_root.glob("lib/python*/site-packages"))), None
+        )
+        if site_packages is not None:
+            _scan_dir(site_packages, recurse_dist_info=True)
+
+        return foreign[:limit]
+    except Exception:
+        # Preflight is advisory: any structural surprise means "no verdict",
+        # never a crashed or blocked update.
+        return []
+
+
+def _refuse_update_if_venv_foreign_owned(project_root) -> None:
+    """Refuse-before-mutate ownership gate for the dependency install (#83529).
+
+    Runs after the code pull (pulling code is safe) and immediately before
+    the first venv mutation. If the venv contains files owned by another
+    uid, the ``uv pip install -e .`` below would die mid-mutation and brick
+    the install — so refuse up front, with the exact recovery command,
+    while the venv is still fully intact. No subprocess calls here: update
+    tests mock ``subprocess.run`` with sequenced side effects.
+    """
+    foreign = _venv_foreign_owned_paths(Path(project_root) / "venv")
+    if not foreign:
+        return
+    print("\n✗ Update stopped: this install's venv contains files owned by another user.")
+    print("  Updating now would fail midway (Permission denied) and leave Hermes broken.")
+    print("  This usually happens after running hermes or pip with sudo. Offending paths:")
+    for p, uid in foreign:
+        print(f"    - {p} (owner uid {uid})")
+    print("\n  Fix ownership, then re-run the update:")
+    print(f"    sudo chown -R $(id -un): {project_root}")
+    print("    hermes update")
+    print("\n  Nothing in the venv was modified.")
+    sys.exit(1)
+
+
 def _cmd_update_impl(args, gateway_mode: bool):
     """Body of ``cmd_update`` — kept separate so the wrapper can always
     restore stdio even on ``sys.exit``."""
@@ -6374,7 +8103,22 @@ def _cmd_update_impl(args, gateway_mode: bool):
     except Exception:
         pass
 
-    _windows_gateway_resume = _m()._pause_windows_gateways_for_update()
+    from hermes_cli.watchdog_maintenance import UPDATE, UPSTREAM_DRAIN
+
+    _begin_watchdog_update_maintenance()
+    try:
+        _transition_watchdog_update_maintenance(
+            UPSTREAM_DRAIN,
+            reason="Official updater is draining every Windows gateway",
+        )
+        _windows_gateway_resume = _m()._pause_windows_gateways_for_update()
+        _transition_watchdog_update_maintenance(
+            UPDATE,
+            reason="Official updater owns the Windows update transaction",
+        )
+    except BaseException:
+        _release_watchdog_update_maintenance_at_exit()
+        raise
     if _windows_gateway_resume:
         import atexit as _atexit
 
@@ -6398,13 +8142,20 @@ def _cmd_update_impl(args, gateway_mode: bool):
         if _venv_holders:
             _gateway_holders = _m()._leftover_pausable_gateway_pids(_venv_holders)
             if _gateway_holders is not None:
+                if _refuse_gateway_ancestor_tree_kill(
+                    _gateway_holders, gateway_mode=gateway_mode
+                ):
+                    _m()._resume_windows_gateways_after_update(
+                        _windows_gateway_resume
+                    )
+                    sys.exit(2)
                 # Every remaining holder is a gateway the pause machinery
                 # already owns — respawned by its supervisor inside the
                 # pause→guard window, or up through a spawn path discovery
                 # does not map. Stop them and re-check instead of
                 # dead-ending; the post-update resume (and the supervisor
                 # that respawned them) brings gateways back afterwards.
-                from gateway.status import terminate_pid
+                from gateway.status import get_process_start_time, terminate_pid
 
                 print(
                     f"  ⚠ {len(_gateway_holders)} gateway process(es) still "
@@ -6412,7 +8163,12 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 )
                 for _pid in _gateway_holders:
                     try:
-                        terminate_pid(int(_pid), force=True)
+                        pid_int = int(_pid)
+                        terminate_pid(
+                            pid_int,
+                            force=True,
+                            expected_start_time=get_process_start_time(pid_int),
+                        )
                     except Exception as exc:
                         logger.debug(
                             "Could not stop leftover gateway %s: %s", _pid, exc
@@ -6452,6 +8208,49 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     "process(es) still hold the venv; stopping their trees"
                 )
                 _m()._stop_process_trees(_orphan_backends)
+                _time.sleep(1.0)
+                _venv_holders = _m()._detect_venv_python_processes()
+        if _venv_holders:
+            # Manual serve/dashboard rung (#63206): a network-bound
+            # `hermes serve --host <ip>` powering a REMOTE Desktop holds the
+            # venv and used to dead-end the update with exit 2 — the user's
+            # only option was killing the backend by hand, and nothing ever
+            # brought it back (the remote client's endpoint stayed dead).
+            # Positive ledger identity only: self-registered serve/dashboard
+            # whose recorded spawner is not alive (Desktop-owned backends
+            # keep the refusal — the app respawns what we kill). Stop them,
+            # and register an idempotent atexit relaunch built from the
+            # ledger's structured host/port/profile so the endpoint comes
+            # back on the SAME bind after the update — success or failure.
+            _serve_entries = _m()._ledger_manual_serve_holders(_venv_holders)
+            if _serve_entries:
+                print(
+                    f"  ⚠ {len(_serve_entries)} manual serve/dashboard "
+                    "backend(s) hold the venv; stopping them for the update "
+                    "(they will be relaunched on their recorded endpoints)"
+                )
+                _m()._stop_process_trees(
+                    [int(e["pid"]) for e in _serve_entries]
+                )
+                _serve_resume_token = {
+                    "pending": True,
+                    "entries": _serve_entries,
+                }
+                try:
+                    from hermes_cli.update_receipt import record_step
+
+                    record_step(
+                        "serve_pause",
+                        True,
+                        f"stopped={len(_serve_entries)}",
+                    )
+                except Exception:
+                    pass
+                import atexit as _serve_atexit
+
+                _serve_atexit.register(
+                    _m()._relaunch_stopped_serves, _serve_resume_token
+                )
                 _time.sleep(1.0)
                 _venv_holders = _m()._detect_venv_python_processes()
         if _venv_holders:
@@ -6549,6 +8348,11 @@ def _cmd_update_impl(args, gateway_mode: bool):
     git_cmd = ["git"]
     if sys.platform == "win32":
         git_cmd = ["git", "-c", "windows.appendAtomically=false"]
+    # A broken Git-for-Windows trampoline refuses every git call with a
+    # "BUG (fork bomb)" guard instead of running; swap in a real binary up
+    # front so the normal git path survives instead of degrading to ZIP
+    # (#87876).
+    git_cmd = _ensure_non_trampoline_git(git_cmd)
 
     # Discard npm lockfile churn before any stash/branch logic. npm rewrites
     # tracked package-lock.json files non-deterministically at install/build
@@ -6599,11 +8403,14 @@ def _cmd_update_impl(args, gateway_mode: bool):
         # crashed fetch) before the fetch — otherwise the update fails with
         # "Unable to create .../shallow.lock: File exists" and never reaches
         # the network.
-        from hermes_cli.gitlock import clear_stale_git_locks
+        from hermes_cli.gitlock import clear_stale_git_locks, clear_stale_tmp_packs
 
         cleared = clear_stale_git_locks(_m().PROJECT_ROOT)
         if cleared:
             print("  (removed stale git lock(s): %s)" % ", ".join(cleared))
+        swept = clear_stale_tmp_packs(_m().PROJECT_ROOT)
+        if swept:
+            print("  (removed %d aborted-fetch pack temp file(s))" % len(swept))
 
         print("→ Fetching updates...")
         fetch_result = subprocess.run(
@@ -6822,9 +8629,17 @@ def _cmd_update_impl(args, gateway_mode: bool):
         # commit_count == 0 branch, which returns immediately after: an update
         # that pulled hundreds of upstream commits printed "Already up to
         # date!" and verified nothing).
+        # Non-fork checkouts have no upstream question: origin IS the official
+        # repo, so "Already up to date!" is fully verified there.
+        upstream_checked = True
         if commit_count == 0 and is_fork and branch == "main":
             pre_sync_sha = _capture_head_sha(git_cmd, _m().PROJECT_ROOT)
-            _m()._sync_with_upstream_if_needed(git_cmd, _m().PROJECT_ROOT)
+            upstream_checked = _m()._sync_with_upstream_if_needed(
+                git_cmd,
+                _m().PROJECT_ROOT,
+                assume_yes=assume_yes,
+                input_fn=gw_input_fn,
+            )
             post_sync_sha = _capture_head_sha(git_cmd, _m().PROJECT_ROOT)
             if pre_sync_sha and post_sync_sha and pre_sync_sha != post_sync_sha:
                 synced_count = _count_commits_between(
@@ -6903,6 +8718,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
             # "Already up to date!" and exits without doing the one job it
             # was spawned for.
             handed_off_sync = os.environ.get(_m()._UPDATE_REEXEC_ENV) == "1"
+            current_checkout_complete = True
             if handed_off_sync:
                 print("→ Finishing the dependency install handed off by hermes.exe...")
             elif not healthy:
@@ -6968,12 +8784,30 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 healthy_after, detail_after = _venv_core_imports_healthy()
                 if healthy_after:
                     print("✓ Dependencies repaired!")
-                    _print_update_completion("✓ Update complete!")
+                    _check_and_apply_config_migration(
+                        assume_yes=assume_yes,
+                        gateway_mode=gateway_mode,
+                        pre_update_snapshot_id=pre_update_snapshot_id,
+                    )
+                    current_checkout_complete = _print_verified_update_completion(
+                        "✓ Update complete!"
+                    )
                 else:
+                    current_checkout_complete = False
                     print(f"⚠ Venv still unhealthy after repair: {detail_after}")
                     print("  Close all Hermes windows/gateways and re-run: hermes update")
             else:
-                _repair_node_deps_on_current_checkout(_print_update_completion)
+                current_checkout_complete = _repair_node_deps_on_current_checkout(
+                    _print_verified_update_completion,
+                    assume_yes=assume_yes,
+                    gateway_mode=gateway_mode,
+                    pre_update_snapshot_id=pre_update_snapshot_id,
+                    completion_message=(
+                        "✓ Already up to date!"
+                        if upstream_checked
+                        else "✓ Up to date with your fork (official repo not checked)."
+                    ),
+                )
             if runtime_repaired is not None and not _m()._is_windows():
                 print()
                 print(
@@ -6985,6 +8819,27 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 )
                 print("  Restart each of them to pick up the repaired runtime.")
             _m()._resume_windows_gateways_after_update(_windows_gateway_resume)
+            # Git is current, but a prior pull may still owe the fleet a
+            # restart (#95294). Catch up even on the "Already up to date"
+            # path — that early return is what left the gateway on stale
+            # code for two days. Runs BEFORE the runtime-verification exit
+            # gate below: a vulnerable SQLite runtime demotes the outcome to
+            # partial, but must not strand the fleet on stale code (#91277
+            # fleet contract — the pending-restart check always executes).
+            _apply_pending_fleet_restart_catchup()
+            if not current_checkout_complete:
+                if gateway_mode:
+                    _write_gateway_update_exit_code(False)
+                try:
+                    from hermes_cli.update_receipt import finalize_update_receipt
+
+                    finalize_update_receipt("partial")
+                except Exception as _receipt_exc:
+                    logger.debug(
+                        "Update receipt finalize (current checkout) failed: %s",
+                        _receipt_exc,
+                    )
+                sys.exit(1)
             return
 
         if commit_count > 0:
@@ -7225,6 +9080,13 @@ def _cmd_update_impl(args, gateway_mode: bool):
             _m()._resume_windows_gateways_after_update(_windows_gateway_resume)
             sys.exit(1)
 
+        # #95294: HEAD advanced; running gateways still serve pre-pull
+        # modules until the restart phase below. Any interrupt between here
+        # and a completed (or no-op) restart leaves this marker so the next
+        # ``hermes update`` can catch up even when git is already up to date.
+        # Distinct from ``.update-incomplete`` (venv/install repair).
+        _write_fleet_restart_pending_marker(expected_sha=post_pull_sha or "")
+
         # Clear stale .pyc bytecode cache — prevents ImportError on gateway
         # restart when updated source references names that didn't exist in
         # the old bytecode (e.g. get_hermes_home added to hermes_constants).
@@ -7238,11 +9100,21 @@ def _cmd_update_impl(args, gateway_mode: bool):
 
         # Fork upstream sync logic (only for main branch on forks)
         if is_fork and branch == "main":
-            _m()._sync_with_upstream_if_needed(git_cmd, _m().PROJECT_ROOT)
+            _m()._sync_with_upstream_if_needed(
+                git_cmd,
+                _m().PROJECT_ROOT,
+                assume_yes=assume_yes,
+                input_fn=gw_input_fn,
+            )
 
         # Reinstall Python dependencies. Prefer .[all], but if one optional extra
         # breaks on this machine, keep base deps and reinstall the remaining extras
         # individually so update does not silently strip working capabilities.
+        #
+        # Ownership preflight (#83529): refuse before the first venv mutation
+        # if the venv contains foreign-owned files (sudo-pip residue) — the
+        # install below would die mid-mutation and brick the CLI.
+        _refuse_update_if_venv_foreign_owned(_m().PROJECT_ROOT)
         #
         # Self-lock deferral (relocated preflight — #86735): if THIS process
         # holds a native extension the sync must rewrite, defer NOW — after
@@ -7434,20 +9306,14 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 "fully quit & relaunch once."
             )
 
-        # ── macOS TCC anchor (issue #85345) ────────────────────────────
-        # uv-managed interpreters move on every patch bump, orphaning macOS
-        # TCC grants and re-triggering the permission-prompt storm.  Pin a
-        # real-file copy of the interpreter inside the venv so the TCC client
-        # path stays stable across updates.  Best-effort only; the doctor
-        # check re-applies it if this runs from pre-fix code.
+        # macOS TCC interpreter anchor (#95596): dylib-complete re-land.
+        # Boot-gated — a failed probe leaves the venv untouched.
         try:
             from hermes_cli.macos_tcc_anchor import ensure_tcc_anchor
 
-            tcc_anchored = ensure_tcc_anchor(_m().PROJECT_ROOT)
-            if tcc_anchored is not None:
-                print(f"  ✓ macOS TCC anchor: interpreter pinned at {tcc_anchored}")
-        except Exception as _tcc_exc:
-            logger.debug("macOS TCC anchor refresh failed: %s", _tcc_exc)
+            ensure_tcc_anchor()
+        except Exception:
+            logger.debug("macOS TCC anchor refresh skipped", exc_info=True)
 
         # ── Post-update state.db integrity guard (#68474) ─────────────────
         # Verify that state.db survived the update intact.  If the live file
@@ -7488,15 +9354,9 @@ def _cmd_update_impl(args, gateway_mode: bool):
                             )
                             if _snap_ok.get("valid"):
                                 try:
-                                    import shutil as _shutil
-
-                                    _shutil.copy2(_snap_state, _state_path)
-                                    _restored_ok = verify_sqlite_integrity(
-                                        _state_path,
-                                        check_header=True,
-                                        run_pragma=True,
-                                    )
-                                    if _restored_ok.get("valid"):
+                                    if _restore_state_db_from_snapshot(
+                                        _state_path, _snap_state
+                                    ):
                                         print(
                                             "  ✓ Auto-restored from pre-update "
                                             f"snapshot ({_pre_snap_id})"
@@ -7637,226 +9497,14 @@ def _cmd_update_impl(args, gateway_mode: bool):
         except Exception:
             pass  # honcho plugin not installed or not configured
 
-        # Check for config migrations.
-        #
-        # CRITICAL: check_config_version and migrate_config must use
-        # freshly-reloaded modules, not the sys.modules cache. The
-        # ``hermes update`` process is the PRE-pull Python process — its
-        # ``sys.modules`` cache holds the OLD ``hermes_cli.config`` and
-        # ``hermes_cli.config_migrations`` from before ``git pull`` updated
-        # the source files. A function-level ``from hermes_cli.config import
-        # check_config_version`` returns the cached module, so
-        # ``DEFAULT_CONFIG["_config_version"]`` is the OLD value and
-        # ``check_config_version()`` reports ``(33, 33)`` — "up to date" —
-        # even though the freshly-pulled code has v34 with a migration to
-        # run. The personality reset migration (#81946) was silently skipped
-        # this way, leaving ``display.personality: kawaii`` active after
-        # updates that should have reset it.
-        print()
-        print("→ Checking configuration for new options...")
-
-        # Reload config modules BEFORE any config reads so get_missing_*,
-        # check_config_version, and migrate_config all use the updated code.
-        _reload_config_modules()
-
-        from hermes_cli.config import (
-            get_missing_env_vars,
-            get_missing_config_fields,
+        # Check for config migrations (#91360).
+        _check_and_apply_config_migration(
+            assume_yes=assume_yes,
+            gateway_mode=gateway_mode,
+            pre_update_snapshot_id=pre_update_snapshot_id,
         )
 
-        missing_env = get_missing_env_vars(required_only=True)
-        missing_config = get_missing_config_fields()
-        current_ver, latest_ver = _run_config_check_fresh()
-
-        has_new_options = bool(missing_env or missing_config)
-        version_bump_only = (
-            not has_new_options and current_ver < latest_ver
-        )
-        needs_migration = has_new_options or current_ver < latest_ver
-
-        if version_bump_only:
-            # Nothing for the user to fill in — only the config format version
-            # changed (new defaults already merge in transparently). Asking
-            # "configure new options now?" here is misleading: saying yes just
-            # bumps the version and looks like a no-op (issue: ScottFive /
-            # Tt2021). Apply it silently and say what actually happened.
-            print()
-            print(
-                f"  ℹ Updating config format (v{current_ver} → v{latest_ver})…"
-            )
-            try:
-                _mig_results = _run_migrate_config_fresh(
-                    interactive=False, quiet=True
-                )
-                print("  ✓ Config format updated (no new settings to configure)")
-                # quiet=True also mutes migration steps that RESET or REMOVE an
-                # existing setting (e.g. the v33→v34 personality reset from
-                # #81946, which records its note only in the results dict).
-                # Re-surface those notes so an unattended update never silently
-                # changes user configuration (#86656). In this branch
-                # missing_config is empty, so config_added can only contain
-                # migration-step mutations, not missing-key listings.
-                for _note in _mig_results.get("config_added") or []:
-                    print(f"  ℹ {_note}")
-                for _warn in _mig_results.get("warnings") or []:
-                    print(f"  ⚠️  {_warn}")
-            except Exception as _mig_err:
-                print(f"  ⚠️  Config format update failed: {_mig_err}")
-                print("     Run 'hermes config migrate' to retry.")
-        elif needs_migration:
-            print()
-            # Show WHAT changed, not just a count, so the user can make an
-            # informed yes/no decision (previously the prompt named nothing).
-            def _print_items(items, label, key, fallback_key=None):
-                if not items:
-                    return
-                print(f"  {label}:")
-                shown = items[:8]
-                for it in shown:
-                    if isinstance(it, dict):
-                        name = it.get(key) or (fallback_key and it.get(fallback_key)) or "?"
-                        desc = (it.get("description") or "").strip()
-                    else:
-                        # Defensive: some callers/mocks pass bare name strings.
-                        name = str(it)
-                        desc = ""
-                    if desc:
-                        print(f"      • {name} — {desc}")
-                    else:
-                        print(f"      • {name}")
-                extra = len(items) - len(shown)
-                if extra > 0:
-                    print(f"      … and {extra} more")
-
-            if missing_env:
-                print(
-                    f"  ⚠️  {len(missing_env)} new required setting(s) need configuration"
-                )
-                _print_items(missing_env, "New settings", "name")
-            if missing_config:
-                print(f"  ℹ️  {len(missing_config)} new config option(s) available")
-                _print_items(missing_config, "New options", "key")
-
-            print()
-            if assume_yes:
-                print(
-                    "  ℹ --yes: auto-applying config migration (skipping API-key prompts)."
-                )
-                response = "y"
-            elif gateway_mode:
-                response = (
-                    _gateway_prompt(
-                        "Would you like to configure new options now? [Y/n]", "n"
-                    )
-                    .strip()
-                    .lower()
-                )
-            elif not (sys.stdin.isatty() and sys.stdout.isatty()):
-                print("  ℹ Non-interactive session — applying safe config migrations.")
-                response = "auto"
-            else:
-                try:
-                    response = (
-                        input("Would you like to configure them now? [Y/n]: ")
-                        .strip()
-                        .lower()
-                    )
-                except EOFError:
-                    response = "n"
-                except UnicodeDecodeError:
-                    # input() can raise this when the terminal encoding can't
-                    # decode the byte sequence (e.g. a non-UTF-8 locale, or an
-                    # embedded terminal). Without this, the exception escapes
-                    # here and crashes the update at this prompt.
-                    print(
-                        "  ⚠ Could not read input (encoding issue). Skipping. "
-                        "Run 'hermes config migrate' manually to configure."
-                    )
-                    response = "n"
-
-            if response in {"", "y", "yes", "auto"}:
-                print()
-                # Gateway mode, --yes, and non-interactive update contexts
-                # (dashboard / web server actions) cannot prompt for API keys.
-                # Still run the non-interactive migration pass before restarting
-                # so new default config fields and version bumps are written
-                # before the freshly updated gateway validates config at startup.
-                interactive_migration = not (
-                    gateway_mode or assume_yes or response == "auto"
-                )
-                results = _run_migrate_config_fresh(interactive=interactive_migration, quiet=False)
-
-                if results["env_added"] or results["config_added"]:
-                    print()
-                    print("✓ Configuration updated!")
-                if (gateway_mode or assume_yes or response == "auto") and missing_env:
-                    print("  ℹ API keys require manual entry: hermes config migrate")
-            else:
-                print()
-                print("Skipped. Run 'hermes config migrate' later to configure.")
-        else:
-            print("  ✓ Configuration is up to date")
-
-        # Fleet-wide config migration (#91277 Phase 2; #20438 earliest report,
-        # #54926, #79048): the shared checkout serves EVERY profile, but the
-        # migration above only touched the active profile's config.yaml.
-        # Sibling profiles kept their old _config_version and silently
-        # drifted (field repro: sibling gateway restarted onto new code but
-        # stayed at config v33 vs v37). Run the same NON-INTERACTIVE safe
-        # migration for every sibling profile home, scoped via the
-        # context-local HERMES_HOME override (never os.environ — other
-        # threads must not see it).
-        try:
-            _migrated_siblings = _migrate_sibling_profile_configs()
-            for _name, _from_ver, _to_ver in _migrated_siblings:
-                print(
-                    f"  ✓ Profile '{_name}': config format updated "
-                    f"(v{_from_ver} → v{_to_ver})"
-                )
-        except Exception as exc:
-            logger.debug("Sibling config migration failed: %s", exc)
-
-        # Safety net: config-version migrations have been observed to leave
-        # cron/jobs.json valid-but-empty, silently dropping every scheduled
-        # job (issue #34600). The desktop scheduler can also overwrite with
-        # its own small set, causing partial loss (issue #52144). If the
-        # live file now has fewer jobs than the pre-update snapshot, restore
-        # it and warn loudly.
-        try:
-            from hermes_cli.backup import restore_cron_jobs_if_emptied
-
-            cron_restore = restore_cron_jobs_if_emptied(pre_update_snapshot_id)
-            if cron_restore:
-                print()
-                print(
-                    "  ⚠️  cron/jobs.json lost jobs during this update — "
-                    f"restored {cron_restore['job_count']} job(s) from "
-                    f"pre-update snapshot {cron_restore['snapshot_id']}."
-                )
-        except Exception as exc:
-            # Never let the cron safety net break an otherwise-good update.
-            logger.debug("Cron jobs auto-restore check failed: %s", exc)
-
-        # #66140: run the same cron-jobs safety net for every sibling
-        # profile against ITS OWN pre-update snapshot (same-generation by
-        # construction — both taken by this run).
-        try:
-            from hermes_cli.backup import restore_cron_jobs_all_profiles
-
-            for _restored in restore_cron_jobs_all_profiles(
-                _LAST_SIBLING_SNAPSHOTS
-            ):
-                print()
-                print(
-                    f"  ⚠️  Profile '{_restored['profile']}': cron/jobs.json "
-                    f"lost jobs during this update — restored "
-                    f"{_restored['job_count']} job(s) from pre-update "
-                    f"snapshot {_restored['snapshot_id']}."
-                )
-        except Exception as exc:
-            logger.debug("Sibling cron auto-restore check failed: %s", exc)
-
-        _print_update_summary(
+        update_complete = _print_update_summary(
             node_failures=node_failures,
             desktop_build_ok=desktop_build_ok,
             pre_update_version=pre_update_version,
@@ -7987,11 +9635,11 @@ def _cmd_update_impl(args, gateway_mode: bool):
         #
         # Writing the marker here — after git pull + pip install succeed but
         # before we attempt the restart — ensures the new gateway sees it
-        # regardless of how we die. Gated on desktop_build_ok (#88251): a
-        # Desktop rebuild failure must not be reported as "0" — the gateway's
-        # /update watcher (gateway/run.py) polls this file.
+        # regardless of how we die. The verified summary includes Desktop and
+        # SQLite-runtime health, so neither failure is reported as "0" to the
+        # gateway watcher (gateway/run.py).
         if gateway_mode:
-            _write_gateway_update_exit_code(desktop_build_ok)
+            _write_gateway_update_exit_code(update_complete)
 
         gateway_fleet_restart_incomplete = False
         gateway_restart_phase_errors: list[str] = []
@@ -8008,6 +9656,13 @@ def _cmd_update_impl(args, gateway_mode: bool):
         # needed to forward already-restarted units to
         # ``_finish_dashboard_update_cleanup`` (review on #83595).
         restarted_services: list = []
+        # Keep these restart bookkeeping collections defined even when the
+        # phase raises before its platform-specific imports initialize them.
+        # The abort recovery and the fleet reconciliation both consume the
+        # pre-update plan in that early-failure shape.
+        failed_or_stale_units: list = []
+        relaunched_profiles: list = []
+        externally_supervised_profiles: list = []
         # Same outside-the-try treatment: the post-restart fleet version
         # check consults killed_pids to decide whether to wait for
         # freshly-restarted gateways to settle, and the phase's except
@@ -8748,14 +10403,21 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     print(
                         f"  ⚠ {len(_stuck)} gateway process(es) ignored SIGTERM — force-killing"
                     )
-                    from gateway.status import terminate_pid as _terminate_pid
+                    from gateway.status import (
+                        get_process_start_time as _get_process_start_time,
+                        terminate_pid as _terminate_pid,
+                    )
                     for pid in _stuck:
                         try:
                             # Routes through taskkill /T /F on Windows,
                             # SIGKILL on POSIX — _signal.SIGKILL doesn't
                             # exist on Windows so the old raw os.kill call
                             # used to crash the entire update path.
-                            _terminate_pid(pid, force=True)
+                            _terminate_pid(
+                                pid,
+                                force=True,
+                                expected_start_time=_get_process_start_time(pid),
+                            )
                         except (ProcessLookupError, PermissionError, OSError):
                             pass
                     # Give the OS a beat to reap the processes so the
@@ -8778,7 +10440,57 @@ def _cmd_update_impl(args, gateway_mode: bool):
             # its replacement was never verified — the same fail-open contract
             # this fix closes — so we must still fail closed on ``[]``.
             _surviving = _surviving_gateway_pids_after_failed_restart()
-            if _restart_phase_failure_is_incomplete(
+            _already_restarted_profiles = set(relaunched_profiles)
+            _already_restarted_profiles.update(externally_supervised_profiles)
+            for runtime in getattr(_pre_update_plan, "runtimes", ()) or ():
+                if getattr(runtime, "kind", None) != "gateway":
+                    continue
+                profile = getattr(runtime, "profile", None)
+                if not isinstance(profile, str):
+                    continue
+                if any(
+                    _gateway_service_matches_profile(profile, service)
+                    for service in restarted_services
+                ):
+                    _already_restarted_profiles.add(profile)
+            _recovery_result = _recover_gateway_restart_after_abort(
+                _pre_update_plan,
+                gateway_mode=gateway_mode,
+                skip_profiles=_already_restarted_profiles,
+            )
+            # Only systemd-VERIFIED outcomes may claim supervisor coverage.
+            # A relaunch that merely exited 0 ("relaunch_attempted") was never
+            # observed by the code and must not clear the incomplete flag.
+            _recovery_verified = set(_recovery_result.get("verified") or [])
+            if _recovery_verified:
+                relaunched_profiles.extend(
+                    profile
+                    for profile in sorted(_recovery_verified)
+                    if profile not in relaunched_profiles
+                )
+            _planned_gateway_runtimes = [
+                runtime
+                for runtime in getattr(_pre_update_plan, "runtimes", ()) or ()
+                if getattr(runtime, "kind", None) == "gateway"
+                and isinstance(getattr(runtime, "profile", None), str)
+            ]
+            _planned_gateway_profiles = {
+                runtime.profile for runtime in _planned_gateway_runtimes
+            }
+            _covered_gateway_profiles = (
+                _already_restarted_profiles | _recovery_verified
+            )
+            _recovery_complete = bool(_planned_gateway_profiles) and (
+                _planned_gateway_profiles <= _covered_gateway_profiles
+                and not _recovery_result.get("failed")
+                and not _recovery_result.get("relaunch_attempted")
+            )
+            if _recovery_complete:
+                # The fresh child is the recovery terminal result. Leave the
+                # final fleet-version matrix below as the authoritative
+                # read-back before the update is declared successful.
+                gateway_fleet_restart_incomplete = False
+            elif _restart_phase_failure_is_incomplete(
                 _surviving, _pre_restart_gateway_pids
             ):
                 gateway_fleet_restart_incomplete = True
@@ -8794,8 +10506,13 @@ def _cmd_update_impl(args, gateway_mode: bool):
 
                 record_gateway_restart(
                     restarted_services=restarted_services,
+                    relaunched_profiles=relaunched_profiles,
+                    externally_supervised_profiles=externally_supervised_profiles,
+                    killed_pids=sorted(killed_pids),
+                    failed_units=failed_or_stale_units,
                     incomplete=gateway_fleet_restart_incomplete,
                     phase_error=str(e),
+                    fresh_recovery=_recovery_result,
                 )
             except Exception:
                 pass
@@ -9041,7 +10758,11 @@ def _cmd_update_impl(args, gateway_mode: bool):
             from hermes_cli.update_receipt import finalize_update_receipt
 
             _receipt_path = finalize_update_receipt(
-                "partial" if gateway_fleet_restart_incomplete else "success",
+                (
+                    "partial"
+                    if gateway_fleet_restart_incomplete or not update_complete
+                    else "success"
+                ),
                 fleet=_fleet_snapshot,
             )
             if _receipt_path is not None:
@@ -9053,7 +10774,10 @@ def _cmd_update_impl(args, gateway_mode: bool):
             # Code update itself succeeded, but at least one gateway still
             # runs pre-update modules — surface that as a failed update so
             # automation / operators do not treat the fleet as healthy.
+            # Leave ``fleet_restart_pending`` in place so the next
+            # ``hermes update`` still runs the catch-up restart.
             sys.exit(1)
+        _clear_fleet_restart_pending_marker()
 
     except _shim_quarantine_error_type() as e:
         # Fail-closed shim contention (#87331): strict quarantine refused

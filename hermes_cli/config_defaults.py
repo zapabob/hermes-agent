@@ -3132,6 +3132,10 @@ DEFAULT_CONFIG = {
         # the historical serve-all behavior; [] serves only the default.
         "multiplex_profile_allowlist": None,
 
+        # After SIGTERM interrupts an active gateway turn, allow the agent a
+        # short bounded unwind before adapter and database teardown proceeds.
+        "signal_interrupt_grace_timeout": 1,
+
         # Durable delivery-obligation ledger: final agent responses are
         # recorded in state.db around the platform send, and a gateway that
         # died between finalize and platform ACK redelivers the stored

@@ -22,6 +22,8 @@ type WatchdogState struct {
 	UpdatedAt               string      `json:"updatedAt"`
 	WatchdogPID             int         `json:"watchdogPid"`
 	Paused                  bool        `json:"paused"`
+	MaintenanceState        string      `json:"maintenanceState"`
+	MaintenanceOwner        string      `json:"maintenanceOwner,omitempty"`
 	Result                  cycleResult `json:"result"`
 	ConsecutiveBackendFails int         `json:"consecutiveBackendFails"`
 	PackagedExe             string      `json:"packagedExe,omitempty"`
@@ -35,10 +37,13 @@ type Watchdog struct {
 	logger *Logger
 	back   *BackendManager
 
-	mu        sync.RWMutex
-	paused    bool
-	failCount int
-	lastState WatchdogState
+	cycleMu          sync.Mutex
+	mu               sync.RWMutex
+	paused           bool
+	failCount        int
+	maintenanceState string
+	maintenanceOwner string
+	lastState        WatchdogState
 
 	embeddingMu        sync.Mutex
 	embeddingPID       int
@@ -61,7 +66,9 @@ func NewWatchdog(cfg Config, logger *Logger) *Watchdog {
 }
 
 func (w *Watchdog) PrewarmBackend() {
-	if !w.cfg.PrewarmBackend {
+	w.cycleMu.Lock()
+	defer w.cycleMu.Unlock()
+	if !w.cfg.PrewarmBackend || w.maintenanceSuspended() {
 		return
 	}
 	if _, err := w.back.EnsureHealthy(); err != nil {
@@ -98,6 +105,18 @@ func (w *Watchdog) IsPaused() bool {
 	return w.paused
 }
 
+func (w *Watchdog) maintenanceSuspended() bool {
+	state, active, err := maintenanceMode(w.cfg.MaintenancePath, time.Now())
+	if err != nil {
+		w.logger.Infof("watchdog maintenance state: %v", err)
+	}
+	w.mu.Lock()
+	w.maintenanceState = state.State
+	w.maintenanceOwner = state.Owner
+	w.mu.Unlock()
+	return active
+}
+
 func (w *Watchdog) saveState(result cycleResult) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -105,6 +124,8 @@ func (w *Watchdog) saveState(result cycleResult) {
 		UpdatedAt:               time.Now().Format(time.RFC3339),
 		WatchdogPID:             os.Getpid(),
 		Paused:                  w.paused,
+		MaintenanceState:        w.maintenanceState,
+		MaintenanceOwner:        w.maintenanceOwner,
 		Result:                  result,
 		ConsecutiveBackendFails: w.failCount,
 		PackagedExe:             w.cfg.PackagedExe,
@@ -120,8 +141,15 @@ func (w *Watchdog) saveState(result cycleResult) {
 }
 
 func (w *Watchdog) RunCycle() cycleResult {
+	w.cycleMu.Lock()
+	defer w.cycleMu.Unlock()
 	if w.IsPaused() {
 		res := cycleResult{Desktop: "paused", Backend: "paused", Embedding: "paused"}
+		w.saveState(res)
+		return res
+	}
+	if w.maintenanceSuspended() {
+		res := cycleResult{Desktop: "maintenance", Backend: "maintenance", Embedding: "maintenance"}
 		w.saveState(res)
 		return res
 	}

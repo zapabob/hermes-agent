@@ -32,6 +32,7 @@ type Config struct {
 	LogPath                  string
 	LockPath                 string
 	StatePath                string
+	MaintenancePath          string
 	AdminToken               string
 	TsAuthKey                string
 }

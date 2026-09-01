@@ -474,7 +474,7 @@ class TestWaitForGatewayExit:
             return call_num * 2.0  # 2, 4, 6, 8, ...
 
         kills = []
-        def mock_terminate(pid, force=False):
+        def mock_terminate(pid, force=False, **kwargs):
             kills.append((pid, force))
 
         # get_running_pid returns the PID until kill is sent, then None
@@ -494,7 +494,16 @@ class TestWaitForGatewayExit:
         calls = []
 
         monkeypatch.setattr(gateway, "find_gateway_pids", lambda exclude_pids=None, all_profiles=False: [11, 22])
-        monkeypatch.setattr(gateway, "terminate_pid", lambda pid, force=False: calls.append((pid, force)))
+        monkeypatch.setattr(
+            gateway,
+            "_capture_gateway_argv",
+            lambda _pid: ["python", "-m", "hermes_cli.main", "gateway", "run"],
+        )
+        monkeypatch.setattr(
+            gateway,
+            "terminate_pid",
+            lambda pid, force=False, **kwargs: calls.append((pid, force)),
+        )
 
         killed = gateway.kill_gateway_processes(force=True)
 
@@ -678,7 +687,9 @@ class TestReapUnsupervisedGatewayOrphansWindows:
         self._install_fake_psutil(monkeypatch, [recorded, bootstrap])
 
         # get_running_pid() returns the recorded healthy gateway PID.
-        monkeypatch.setattr("gateway.status.get_running_pid", lambda: recorded_pid)
+        monkeypatch.setattr(
+            "gateway.status.get_running_pid", lambda cleanup_stale=True: recorded_pid
+        )
 
         # find_gateway_pids returns the recorded PID, its bootstrap parent
         # and a real orphan. The reaper should only kill the orphan.
@@ -721,7 +732,9 @@ class TestReapUnsupervisedGatewayOrphansWindows:
         recorded = SimpleNamespace(pid=recorded_pid, parent=lambda: bootstrap)
         self._install_fake_psutil(monkeypatch, [recorded, bootstrap])
 
-        monkeypatch.setattr("gateway.status.get_running_pid", lambda: recorded_pid)
+        monkeypatch.setattr(
+            "gateway.status.get_running_pid", lambda cleanup_stale=True: recorded_pid
+        )
 
         # find_gateway_pids would return the recorded PID and its bootstrap
         # parent, but both are excluded.
