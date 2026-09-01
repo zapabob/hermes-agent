@@ -1,13 +1,60 @@
 # Hermes Agent Windows Workstation Edition
 
-<p align="center">
-  <a href="README.md" lang="en"><strong>English</strong></a> ·
-  <a href="README.ja.md" lang="ja">日本語</a> ·
-  <a href="README.zh-CN.md" lang="zh-CN">简体中文</a>
-</p>
+<p align="center"><strong>Language · 言語 · 语言</strong></p>
+
+<details open>
+<summary><strong>King's English</strong></summary>
+
+Run the five commands in <a href="#setup-in-30-seconds">Setup in 30 seconds</a>.
+The shared <a href="#plug-ins-and-git-submodules">plug-in and submodule inventory</a>
+lists every bundled integration. The complete British English guide continues
+below.
+
+</details>
+
+<details>
+<summary><strong>日本語</strong> — README内で30秒導入を表示</summary>
+
+Windows 11 x64、PowerShell、Git、<code>uv</code>、Python 3.11–3.13を用意し、
+次の5コマンドを実行します。基本CLIに任意のGitサブモジュールは不要です。
+
+```powershell
+git clone https://github.com/zapabob/hermes-agent-windows.git
+Set-Location hermes-agent-windows
+uv sync --locked --all-extras
+uv run hermes setup
+uv run hermes chat
+```
+
+Desktopは <code>uv run hermes desktop</code> で起動できます。標準ルートプラグイン
+51件、全154件のmanifest、Gitサブモジュール16件は
+<a href="#plug-ins-and-git-submodules">共通一覧</a>に掲載しています。
+詳説は <a href="README.ja.md">日本語版README</a> を参照してください。
+
+</details>
+
+<details>
+<summary><strong>简体中文</strong> — 在README内查看30秒安装</summary>
+
+准备Windows 11 x64、PowerShell、Git、<code>uv</code>和Python 3.11–3.13，
+然后运行以下五条命令。核心CLI不要求初始化可选Git子模块。
+
+```powershell
+git clone https://github.com/zapabob/hermes-agent-windows.git
+Set-Location hermes-agent-windows
+uv sync --locked --all-extras
+uv run hermes setup
+uv run hermes chat
+```
+
+使用 <code>uv run hermes desktop</code> 启动Desktop。51个标准根插件、全部154个
+manifest及16个Git子模块列于<a href="#plug-ins-and-git-submodules">共用清单</a>。
+完整说明请参阅<a href="README.zh-CN.md">简体中文版README</a>。
+
+</details>
 
 > [!NOTE]
-> `README.md` is the canonical English document. The Japanese and Simplified Chinese translations follow this file.
+> `README.md` is the canonical British English document. The Japanese and Simplified Chinese translations follow this file.
 
 An unofficial, Windows-native downstream of Hermes Agent for Windows 11 AI workstations.
 
@@ -17,6 +64,9 @@ The original Hermes Agent is developed by Nous Research and licensed under MIT.
 [![Windows Workstation Tier-1 CI](https://github.com/zapabob/hermes-agent-windows/actions/workflows/fork-cicd.yml/badge.svg)](https://github.com/zapabob/hermes-agent-windows/actions/workflows/fork-cicd.yml)
 
 ## Setup in 30 seconds
+
+> **TL;DR:** Run the five commands below. The wizard asks for a model provider;
+> optional plug-ins and Git submodules are not required for the core CLI.
 
 Use the source route today. You need Windows 11 x64, PowerShell, Git, `uv`,
 and Python 3.11-3.13. Node.js is needed only when building the Desktop app.
@@ -28,6 +78,9 @@ uv sync --locked --all-extras
 uv run hermes setup
 uv run hermes chat
 ```
+
+This is the 30-second command path; dependency downloads and compilation may
+take longer on a fresh workstation.
 
 The setup wizard configures your model provider. The last command opens the
 CLI chat. To open the Desktop app from the same checkout, run:
@@ -56,6 +109,60 @@ Qualified artifacts are published only from the matching version tag on the
 Until the first stable asset is present there, use the source route above. See
 the [release policy](docs/windows/RELEASE_POLICY.md) and
 [official upstream](https://github.com/NousResearch/hermes-agent).
+
+## Plug-ins and Git submodules
+
+Hermes discovers standard directory plug-ins through `plugin.yaml`,
+`__init__.py`, and `register(ctx)`. The 51 bundled standard root plug-ins are
+grouped below; `lmcache` is also shipped as a legacy manifest with its own
+registration path. Run `uv run hermes plugins` to see what is enabled for the
+active profile.
+
+| Area | Bundled root plug-ins |
+| --- | --- |
+| Agents and operations | `ai-employee-org`, `ai-partner-os`, `airi`, `aituber-onair`, `aituber-kit`, `book-to-skill`, `desktop-dashboard`, `disk-cleanup`, `freebuff`, `freellmapi`, `google-colab`, `google_meet`, `hermes-gpt`, `hermes-bot-mode`, `line-ai-bot`, `lm-twitterer`, `memory-llm-wiki`, `notebooklm`, `oh-my-hermes`, `openclaw-vendor`, `openmanus`, `plugin-doctor`, `research-desk`, `scrapling-feeds`, `teams_pipeline`, `warashibe-reselling` |
+| Media, voice and XR | `akari-video`, `buzz`, `fish-audio-tts`, `hakua-tts-bridge`, `heygen`, `hyperframes`, `irodori-tts`, `questframe-fh6vr`, `sillytavern`, `spotify`, `unity-cli`, `unity-vrchat-bridge`, `unsloth-studio`, `voicebox`, `voicevox-tts`, `vrchat-autonomy` |
+| Knowledge, security and OSINT | `osint-agent`, `security-guidance`, `semantic-graph`, `shinka-osint`, `sitdeck-osint`, `surfsense`, `tookie-osint`, `world-intel-osint`, `worldmonitor-osint` |
+| Legacy manifest | `lmcache` |
+
+The repository contains 154 plug-in manifests in total. Specialised discovery
+families are kept separate so that only configured capabilities enter a
+session.
+
+| Discovery family | Included providers/adapters |
+| --- | --- |
+| Browser (3) | `browser_use`, `browserbase`, `firecrawl` |
+| Cron (1) | `chronos` |
+| Dashboard authentication (4) | `basic`, `drain`, `nous`, `self_hosted` |
+| Image generation (7) | `deepinfra`, `fal`, `krea`, `openai`, `openai-codex`, `openrouter`, `xai` |
+| Memory (9) | `byterover`, `ebbinghaus`, `hindsight`, `holographic`, `honcho`, `mem0`, `openviking`, `retaindb`, `supermemory` |
+| Model providers (42) | `actual`, `ai-gateway`, `alibaba`, `alibaba-coding-plan`, `anthropic`, `arcee`, `azure-foundry`, `bedrock`, `commandcode`, `copilot`, `copilot-acp`, `custom`, `deepinfra`, `deepseek`, `fireworks`, `freebuff`, `freellmapi`, `gemini`, `gmi`, `huggingface`, `hypura`, `kilocode`, `kimi-coding`, `meta-ai`, `minimax`, `nebius-token-factory`, `nous`, `novita`, `nvidia`, `ollama-cloud`, `openai-codex`, `opencode-free`, `opencode-zen`, `openrouter`, `qwen-oauth`, `router`, `stepfun`, `upstage`, `vertex`, `xai`, `xiaomi`, `zai` |
+| Observability (1) | `langfuse` |
+| Messaging platforms (22) | `a2a`, `buzz`, `dingtalk`, `discord`, `email`, `feishu`, `google_chat`, `homeassistant`, `irc`, `line`, `matrix`, `mattermost`, `ntfy`, `photon`, `raft`, `simplex`, `slack`, `sms`, `teams`, `telegram`, `wecom`, `whatsapp` |
+| Video generation (3) | `deepinfra`, `fal`, `xai` |
+| Web search/extraction (11) | `brave_free`, `cloakbrowser`, `ddgs`, `exa`, `firecrawl`, `keenable`, `parallel`, `scrapling`, `searxng`, `tavily`, `xai` |
+
+Git submodules are optional integrations. Initialise all of them only when you
+need their features: `git submodule update --init --recursive`.
+
+| Path | Repository | Purpose |
+| --- | --- | --- |
+| `plugins/hermes-bot-mode/desktop` | [Hermes-Bot-Mode](https://github.com/zapabob/Hermes-Bot-Mode.git) | Desktop bot roster UI |
+| `vendor/openclaw-mirror/AI-Scientist` | [AI-Scientist](https://github.com/zapabob/AI-Scientist.git) | Scientific-agent vendor mirror |
+| `vendor/openclaw-mirror/ATLAS` | [ATLAS](https://github.com/zapabob/ATLAS.git) | Research-agent vendor mirror |
+| `vendor/openclaw-mirror/ShinkaEvolve` | [ShinkaEvolve](https://github.com/zapabob/ShinkaEvolve.git) | Evolution workflow vendor mirror |
+| `vendor/neuro-sdk` | [neuro-sdk](https://github.com/zapabob/neuro-sdk.git) | Neuro integration SDK |
+| `vendor/openmanus` | [OpenManus](https://github.com/zapabob/OpenManus.git) | OpenManus runtime |
+| `vendor/SillyTavern` | [SillyTavern](https://github.com/zapabob/SillyTavern.git) | Local character-chat frontend |
+| `vendor/shinka-osint` | [ShinkaEvolve-OSINT](https://github.com/zapabob/ShinkaEvolve-OSINT.git) | OSINT analysis runtime |
+| `vendor/buzz` | [buzz](https://github.com/zapabob/buzz.git) | Speech transcription runtime |
+| `vendor/officecli` | [OfficeCLI](https://github.com/zapabob/OfficeCLI.git) | Office document command-line tools |
+| `vendor/akari-video` | [akari-video](https://github.com/zapabob/akari-video.git) | AI video editor |
+| `vendor/cloakbrowser` | [cloakbrowser](https://github.com/zapabob/cloakbrowser.git) | Browser automation runtime |
+| `vendor/airi` | [airi](https://github.com/zapabob/airi.git) | Avatar and companion runtime |
+| `vendor/oh-my-hermes` | [oh-my-hermes](https://github.com/zapabob/oh-my-hermes.git) | Hermes workflow extension |
+| `vendor/OpenMausBot` | [OpenMausBot](https://github.com/zapabob/OpenMausBot.git) | Desktop automation bot |
+| `vendor/heygen-cli` | [heygen-cli](https://github.com/heygen-com/heygen-cli.git) | HeyGen command-line client |
 
 ## 1. Product identity
 

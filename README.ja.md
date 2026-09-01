@@ -1,7 +1,7 @@
 # Hermes Agent Windows Workstation Edition
 
 <p align="center">
-  <a href="README.md" lang="en">English</a> ·
+  <a href="README.md" lang="en-GB">King's English</a> ·
   <a href="README.ja.md" lang="ja"><strong>日本語</strong></a> ·
   <a href="README.zh-CN.md" lang="zh-CN">简体中文</a>
 </p>
@@ -20,6 +20,9 @@ MIT License の下で提供しています。
 
 ## 30秒でわかる導入
 
+> **TL;DR:** 下の5コマンドを順に実行します。モデルプロバイダーはウィザードで
+> 設定でき、基本CLIの起動に任意プラグインやGitサブモジュールは不要です。
+
 現在すぐに使えるのは source route です。Windows 11 x64、PowerShell、Git、`uv`、
 Python 3.11-3.13 を用意してください。Node.js は Desktop をビルドする場合だけ必要です。
 
@@ -30,6 +33,9 @@ uv sync --locked --all-extras
 uv run hermes setup
 uv run hermes chat
 ```
+
+これは30秒で確認できるコマンド経路です。初回の依存関係ダウンロードやコンパイルには、
+ワークステーションの状態に応じて追加の時間がかかります。
 
 セットアップウィザードでモデルプロバイダーを設定し、最後のコマンドで CLI chat を
 開始します。同じ checkout から Desktop を開く場合は、次を実行します。
@@ -58,6 +64,58 @@ release candidate は `0.20.5-win.1`、対応 channel は `stable` と `preview`
 へ公開します。最初の stable asset が存在するまでは、上の source route を使用してください。
 [release policy](docs/windows/RELEASE_POLICY.md) と
 [公式 upstream](https://github.com/NousResearch/hermes-agent)も参照できます。
+
+## プラグインとGitサブモジュール
+
+Hermesの標準ディレクトリプラグインは、`plugin.yaml`、`__init__.py`、
+`register(ctx)` から検出されます。バンドル済みの標準ルートプラグイン51件を下に
+分類しました。`lmcache` は独自の登録経路を持つ旧形式manifestとして同梱されています。
+有効状態は `uv run hermes plugins` でprofileごとに確認できます。
+
+| 分野 | バンドル済みルートプラグイン |
+| --- | --- |
+| Agent・運用 | `ai-employee-org`, `ai-partner-os`, `airi`, `aituber-onair`, `aituber-kit`, `book-to-skill`, `desktop-dashboard`, `disk-cleanup`, `freebuff`, `freellmapi`, `google-colab`, `google_meet`, `hermes-gpt`, `hermes-bot-mode`, `line-ai-bot`, `lm-twitterer`, `memory-llm-wiki`, `notebooklm`, `oh-my-hermes`, `openclaw-vendor`, `openmanus`, `plugin-doctor`, `research-desk`, `scrapling-feeds`, `teams_pipeline`, `warashibe-reselling` |
+| Media・音声・XR | `akari-video`, `buzz`, `fish-audio-tts`, `hakua-tts-bridge`, `heygen`, `hyperframes`, `irodori-tts`, `questframe-fh6vr`, `sillytavern`, `spotify`, `unity-cli`, `unity-vrchat-bridge`, `unsloth-studio`, `voicebox`, `voicevox-tts`, `vrchat-autonomy` |
+| Knowledge・security・OSINT | `osint-agent`, `security-guidance`, `semantic-graph`, `shinka-osint`, `sitdeck-osint`, `surfsense`, `tookie-osint`, `world-intel-osint`, `worldmonitor-osint` |
+| 旧形式manifest | `lmcache` |
+
+リポジトリ全体には154件のプラグインmanifestがあります。専門的なprovider群は個別に
+検出され、設定した機能だけがsessionへ入る構造です。
+
+| 検出ファミリー | 同梱provider・adapter |
+| --- | --- |
+| Browser (3) | `browser_use`, `browserbase`, `firecrawl` |
+| Cron (1) | `chronos` |
+| Dashboard認証 (4) | `basic`, `drain`, `nous`, `self_hosted` |
+| Image生成 (7) | `deepinfra`, `fal`, `krea`, `openai`, `openai-codex`, `openrouter`, `xai` |
+| Memory (9) | `byterover`, `ebbinghaus`, `hindsight`, `holographic`, `honcho`, `mem0`, `openviking`, `retaindb`, `supermemory` |
+| Model provider (42) | `actual`, `ai-gateway`, `alibaba`, `alibaba-coding-plan`, `anthropic`, `arcee`, `azure-foundry`, `bedrock`, `commandcode`, `copilot`, `copilot-acp`, `custom`, `deepinfra`, `deepseek`, `fireworks`, `freebuff`, `freellmapi`, `gemini`, `gmi`, `huggingface`, `hypura`, `kilocode`, `kimi-coding`, `meta-ai`, `minimax`, `nebius-token-factory`, `nous`, `novita`, `nvidia`, `ollama-cloud`, `openai-codex`, `opencode-free`, `opencode-zen`, `openrouter`, `qwen-oauth`, `router`, `stepfun`, `upstage`, `vertex`, `xai`, `xiaomi`, `zai` |
+| Observability (1) | `langfuse` |
+| Messaging platform (22) | `a2a`, `buzz`, `dingtalk`, `discord`, `email`, `feishu`, `google_chat`, `homeassistant`, `irc`, `line`, `matrix`, `mattermost`, `ntfy`, `photon`, `raft`, `simplex`, `slack`, `sms`, `teams`, `telegram`, `wecom`, `whatsapp` |
+| Video生成 (3) | `deepinfra`, `fal`, `xai` |
+| Web検索・抽出 (11) | `brave_free`, `cloakbrowser`, `ddgs`, `exa`, `firecrawl`, `keenable`, `parallel`, `scrapling`, `searxng`, `tavily`, `xai` |
+
+Gitサブモジュールは任意の連携機能です。すべて必要な場合だけ、
+`git submodule update --init --recursive` を実行してください。
+
+| Path | Repository | 用途 |
+| --- | --- | --- |
+| `plugins/hermes-bot-mode/desktop` | [Hermes-Bot-Mode](https://github.com/zapabob/Hermes-Bot-Mode.git) | Desktop bot roster UI |
+| `vendor/openclaw-mirror/AI-Scientist` | [AI-Scientist](https://github.com/zapabob/AI-Scientist.git) | 科学agent連携 |
+| `vendor/openclaw-mirror/ATLAS` | [ATLAS](https://github.com/zapabob/ATLAS.git) | Research agent連携 |
+| `vendor/openclaw-mirror/ShinkaEvolve` | [ShinkaEvolve](https://github.com/zapabob/ShinkaEvolve.git) | 進化workflow連携 |
+| `vendor/neuro-sdk` | [neuro-sdk](https://github.com/zapabob/neuro-sdk.git) | Neuro連携SDK |
+| `vendor/openmanus` | [OpenManus](https://github.com/zapabob/OpenManus.git) | OpenManus runtime |
+| `vendor/SillyTavern` | [SillyTavern](https://github.com/zapabob/SillyTavern.git) | Local character chat frontend |
+| `vendor/shinka-osint` | [ShinkaEvolve-OSINT](https://github.com/zapabob/ShinkaEvolve-OSINT.git) | OSINT分析runtime |
+| `vendor/buzz` | [buzz](https://github.com/zapabob/buzz.git) | 音声文字起こしruntime |
+| `vendor/officecli` | [OfficeCLI](https://github.com/zapabob/OfficeCLI.git) | Office文書CLI |
+| `vendor/akari-video` | [akari-video](https://github.com/zapabob/akari-video.git) | AI video editor |
+| `vendor/cloakbrowser` | [cloakbrowser](https://github.com/zapabob/cloakbrowser.git) | Browser automation runtime |
+| `vendor/airi` | [airi](https://github.com/zapabob/airi.git) | Avatar・companion runtime |
+| `vendor/oh-my-hermes` | [oh-my-hermes](https://github.com/zapabob/oh-my-hermes.git) | Hermes workflow拡張 |
+| `vendor/OpenMausBot` | [OpenMausBot](https://github.com/zapabob/OpenMausBot.git) | Desktop automation bot |
+| `vendor/heygen-cli` | [heygen-cli](https://github.com/heygen-com/heygen-cli.git) | HeyGen CLI client |
 
 ## 1. 製品の位置づけ
 

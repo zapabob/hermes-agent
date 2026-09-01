@@ -49,6 +49,12 @@ def test_readme_exposes_verified_windows_install_surfaces() -> None:
     assert "docs/windows/INSTALL.md" in README
     assert "curl -fsSL https://raw.githubusercontent.com/NousResearch" not in README
     assert "official upstream installer" in README.lower()
+    assert "<details open>" in README
+    assert "<summary><strong>日本語</strong>" in README
+    assert "<summary><strong>简体中文</strong>" in README
+    assert "## Plug-ins and Git submodules" in README
+    assert "154 plug-in manifests" in README
+    assert "Model providers (42)" in README
 
 
 def test_readme_preserves_upstream_identity() -> None:
@@ -62,6 +68,11 @@ def test_translated_readmes_keep_distribution_metadata_in_parity() -> None:
         "README.md": "## Setup in 30 seconds",
         "README.ja.md": "## 30秒でわかる導入",
         "README.zh-CN.md": "## 30 秒看懂安装",
+    }
+    localized_inventory = {
+        "README.md": ("## Plug-ins and Git submodules", "154 plug-in manifests", "Model providers (42)"),
+        "README.ja.md": ("## プラグインとGitサブモジュール", "154件のプラグインmanifest", "Model provider (42)"),
+        "README.zh-CN.md": ("## 插件与Git子模块", "154个插件manifest", "模型provider (42)"),
     }
     for name, quick_start_heading in localized_quick_start.items():
         content = (ROOT / name).read_text(encoding="utf-8")
@@ -84,3 +95,8 @@ def test_translated_readmes_keep_distribution_metadata_in_parity() -> None:
         ):
             assert value in content, f"{name}: {value}"
         assert quick_start_heading in content
+        assert "TL;DR" in content
+        inventory_heading, manifest_count, provider_count = localized_inventory[name]
+        assert inventory_heading in content
+        assert manifest_count in content
+        assert provider_count in content

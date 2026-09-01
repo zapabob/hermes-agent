@@ -1,7 +1,7 @@
 # Hermes Agent Windows Workstation Edition
 
 <p align="center">
-  <a href="README.md" lang="en">English</a> ·
+  <a href="README.md" lang="en-GB">King's English</a> ·
   <a href="README.ja.md" lang="ja">日本語</a> ·
   <a href="README.zh-CN.md" lang="zh-CN"><strong>简体中文</strong></a>
 </p>
@@ -18,6 +18,9 @@
 
 ## 30 秒看懂安装
 
+> **TL;DR：**依次运行下面五条命令。模型提供商可在向导中设置；核心CLI无需安装
+> 可选插件或初始化Git子模块。
+
 当前可立即使用的是源码安装。请准备 Windows 11 x64、PowerShell、Git、`uv` 和
 Python 3.11-3.13。只有构建 Desktop 时才需要 Node.js。
 
@@ -28,6 +31,8 @@ uv sync --locked --all-extras
 uv run hermes setup
 uv run hermes chat
 ```
+
+这是可在30秒内看完的命令路径；首次下载依赖和编译可能需要更长时间。
 
 设置向导会配置模型提供商，最后一条命令会打开 CLI chat。要从同一 checkout 启动
 Desktop，请运行：
@@ -56,6 +61,57 @@ release candidate 为 `0.20.5-win.1`，支持 `stable` 与 `preview` channel。
 在首个 stable asset 实际存在前，请使用上面的 source route。
 另见 [release policy](docs/windows/RELEASE_POLICY.md) 与
 [官方 upstream](https://github.com/NousResearch/hermes-agent)。
+
+## 插件与Git子模块
+
+Hermes通过 `plugin.yaml`、`__init__.py` 和 `register(ctx)` 发现标准目录插件。
+下面按用途列出51个随附的标准根插件；`lmcache` 以具有独立注册路径的旧式manifest
+提供。运行 `uv run hermes plugins` 可查看当前profile实际启用的插件。
+
+| 领域 | 随附根插件 |
+| --- | --- |
+| Agent与运维 | `ai-employee-org`, `ai-partner-os`, `airi`, `aituber-onair`, `aituber-kit`, `book-to-skill`, `desktop-dashboard`, `disk-cleanup`, `freebuff`, `freellmapi`, `google-colab`, `google_meet`, `hermes-gpt`, `hermes-bot-mode`, `line-ai-bot`, `lm-twitterer`, `memory-llm-wiki`, `notebooklm`, `oh-my-hermes`, `openclaw-vendor`, `openmanus`, `plugin-doctor`, `research-desk`, `scrapling-feeds`, `teams_pipeline`, `warashibe-reselling` |
+| 媒体、语音与XR | `akari-video`, `buzz`, `fish-audio-tts`, `hakua-tts-bridge`, `heygen`, `hyperframes`, `irodori-tts`, `questframe-fh6vr`, `sillytavern`, `spotify`, `unity-cli`, `unity-vrchat-bridge`, `unsloth-studio`, `voicebox`, `voicevox-tts`, `vrchat-autonomy` |
+| 知识、安全与OSINT | `osint-agent`, `security-guidance`, `semantic-graph`, `shinka-osint`, `sitdeck-osint`, `surfsense`, `tookie-osint`, `world-intel-osint`, `worldmonitor-osint` |
+| 旧式manifest | `lmcache` |
+
+仓库中共有154个插件manifest。专用provider系列由各自的发现器处理，因此只有已配置的
+能力会进入session。
+
+| 发现系列 | 随附provider与adapter |
+| --- | --- |
+| Browser (3) | `browser_use`, `browserbase`, `firecrawl` |
+| Cron (1) | `chronos` |
+| Dashboard认证 (4) | `basic`, `drain`, `nous`, `self_hosted` |
+| 图像生成 (7) | `deepinfra`, `fal`, `krea`, `openai`, `openai-codex`, `openrouter`, `xai` |
+| Memory (9) | `byterover`, `ebbinghaus`, `hindsight`, `holographic`, `honcho`, `mem0`, `openviking`, `retaindb`, `supermemory` |
+| 模型provider (42) | `actual`, `ai-gateway`, `alibaba`, `alibaba-coding-plan`, `anthropic`, `arcee`, `azure-foundry`, `bedrock`, `commandcode`, `copilot`, `copilot-acp`, `custom`, `deepinfra`, `deepseek`, `fireworks`, `freebuff`, `freellmapi`, `gemini`, `gmi`, `huggingface`, `hypura`, `kilocode`, `kimi-coding`, `meta-ai`, `minimax`, `nebius-token-factory`, `nous`, `novita`, `nvidia`, `ollama-cloud`, `openai-codex`, `opencode-free`, `opencode-zen`, `openrouter`, `qwen-oauth`, `router`, `stepfun`, `upstage`, `vertex`, `xai`, `xiaomi`, `zai` |
+| Observability (1) | `langfuse` |
+| 消息平台 (22) | `a2a`, `buzz`, `dingtalk`, `discord`, `email`, `feishu`, `google_chat`, `homeassistant`, `irc`, `line`, `matrix`, `mattermost`, `ntfy`, `photon`, `raft`, `simplex`, `slack`, `sms`, `teams`, `telegram`, `wecom`, `whatsapp` |
+| 视频生成 (3) | `deepinfra`, `fal`, `xai` |
+| Web搜索与提取 (11) | `brave_free`, `cloakbrowser`, `ddgs`, `exa`, `firecrawl`, `keenable`, `parallel`, `scrapling`, `searxng`, `tavily`, `xai` |
+
+Git子模块用于可选集成。仅在需要全部功能时运行
+`git submodule update --init --recursive`。
+
+| 路径 | 仓库 | 用途 |
+| --- | --- | --- |
+| `plugins/hermes-bot-mode/desktop` | [Hermes-Bot-Mode](https://github.com/zapabob/Hermes-Bot-Mode.git) | Desktop bot roster UI |
+| `vendor/openclaw-mirror/AI-Scientist` | [AI-Scientist](https://github.com/zapabob/AI-Scientist.git) | 科研agent集成 |
+| `vendor/openclaw-mirror/ATLAS` | [ATLAS](https://github.com/zapabob/ATLAS.git) | Research agent集成 |
+| `vendor/openclaw-mirror/ShinkaEvolve` | [ShinkaEvolve](https://github.com/zapabob/ShinkaEvolve.git) | 进化workflow集成 |
+| `vendor/neuro-sdk` | [neuro-sdk](https://github.com/zapabob/neuro-sdk.git) | Neuro集成SDK |
+| `vendor/openmanus` | [OpenManus](https://github.com/zapabob/OpenManus.git) | OpenManus runtime |
+| `vendor/SillyTavern` | [SillyTavern](https://github.com/zapabob/SillyTavern.git) | 本地角色聊天前端 |
+| `vendor/shinka-osint` | [ShinkaEvolve-OSINT](https://github.com/zapabob/ShinkaEvolve-OSINT.git) | OSINT分析runtime |
+| `vendor/buzz` | [buzz](https://github.com/zapabob/buzz.git) | 语音转写runtime |
+| `vendor/officecli` | [OfficeCLI](https://github.com/zapabob/OfficeCLI.git) | Office文档CLI |
+| `vendor/akari-video` | [akari-video](https://github.com/zapabob/akari-video.git) | AI视频编辑器 |
+| `vendor/cloakbrowser` | [cloakbrowser](https://github.com/zapabob/cloakbrowser.git) | Browser automation runtime |
+| `vendor/airi` | [airi](https://github.com/zapabob/airi.git) | Avatar与companion runtime |
+| `vendor/oh-my-hermes` | [oh-my-hermes](https://github.com/zapabob/oh-my-hermes.git) | Hermes workflow扩展 |
+| `vendor/OpenMausBot` | [OpenMausBot](https://github.com/zapabob/OpenMausBot.git) | Desktop automation bot |
+| `vendor/heygen-cli` | [heygen-cli](https://github.com/heygen-com/heygen-cli.git) | HeyGen CLI client |
 
 ## 1. 产品定位
 
