@@ -17,12 +17,12 @@
   "schema_version": 1,
   "snapshot_sha": "5fc308a70719a83cccdbba4c0e39c23f5a8239d5",
   "summary": {
-    "all_fork_specific_loc": 485073,
-    "carry_surface_files": 1367,
-    "cwc": 451105,
+    "all_fork_specific_loc": 485087,
+    "carry_surface_files": 1369,
+    "cwc": 451237,
     "fork_owned_loc": 324931,
-    "upstream_owned_fork_loc": 160142,
-    "utr": 0.33014
+    "upstream_owned_fork_loc": 160156,
+    "utr": 0.330159
   },
   "top_carry_risks": [
     {
@@ -116,10 +116,10 @@
       "upstream_frequency": 6
     },
     {
-      "added": 40,
-      "cwc": 6974,
+      "added": 46,
+      "cwc": 7106,
       "deleted": 277,
-      "patch_size": 317,
+      "patch_size": 323,
       "path": "tools/browser_tool.py",
       "semantic_coupling": 2,
       "upstream_frequency": 11

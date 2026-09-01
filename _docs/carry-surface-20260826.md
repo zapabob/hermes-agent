@@ -4,12 +4,12 @@ Frozen upstream: 5fc308a70719a83cccdbba4c0e39c23f5a8239d5
 
 | Metric | Value |
 | --- | ---: |
-| All fork-specific LOC | 485073 |
-| Upstream-owned fork LOC | 160142 |
+| All fork-specific LOC | 485087 |
+| Upstream-owned fork LOC | 160156 |
 | Fork-owned LOC | 324931 |
-| UTR | 0.330140 |
-| Carry Surface | 1367 files |
-| CWC | 451105 |
+| UTR | 0.330159 |
+| Carry Surface | 1369 files |
+| CWC | 451237 |
 
 LOC is added plus deleted lines relative to the frozen upstream tree.
 Generated metric reports are excluded to avoid self-referential totals.
@@ -30,7 +30,7 @@ and 1 for tests, docs, workflows, and generated documentation.
 | hermes_cli/main.py | 11 | 416 | 2 | 9152 |
 | apps/desktop/src/app/contrib/hooks/use-background-sync.test.ts | 8 | 461 | 2 | 7376 |
 | tests/gateway/test_slack.py | 6 | 1205 | 1 | 7230 |
-| tools/browser_tool.py | 11 | 317 | 2 | 6974 |
+| tools/browser_tool.py | 11 | 323 | 2 | 7106 |
 | apps/desktop/src/app/session/hooks/profile-rail-fresh-chat-owner.test.tsx | 4 | 779 | 2 | 6232 |
 | scripts/desktop-update/windows.ps1 | 6 | 462 | 2 | 5544 |
 | gateway/run.py | 7 | 378 | 2 | 5292 |
