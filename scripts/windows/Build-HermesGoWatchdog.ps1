@@ -36,7 +36,10 @@ try {
 
     Write-Progress -Activity "Build Hermes Go Watchdog" -Status "go build" -PercentComplete 80
     Write-Host "[3/3] go build"
-    go build -buildvcs=false -trimpath -ldflags "-s -w" -o $OutPath .
+    # Build as a Windows GUI-subsystem executable.  The watchdog has no UI and
+    # writes diagnostics to its log file, so a console window or taskbar entry
+    # must never be created when Task Scheduler or an operator launches it.
+    go build -buildvcs=false -trimpath -ldflags "-s -w -H=windowsgui" -o $OutPath .
     if ($LASTEXITCODE -ne 0) { throw "go build failed" }
 
     Write-Progress -Activity "Build Hermes Go Watchdog" -Completed -Status "done"
