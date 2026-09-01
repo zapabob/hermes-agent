@@ -442,6 +442,16 @@ import { resolvePickerDefaultPath, setActiveGatewayProfile, setWslBridgeProfileS
 
 installStdioPipeErrorGuards()
 
+// Keep Electron's persisted browser/session storage on the original
+// %APPDATA%\Hermes path even when downstream packaging uses a branded
+// productName. app.getPath('userData') derives from the application name, so
+// this must run before the first userData lookup below. Otherwise a branding
+// change silently strands login cookies (YouTube/X), localStorage, and desktop
+// preferences in the previous directory.
+const APP_NAME = process.env.HERMES_DESKTOP_APP_NAME || 'Hermes'
+
+app.setName(APP_NAME)
+
 const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR
 
 if (USER_DATA_OVERRIDE) {
@@ -909,7 +919,6 @@ const BOOT_FAKE_STEP_MS = (() => {
   return Math.max(120, raw)
 })()
 
-const APP_NAME = process.env.HERMES_DESKTOP_APP_NAME || 'Hermes'
 const HUD_WINDOW_TITLE = `${APP_NAME} HUD`
 const TITLEBAR_HEIGHT = 34
 const MACOS_TRAFFIC_LIGHTS_HEIGHT = 14
@@ -1310,8 +1319,6 @@ function previewFileMetadata(filePath, mimeType) {
     large: byteSize > TEXT_PREVIEW_MAX_BYTES
   }
 }
-
-app.setName(APP_NAME)
 
 // Windows toast notifications silently no-op unless an AppUserModelID is set:
 // `new Notification().show()` returns without error and nothing appears. The
