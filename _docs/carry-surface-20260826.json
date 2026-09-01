@@ -15,240 +15,240 @@
   },
   "merge_base_sha": "1fe0f2f3ac9748ce799272eb93bee2937b5ab802",
   "schema_version": 1,
-  "snapshot_sha": "5fc308a70719a83cccdbba4c0e39c23f5a8239d5",
+  "snapshot_sha": "5a8e8a6b87487c0e0785cd9eb561cc6a96c64f5e",
   "summary": {
-    "all_fork_specific_loc": 487090,
-    "carry_surface_files": 1373,
-    "cwc": 454057,
-    "fork_owned_loc": 326516,
-    "upstream_owned_fork_loc": 160574,
-    "utr": 0.32966
+    "all_fork_specific_loc": 755813,
+    "carry_surface_files": 2646,
+    "cwc": 3152265,
+    "fork_owned_loc": 397386,
+    "upstream_owned_fork_loc": 358427,
+    "utr": 0.474227
   },
   "top_carry_risks": [
     {
-      "added": 378,
-      "cwc": 55860,
-      "deleted": 553,
-      "patch_size": 931,
+      "added": 441,
+      "cwc": 289680,
+      "deleted": 1973,
+      "patch_size": 2414,
+      "path": "gateway/run.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 60
+    },
+    {
+      "added": 479,
+      "cwc": 227100,
+      "deleted": 1792,
+      "patch_size": 2271,
+      "path": "hermes_state.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 50
+    },
+    {
+      "added": 202,
+      "cwc": 196424,
+      "deleted": 2082,
+      "patch_size": 2284,
+      "path": "plugins/platforms/buzz/adapter.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 43
+    },
+    {
+      "added": 475,
+      "cwc": 178350,
+      "deleted": 1700,
+      "patch_size": 2175,
+      "path": "tui_gateway/server.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 41
+    },
+    {
+      "added": 1657,
+      "cwc": 158528,
+      "deleted": 820,
+      "patch_size": 2477,
+      "path": "hermes_cli/web_server.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 32
+    },
+    {
+      "added": 161,
+      "cwc": 126735,
+      "deleted": 3460,
+      "patch_size": 3621,
+      "path": "tests/gateway/test_buzz_adapter.py",
+      "semantic_coupling": 1,
+      "upstream_frequency": 35
+    },
+    {
+      "added": 2160,
+      "cwc": 121024,
+      "deleted": 1622,
+      "patch_size": 3782,
+      "path": "cli.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 16
+    },
+    {
+      "added": 393,
+      "cwc": 98124,
+      "deleted": 569,
+      "patch_size": 962,
       "path": "apps/desktop/electron/main.ts",
       "semantic_coupling": 3,
+      "upstream_frequency": 34
+    },
+    {
+      "added": 927,
+      "cwc": 95174,
+      "deleted": 1142,
+      "patch_size": 2069,
+      "path": "agent/auxiliary_client.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 23
+    },
+    {
+      "added": 616,
+      "cwc": 76804,
+      "deleted": 861,
+      "patch_size": 1477,
+      "path": "cron/scheduler.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 26
+    },
+    {
+      "added": 763,
+      "cwc": 62250,
+      "deleted": 482,
+      "patch_size": 1245,
+      "path": "agent/conversation_loop.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 25
+    },
+    {
+      "added": 68,
+      "cwc": 37604,
+      "deleted": 485,
+      "patch_size": 553,
+      "path": "agent/conversation_compression.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 34
+    },
+    {
+      "added": 284,
+      "cwc": 36912,
+      "deleted": 485,
+      "patch_size": 769,
+      "path": "agent/context_compressor.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 24
+    },
+    {
+      "added": 1061,
+      "cwc": 33618,
+      "deleted": 1525,
+      "patch_size": 2586,
+      "path": "tests/test_tui_gateway_server.py",
+      "semantic_coupling": 1,
+      "upstream_frequency": 13
+    },
+    {
+      "added": 91,
+      "cwc": 28920,
+      "deleted": 632,
+      "patch_size": 723,
+      "path": "tools/browser_tool.py",
+      "semantic_coupling": 2,
       "upstream_frequency": 20
     },
     {
-      "added": 308,
-      "cwc": 55100,
-      "deleted": 1142,
-      "patch_size": 1450,
-      "path": "hermes_cli/update_cmd.py",
+      "added": 293,
+      "cwc": 26634,
+      "deleted": 286,
+      "patch_size": 579,
+      "path": "hermes_cli/main.py",
       "semantic_coupling": 2,
-      "upstream_frequency": 19
+      "upstream_frequency": 23
     },
     {
-      "added": 1296,
-      "cwc": 51450,
-      "deleted": 419,
-      "patch_size": 1715,
-      "path": "hermes_cli/web_server.py",
+      "added": 1457,
+      "cwc": 25998,
+      "deleted": 400,
+      "patch_size": 1857,
+      "path": "gateway/platforms/api_server.py",
       "semantic_coupling": 2,
-      "upstream_frequency": 15
+      "upstream_frequency": 7
     },
     {
-      "added": 173,
-      "cwc": 32472,
-      "deleted": 729,
-      "patch_size": 902,
-      "path": "apps/desktop/src/plugins/hermes-bots/plugin.js",
+      "added": 191,
+      "cwc": 23936,
+      "deleted": 161,
+      "patch_size": 352,
+      "path": "hermes_cli/config_defaults.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 34
+    },
+    {
+      "added": 191,
+      "cwc": 22576,
+      "deleted": 473,
+      "patch_size": 664,
+      "path": "hermes_cli/config.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 17
+    },
+    {
+      "added": 291,
+      "cwc": 20163,
+      "deleted": 226,
+      "patch_size": 517,
+      "path": "agent/agent_init.py",
+      "semantic_coupling": 3,
+      "upstream_frequency": 13
+    },
+    {
+      "added": 0,
+      "cwc": 19568,
+      "deleted": 2446,
+      "patch_size": 2446,
+      "path": "gateway/hosted_rooms.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 4
+    },
+    {
+      "added": 0,
+      "cwc": 17376,
+      "deleted": 1086,
+      "patch_size": 1086,
+      "path": "apps/desktop/src/plugins/hermes-bots/i18n.ts",
+      "semantic_coupling": 2,
+      "upstream_frequency": 8
+    },
+    {
+      "added": 82,
+      "cwc": 17208,
+      "deleted": 396,
+      "patch_size": 478,
+      "path": "cron/jobs.py",
       "semantic_coupling": 2,
       "upstream_frequency": 18
     },
     {
-      "added": 282,
-      "cwc": 16280,
-      "deleted": 532,
-      "patch_size": 814,
-      "path": "tui_gateway/server.py",
-      "semantic_coupling": 2,
-      "upstream_frequency": 10
-    },
-    {
-      "added": 557,
-      "cwc": 10512,
-      "deleted": 27,
-      "patch_size": 584,
-      "path": "hermes_cli/models.py",
-      "semantic_coupling": 2,
-      "upstream_frequency": 9
-    },
-    {
-      "added": 101,
-      "cwc": 10140,
-      "deleted": 406,
-      "patch_size": 507,
-      "path": "plugins/platforms/slack/adapter.py",
-      "semantic_coupling": 2,
-      "upstream_frequency": 10
-    },
-    {
-      "added": 280,
-      "cwc": 9152,
-      "deleted": 136,
-      "patch_size": 416,
-      "path": "hermes_cli/main.py",
-      "semantic_coupling": 2,
-      "upstream_frequency": 11
-    },
-    {
-      "added": 9,
-      "cwc": 7376,
-      "deleted": 452,
-      "patch_size": 461,
-      "path": "apps/desktop/src/app/contrib/hooks/use-background-sync.test.ts",
-      "semantic_coupling": 2,
-      "upstream_frequency": 8
-    },
-    {
-      "added": 14,
-      "cwc": 7230,
-      "deleted": 1191,
-      "patch_size": 1205,
-      "path": "tests/gateway/test_slack.py",
-      "semantic_coupling": 1,
-      "upstream_frequency": 6
-    },
-    {
-      "added": 46,
-      "cwc": 7106,
-      "deleted": 277,
-      "patch_size": 323,
-      "path": "tools/browser_tool.py",
-      "semantic_coupling": 2,
-      "upstream_frequency": 11
-    },
-    {
-      "added": 0,
-      "cwc": 6232,
-      "deleted": 779,
-      "patch_size": 779,
-      "path": "apps/desktop/src/app/session/hooks/profile-rail-fresh-chat-owner.test.tsx",
-      "semantic_coupling": 2,
-      "upstream_frequency": 4
-    },
-    {
-      "added": 40,
-      "cwc": 5544,
-      "deleted": 422,
-      "patch_size": 462,
-      "path": "scripts/desktop-update/windows.ps1",
-      "semantic_coupling": 2,
-      "upstream_frequency": 6
-    },
-    {
-      "added": 186,
-      "cwc": 5292,
-      "deleted": 192,
-      "patch_size": 378,
-      "path": "gateway/run.py",
-      "semantic_coupling": 2,
-      "upstream_frequency": 7
-    },
-    {
-      "added": 80,
-      "cwc": 5004,
-      "deleted": 198,
-      "patch_size": 278,
-      "path": "apps/desktop/src/store/gateway.ts",
-      "semantic_coupling": 2,
-      "upstream_frequency": 9
-    },
-    {
-      "added": 44,
-      "cwc": 4752,
-      "deleted": 154,
-      "patch_size": 198,
-      "path": "apps/desktop/src/app/gateway/hooks/use-gateway-boot.ts",
-      "semantic_coupling": 2,
-      "upstream_frequency": 12
-    },
-    {
-      "added": 11,
-      "cwc": 4320,
-      "deleted": 259,
-      "patch_size": 270,
-      "path": "apps/desktop/src/app/contrib/hooks/use-background-sync.ts",
-      "semantic_coupling": 2,
-      "upstream_frequency": 8
-    },
-    {
-      "added": 131,
-      "cwc": 4212,
-      "deleted": 220,
-      "patch_size": 351,
-      "path": "hermes_cli/config.py",
-      "semantic_coupling": 2,
-      "upstream_frequency": 6
-    },
-    {
-      "added": 735,
-      "cwc": 4204,
-      "deleted": 316,
-      "patch_size": 1051,
-      "path": "agent/conversation_loop.py",
-      "semantic_coupling": 2,
-      "upstream_frequency": 2
-    },
-    {
-      "added": 136,
-      "cwc": 4080,
-      "deleted": 34,
-      "patch_size": 170,
-      "path": "hermes_cli/browser_connect.py",
-      "semantic_coupling": 2,
-      "upstream_frequency": 12
-    },
-    {
-      "added": 236,
-      "cwc": 3992,
-      "deleted": 263,
-      "patch_size": 499,
-      "path": "cron/scheduler.py",
-      "semantic_coupling": 2,
-      "upstream_frequency": 4
-    },
-    {
-      "added": 26,
-      "cwc": 3192,
-      "deleted": 202,
-      "patch_size": 228,
-      "path": "apps/desktop/electron/remote-lifecycle.test.ts",
-      "semantic_coupling": 2,
-      "upstream_frequency": 7
-    },
-    {
-      "added": 316,
-      "cwc": 3102,
-      "deleted": 201,
-      "patch_size": 517,
-      "path": "tools/terminal_tool.py",
-      "semantic_coupling": 3,
-      "upstream_frequency": 2
-    },
-    {
-      "added": 1026,
-      "cwc": 3092,
-      "deleted": 520,
-      "patch_size": 1546,
-      "path": "package-lock.json",
-      "semantic_coupling": 2,
-      "upstream_frequency": 1
-    },
-    {
-      "added": 750,
-      "cwc": 2950,
-      "deleted": 725,
-      "patch_size": 1475,
+      "added": 767,
+      "cwc": 16120,
+      "deleted": 845,
+      "patch_size": 1612,
       "path": "uv.lock",
       "semantic_coupling": 2,
-      "upstream_frequency": 1
+      "upstream_frequency": 5
+    },
+    {
+      "added": 283,
+      "cwc": 15870,
+      "deleted": 62,
+      "patch_size": 345,
+      "path": "hermes_cli/models.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 23
     }
   ]
 }

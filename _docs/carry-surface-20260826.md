@@ -1,15 +1,15 @@
 # Carry-surface metrics, 2026-08-26
 
-Frozen upstream: 5fc308a70719a83cccdbba4c0e39c23f5a8239d5
+Frozen upstream: 5a8e8a6b87487c0e0785cd9eb561cc6a96c64f5e
 
 | Metric | Value |
 | --- | ---: |
-| All fork-specific LOC | 487090 |
-| Upstream-owned fork LOC | 160574 |
-| Fork-owned LOC | 326516 |
-| UTR | 0.329660 |
-| Carry Surface | 1373 files |
-| CWC | 454057 |
+| All fork-specific LOC | 755813 |
+| Upstream-owned fork LOC | 358427 |
+| Fork-owned LOC | 397386 |
+| UTR | 0.474227 |
+| Carry Surface | 2646 files |
+| CWC | 3152265 |
 
 LOC is added plus deleted lines relative to the frozen upstream tree.
 Generated metric reports are excluded to avoid self-referential totals.
@@ -20,31 +20,31 @@ and 1 for tests, docs, workflows, and generated documentation.
 
 | Path | Frequency | Patch | Coupling | CWC |
 | --- | ---: | ---: | ---: | ---: |
-| apps/desktop/electron/main.ts | 20 | 931 | 3 | 55860 |
-| hermes_cli/update_cmd.py | 19 | 1450 | 2 | 55100 |
-| hermes_cli/web_server.py | 15 | 1715 | 2 | 51450 |
-| apps/desktop/src/plugins/hermes-bots/plugin.js | 18 | 902 | 2 | 32472 |
-| tui_gateway/server.py | 10 | 814 | 2 | 16280 |
-| hermes_cli/models.py | 9 | 584 | 2 | 10512 |
-| plugins/platforms/slack/adapter.py | 10 | 507 | 2 | 10140 |
-| hermes_cli/main.py | 11 | 416 | 2 | 9152 |
-| apps/desktop/src/app/contrib/hooks/use-background-sync.test.ts | 8 | 461 | 2 | 7376 |
-| tests/gateway/test_slack.py | 6 | 1205 | 1 | 7230 |
-| tools/browser_tool.py | 11 | 323 | 2 | 7106 |
-| apps/desktop/src/app/session/hooks/profile-rail-fresh-chat-owner.test.tsx | 4 | 779 | 2 | 6232 |
-| scripts/desktop-update/windows.ps1 | 6 | 462 | 2 | 5544 |
-| gateway/run.py | 7 | 378 | 2 | 5292 |
-| apps/desktop/src/store/gateway.ts | 9 | 278 | 2 | 5004 |
-| apps/desktop/src/app/gateway/hooks/use-gateway-boot.ts | 12 | 198 | 2 | 4752 |
-| apps/desktop/src/app/contrib/hooks/use-background-sync.ts | 8 | 270 | 2 | 4320 |
-| hermes_cli/config.py | 6 | 351 | 2 | 4212 |
-| agent/conversation_loop.py | 2 | 1051 | 2 | 4204 |
-| hermes_cli/browser_connect.py | 12 | 170 | 2 | 4080 |
-| cron/scheduler.py | 4 | 499 | 2 | 3992 |
-| apps/desktop/electron/remote-lifecycle.test.ts | 7 | 228 | 2 | 3192 |
-| tools/terminal_tool.py | 2 | 517 | 3 | 3102 |
-| package-lock.json | 1 | 1546 | 2 | 3092 |
-| uv.lock | 1 | 1475 | 2 | 2950 |
+| gateway/run.py | 60 | 2414 | 2 | 289680 |
+| hermes_state.py | 50 | 2271 | 2 | 227100 |
+| plugins/platforms/buzz/adapter.py | 43 | 2284 | 2 | 196424 |
+| tui_gateway/server.py | 41 | 2175 | 2 | 178350 |
+| hermes_cli/web_server.py | 32 | 2477 | 2 | 158528 |
+| tests/gateway/test_buzz_adapter.py | 35 | 3621 | 1 | 126735 |
+| cli.py | 16 | 3782 | 2 | 121024 |
+| apps/desktop/electron/main.ts | 34 | 962 | 3 | 98124 |
+| agent/auxiliary_client.py | 23 | 2069 | 2 | 95174 |
+| cron/scheduler.py | 26 | 1477 | 2 | 76804 |
+| agent/conversation_loop.py | 25 | 1245 | 2 | 62250 |
+| agent/conversation_compression.py | 34 | 553 | 2 | 37604 |
+| agent/context_compressor.py | 24 | 769 | 2 | 36912 |
+| tests/test_tui_gateway_server.py | 13 | 2586 | 1 | 33618 |
+| tools/browser_tool.py | 20 | 723 | 2 | 28920 |
+| hermes_cli/main.py | 23 | 579 | 2 | 26634 |
+| gateway/platforms/api_server.py | 7 | 1857 | 2 | 25998 |
+| hermes_cli/config_defaults.py | 34 | 352 | 2 | 23936 |
+| hermes_cli/config.py | 17 | 664 | 2 | 22576 |
+| agent/agent_init.py | 13 | 517 | 3 | 20163 |
+| gateway/hosted_rooms.py | 4 | 2446 | 2 | 19568 |
+| apps/desktop/src/plugins/hermes-bots/i18n.ts | 8 | 1086 | 2 | 17376 |
+| cron/jobs.py | 18 | 478 | 2 | 17208 |
+| uv.lock | 5 | 1612 | 2 | 16120 |
+| hermes_cli/models.py | 23 | 345 | 2 | 15870 |
 
 This is a coupling report, not a target to improve by relocating code
 without reducing its actual dependency on upstream behavior.
