@@ -1463,9 +1463,7 @@ const POOL_IDLE_MS = Math.max(60_000, Number(process.env.HERMES_DESKTOP_POOL_IDL
 //     "is this backend plausibly still alive" question for LRU eviction,
 //     not when the idle reaper definitively tears a backend down.
 
-const POOL_KEEPALIVE_FRESH_MS = resolvePoolKeepaliveFreshMs(
-  process.env.HERMES_DESKTOP_POOL_KEEPALIVE_FRESH_MS
-)
+const POOL_KEEPALIVE_FRESH_MS = resolvePoolKeepaliveFreshMs(process.env.HERMES_DESKTOP_POOL_KEEPALIVE_FRESH_MS)
 
 let poolIdleReaper = null
 let backendOrphanReapPromise = null
@@ -5914,14 +5912,17 @@ async function writeComposerImage(buffer, ext = '.png', name = '') {
   await fs.promises.mkdir(dir, { recursive: true })
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').replace('Z', '')
   const random = crypto.randomBytes(3).toString('hex')
+
   const baseName = String(name || '')
     .split(/[\\/]/)
     .pop()
     ?.replace(/\.[^.]+$/, '')
+
   const safeName = (baseName || '')
     .replace(/[^\p{L}\p{N}._-]+/gu, '_')
     .replace(/^[._-]+|[._-]+$/g, '')
     .slice(0, 80)
+
   const fileName = safeName ? `${safeName}_${random}${safeExt}` : `composer_${stamp}_${random}${safeExt}`
   const filePath = path.join(dir, fileName)
   await fs.promises.writeFile(filePath, buffer)
@@ -9789,7 +9790,6 @@ function clearManagedSshRecovery(connectionId, correlationId) {
   }
 }
 
-
 const sshBootstrapCoordinator = createBootstrapCoordinator()
 
 let sshQuitTeardownDone = false
@@ -10018,7 +10018,14 @@ async function effectiveSshConfigFingerprint(sshConfig) {
   return crypto.createHash('sha256').update(output).digest('hex')
 }
 
-async function bootstrapSshConnection(profile, sshConfig, reuseToken, source, resolvedEffectiveFingerprint?, metadata: any = {}) {
+async function bootstrapSshConnection(
+  profile,
+  sshConfig,
+  reuseToken,
+  source,
+  resolvedEffectiveFingerprint?,
+  metadata: any = {}
+) {
   const scope = sshScopeKey(profile)
   const effectiveConfigFingerprint = resolvedEffectiveFingerprint || (await effectiveSshConfigFingerprint(sshConfig))
   const resolvedConfig = { ...sshConfig, effectiveConfigFingerprint }

@@ -76,10 +76,7 @@ export function useModelControls({
         return { ...prev, provider, model, providers }
       }
 
-      queryClient.setQueryData<ModelOptionsResponse>(
-        modelOptionsQueryKey(profile, sessionId, ownerConnectionId),
-        patch
-      )
+      queryClient.setQueryData<ModelOptionsResponse>(modelOptionsQueryKey(profile, sessionId, ownerConnectionId), patch)
 
       if (includeGlobal) {
         queryClient.setQueryData<ModelOptionsResponse>(modelOptionsQueryKey(profile, null, ownerConnectionId), patch)
@@ -290,11 +287,7 @@ export function useModelControls({
         // authoritative runtime identity.
         if (cacheOwnerConnectionId && !result?.deferred) {
           void queryClient.invalidateQueries({
-            queryKey: modelOptionsQueryKey(
-              liveGatewayProfile,
-              liveSessionId,
-              cacheOwnerConnectionId
-            )
+            queryKey: modelOptionsQueryKey(liveGatewayProfile, liveSessionId, cacheOwnerConnectionId)
           })
         }
 
@@ -316,14 +309,7 @@ export function useModelControls({
         return false
       }
     },
-    [
-      cacheOwnerConnectionId,
-      cacheProfile,
-      copy.modelSwitchFailed,
-      queryClient,
-      requestGateway,
-      updateModelOptionsCache
-    ]
+    [cacheOwnerConnectionId, cacheProfile, copy.modelSwitchFailed, queryClient, requestGateway, updateModelOptionsCache]
   )
 
   return { applySavedMainModel, refreshCurrentModel, selectModel }

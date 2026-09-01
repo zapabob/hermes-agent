@@ -83,15 +83,19 @@ function buildDesktopUpdaterEnv({
     if (value === undefined) {
       continue
     }
+
     if (CREDENTIAL_ENV_NAME.test(key)) {
       throw new Error(`credential-shaped environment key is not allowed: ${key}`)
     }
+
     if (platform === 'win32') {
       const inheritedKey = Object.keys(env).find(candidate => candidate.toUpperCase() === key.toUpperCase())
+
       if (inheritedKey) {
         delete env[inheritedKey]
       }
     }
+
     env[key] = value
   }
 

@@ -195,10 +195,7 @@ export function VaultSettings() {
     setSearchParams(next, { replace: true })
   }, [openAdd, searchParams, setSearchParams])
 
-  const invalidate = useCallback(
-    () => queryClient.invalidateQueries({ queryKey: VAULT_QUERY_KEY }),
-    [queryClient]
-  )
+  const invalidate = useCallback(() => queryClient.invalidateQueries({ queryKey: VAULT_QUERY_KEY }), [queryClient])
 
   const addMutation = useMutation({
     mutationFn: async (payload: { kind: VaultKind; label: string; origin?: string; secret: Record<string, string> }) =>
@@ -335,10 +332,7 @@ export function VaultSettings() {
           >
             <div className="grid items-start gap-4 sm:grid-cols-2">
               <Field htmlFor="vault-kind" label={v.kindField}>
-                <Select
-                  onValueChange={value => setForm(f => ({ ...f, kind: value as VaultKind }))}
-                  value={form.kind}
-                >
+                <Select onValueChange={value => setForm(f => ({ ...f, kind: value as VaultKind }))} value={form.kind}>
                   <SelectTrigger className={CONTROL_TEXT} id="vault-kind">
                     <SelectValue />
                   </SelectTrigger>
