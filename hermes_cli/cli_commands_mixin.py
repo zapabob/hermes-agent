@@ -2140,6 +2140,33 @@ class CLICommandsMixin:
         else:  # pragma: no cover - defensive (no live input loop)
             print("  /learn needs an active chat session to run.")
 
+    def _handle_plan_command(self, cmd: str):
+        """Handle /plan — write a markdown implementation plan, no execution.
+
+        Mirrors /learn: build the plan-mode prompt and inject it onto the
+        agent's input queue as a normal user turn. The live agent inspects
+        the workspace with read-only tools and saves the plan under
+        ``.hermes/plans/`` via ``write_file``. No engine, no model-tool
+        footprint, works on any terminal backend, and preserves prompt-cache
+        invariants (no system prompt or history mutation).
+        """
+        from agent.plan_prompt import build_plan_prompt
+
+        # Everything after the command word is the task to plan (optional —
+        # empty infers the task from conversation context).
+        parts = cmd.strip().split(None, 1)
+        task = parts[1].strip() if len(parts) > 1 else ""
+
+        msg = build_plan_prompt(task)
+        if task:
+            print(f"\n📋 Planning: {task[:80]}{'...' if len(task) > 80 else ''}")
+        else:
+            print("\n📋 Planning from this conversation's context...")
+        if hasattr(self, "_pending_input"):
+            self._pending_input.put(msg)
+        else:  # pragma: no cover - defensive (no live input loop)
+            print("  /plan needs an active chat session to run.")
+
     def _handle_init_command(self, cmd: str):
         """Handle /init — generate or update AGENTS.md from a project scan.
 
@@ -2200,7 +2227,7 @@ class CLICommandsMixin:
         save_config_value(f"{subsystem}.write_approval", bool(enabled))
 
     def _handle_background_command(self, cmd: str):
-        """Handle /background <prompt> — run a prompt in a separate background session.
+        """Handle /bg <prompt> — run a prompt in a separate background session.
 
         Spawns a new AIAgent in a background thread with its own session.
         When it completes, prints the result to the CLI without modifying
@@ -2209,8 +2236,9 @@ class CLICommandsMixin:
         from cli import AIAgent, ChatConsole, _accent_hex, _cprint, _maybe_remap_for_light_mode, _render_final_assistant_content, set_approval_callback, set_secret_capture_callback, set_sudo_password_callback
         parts = cmd.strip().split(maxsplit=1)
         if len(parts) < 2 or not parts[1].strip():
-            _cprint("  Usage: /background <prompt>")
-            _cprint("  Example: /background Summarize the top HN stories today")
+            _cprint("  Usage: /bg <prompt>")
+            _cprint("  Example: /bg Summarize the top HN stories today")
+            _cprint("  (For a side question about this conversation, use /btw <question>.)")
             _cprint("  The task runs in a separate session and results display here when done.")
             return
 
@@ -2353,6 +2381,101 @@ class CLICommandsMixin:
         thread = threading.Thread(target=run_background, daemon=True, name=f"bg-task-{task_id}")
         self._background_tasks[task_id] = thread
         thread.start()
+
+    def _handle_btw_command(self, cmd: str):
+        """Handle /btw <question> — answer a side question about this conversation.
+
+        Snapshots the live conversation history and asks a one-shot auxiliary
+        LLM call (same model as the session by default) to answer the question
+        against that snapshot. The live session is never touched: no history
+        mutation, no role-alternation risk, no prompt-cache invalidation. The
+        current turn keeps running; the answer prints when ready.
+        """
+        from cli import ChatConsole, _accent_hex, _cprint
+
+        parts = cmd.strip().split(maxsplit=1)
+        if len(parts) < 2 or not parts[1].strip():
+            _cprint("  Usage: /btw <question>")
+            _cprint("  Example: /btw which file was that error in?")
+            _cprint("  Answers a quick question about this conversation without interrupting it.")
+            _cprint("  (For an independent background task, use /bg <prompt>.)")
+            return
+
+        question = parts[1].strip()
+
+        if not self._ensure_runtime_credentials():
+            _cprint("  (>_<) Cannot answer side question: no valid credentials.")
+            return
+
+        # Snapshot NOW, on the UI thread — the foreground turn keeps appending
+        # to conversation_history while the worker runs.
+        history_snapshot = list(self.conversation_history or [])
+        # Live agent → cache-parity fork (full context, warm cache reads).
+        parent_agent = self.agent
+        turn_route = self._resolve_turn_agent_config(question)
+        main_runtime = {
+            "model": turn_route["model"],
+            "provider": turn_route["runtime"].get("provider"),
+            "base_url": turn_route["runtime"].get("base_url"),
+            "api_key": turn_route["runtime"].get("api_key"),
+            "api_mode": turn_route["runtime"].get("api_mode"),
+        }
+
+        preview = question[:60] + ("..." if len(question) > 60 else "")
+        _cprint(f"  💬 Side question: \"{preview}\"")
+        _cprint("  Answering from a snapshot of this conversation — the current work continues.\n")
+
+        def run_side_question():
+            try:
+                from agent.side_question import answer_side_question
+                answer = answer_side_question(
+                    question,
+                    history_snapshot,
+                    parent_agent=parent_agent,
+                    main_runtime=main_runtime,
+                )
+                if self._app:
+                    self._app.invalidate()
+                    time.sleep(0.05)
+                print()
+                ChatConsole().print(f"[{_accent_hex()}]{'─' * 40}[/]")
+                _cprint(f"  💬 /btw: \"{preview}\"")
+                ChatConsole().print(f"[{_accent_hex()}]{'─' * 40}[/]")
+                if answer:
+                    from cli import _maybe_remap_for_light_mode, _render_final_assistant_content
+                    try:
+                        from hermes_cli.skin_engine import get_active_skin
+                        _skin = get_active_skin()
+                        label = _skin.get_branding("response_label", "⚕ Hermes")
+                        _resp_color = _maybe_remap_for_light_mode(_skin.get_color("response_border", "#CD7F32"))
+                        _resp_text = _maybe_remap_for_light_mode(_skin.get_color("banner_text", "#FFF8DC"))
+                    except Exception:
+                        label = "⚕ Hermes"
+                        _resp_color = "#CD7F32"
+                        _resp_text = "#FFF8DC"
+                    ChatConsole().print(Panel(
+                        _render_final_assistant_content(answer, mode=self.final_response_markdown),
+                        title=f"[{_resp_color} bold]{label} (btw)[/]",
+                        title_align="left",
+                        border_style=_resp_color,
+                        style=_resp_text,
+                        box=rich_box.HORIZONTALS,
+                        padding=(1, 4),
+                        width=self._scrollback_box_width(),
+                    ))
+                else:
+                    _cprint("  (No answer generated)")
+            except Exception as e:
+                if self._app:
+                    self._app.invalidate()
+                    time.sleep(0.05)
+                print()
+                _cprint(f"  ❌ /btw failed: {e}")
+            finally:
+                if self._app:
+                    self._invalidate(min_interval=0)
+
+        threading.Thread(target=run_side_question, daemon=True, name="btw-side-question").start()
 
     def _handle_bundles_command(self, cmd: str) -> None:
         """In-session ``/bundles`` — show installed skill bundles.

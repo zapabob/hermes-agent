@@ -3598,7 +3598,7 @@ class GatewaySlashCommandsMixin:
         return f"```diff\n{diff}{note}\n```"
 
     async def _handle_background_command(self, event: MessageEvent) -> str:
-        """Handle /background <prompt> — run a prompt in a separate background session.
+        """Handle /bg <prompt> — run a prompt in a separate background session.
 
         Spawns a new AIAgent in a background thread with its own session.
         When it completes, sends the result back to the same chat without
@@ -3633,6 +3633,101 @@ class GatewaySlashCommandsMixin:
 
         preview = prompt[:60] + ("..." if len(prompt) > 60 else "")
         return t("gateway.background.started", preview=preview, task_id=task_id)
+
+    async def _handle_btw_command(self, event: MessageEvent) -> str:
+        """Handle /btw <question> — answer a side question about this conversation.
+
+        Snapshots the session transcript and answers the question with a
+        one-shot auxiliary LLM call (main model by default) — the live
+        session's history is never touched, so role alternation and the
+        prompt cache stay intact and the current turn keeps running. The
+        answer is delivered to the chat when ready.
+
+        Deliberately different from /bg, which spawns a fresh contextless
+        agent session for independent work.
+        """
+        question = event.get_command_args().strip()
+        if not question:
+            return t("gateway.btw.usage")
+
+        source = event.source
+        session_entry = await self.async_session_store.get_or_create_session(source)
+        history = await self.async_session_store.load_transcript(session_entry.session_id)
+        if not history:
+            return t("gateway.btw.no_history")
+
+        try:
+            model, runtime_kwargs = self._resolve_session_agent_runtime(
+                source=source,
+            )
+        except Exception:
+            model, runtime_kwargs = None, {}
+        if not runtime_kwargs.get("api_key"):
+            return t("gateway.btw.no_provider")
+
+        main_runtime = {
+            "model": model,
+            "provider": runtime_kwargs.get("provider"),
+            "base_url": runtime_kwargs.get("base_url"),
+            "api_key": runtime_kwargs.get("api_key"),
+            "api_mode": runtime_kwargs.get("api_mode"),
+        }
+        history_snapshot = list(history)
+        # Prefer the cache-parity fork when this chat has a live cached
+        # AIAgent: the fork replays the snapshot against the warm provider
+        # prefix cache (same mechanism as the background self-improvement
+        # review), giving the side answer FULL conversation context at
+        # cache-read prices. If no cached agent exists (evicted / first
+        # message), the provider cache is cold anyway — the one-shot digest
+        # fallback inside answer_side_question handles it.
+        parent_agent = None
+        try:
+            session_key = self._session_key_for_source(source)
+            _cache_lock = getattr(self, "_agent_cache_lock", None)
+            if _cache_lock is not None:
+                with _cache_lock:
+                    _cached = self._agent_cache.get(session_key)
+                    parent_agent = (
+                        _cached[0] if isinstance(_cached, tuple) else _cached
+                    ) or None
+        except Exception:
+            parent_agent = None
+        event_message_id = self._reply_anchor_for_event(event)
+        _thread_metadata = self._thread_metadata_for_source(source, event_message_id)
+        adapter = self._adapter_for_source(source)
+        preview = question[:60] + ("..." if len(question) > 60 else "")
+
+        async def _run_side_question() -> None:
+            from agent.side_question import answer_side_question
+            try:
+                answer = await asyncio.to_thread(
+                    answer_side_question,
+                    question,
+                    history_snapshot,
+                    parent_agent=parent_agent,
+                    main_runtime=main_runtime,
+                )
+            except Exception as e:
+                logger.warning("/btw side question failed: %s", e)
+                if adapter is not None:
+                    await adapter.send(
+                        source.chat_id,
+                        t("gateway.btw.failed", preview=preview, error=str(e)),
+                        metadata=_thread_metadata,
+                    )
+                return
+            if adapter is not None:
+                await adapter.send(
+                    source.chat_id,
+                    t("gateway.btw.answer", preview=preview, answer=answer or ""),
+                    metadata=_thread_metadata,
+                )
+
+        _task = asyncio.create_task(_run_side_question())
+        self._background_tasks.add(_task)
+        _task.add_done_callback(self._background_tasks.discard)
+
+        return t("gateway.btw.started", preview=preview)
 
     def _save_gateway_config_key(self, key_path: str, value) -> bool:
         """Save a dot-separated key to config.yaml (shared by /reasoning, /fast

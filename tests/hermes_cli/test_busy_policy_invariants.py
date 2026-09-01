@@ -23,7 +23,8 @@ _HISTORICAL_BYPASS_NAMES = frozenset(
     {
         "agents",
         "approve",
-        "background",
+        "bg",
+        "btw",
         "commands",
         "deny",
         "help",
@@ -61,5 +62,4 @@ def test_interrupt_then_dispatch_class():
     assert not is_interrupt_then_dispatch("status")
     assert not is_interrupt_then_dispatch(None)
     assert not is_interrupt_then_dispatch("not-a-command")
-
 
