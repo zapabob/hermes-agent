@@ -12,9 +12,10 @@
  *   2. When asked to apply (an explicit change), requests the switch via
  *      `$pendingSkinApply`, which the ThemeProvider drains through `setTheme`.
  *
- * `gateway.ready` seeds the baseline WITHOUT applying, so a fresh connect never
- * stomps the user's persisted desktop theme; only a genuine name change (Hermes
- * authoring/activating a skin from a prompt, or `/skin` elsewhere) repaints.
+ * `gateway.ready` normally seeds the baseline without applying. A new Desktop
+ * profile with no saved appearance may adopt the backend skin once; reconnects
+ * preserve the user's persisted choice. Genuine runtime changes (Hermes
+ * authoring/activating a skin from a prompt, or `/skin` elsewhere) repaint.
  */
 
 import { registryBackendScopeKey } from '@hermes/shared'
@@ -82,10 +83,11 @@ export function __resetBackendSkinSync(): void {
 }
 
 /**
- * Fold a resolved skin into the desktop. `apply: false` (connect-time seed) only
- * records the baseline; `apply: true` (runtime change / poll) repaints on a name
- * change. Built-in names keep the desktop's own palette while still accepting
- * wallpaper, fit, position, and overlay from the canonical backend skin.
+ * Fold a resolved skin into the desktop. `apply: false` only records the
+ * connect-time baseline; `apply: true` handles a runtime change or the one-time
+ * adoption by a profile with no saved appearance. Built-in names keep the
+ * desktop's own palette while still accepting wallpaper, fit, position, and
+ * overlay from the canonical backend skin.
  */
 export function ingestBackendSkin(
   skin: HermesSkin | undefined | null,

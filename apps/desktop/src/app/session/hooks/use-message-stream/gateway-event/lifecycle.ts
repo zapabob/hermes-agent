@@ -13,6 +13,7 @@ import {
 import { dropSessionState, unbindTileRuntime } from '@/store/session-states'
 // Leaf import (not the `@/themes` barrel) to avoid pulling the ThemeProvider
 // module graph into the gateway event hot path.
+import { hasStoredSkinPreference } from '@/themes/appearance-storage'
 import { ingestBackendSkin } from '@/themes/backend-sync'
 
 import type { GatewayEventContext } from './types'
@@ -22,13 +23,13 @@ export function handleLifecycleEvent(ctx: GatewayEventContext): boolean {
   const { deps, event, payload, fromActiveSource } = ctx
 
   if (event.type === 'gateway.ready') {
-    // Seed the active skin into the desktop theme registry without applying,
-    // so a fresh connect never overrides the user's persisted desktop theme.
+    const scope =
+      ctx.sourceScope ??
+      gatewayScope(event.connectionId ?? activeGatewayConnectionId(), event.profile ?? deps.activeGatewayProfile)
+
     ingestBackendSkin((payload as { skin?: HermesSkin } | undefined)?.skin, {
-      apply: false,
-      scope:
-        ctx.sourceScope ??
-        gatewayScope(event.connectionId ?? activeGatewayConnectionId(), event.profile ?? deps.activeGatewayProfile)
+      apply: fromActiveSource() && !hasStoredSkinPreference(scope.profile),
+      scope
     })
     // Backends with the change watcher broadcast pet/cron/sessions change
     // events; consumers demote their legacy polls to slow backstops.

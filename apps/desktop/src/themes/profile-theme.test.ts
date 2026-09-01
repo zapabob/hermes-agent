@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
+import { hasStoredSkinPreference } from './appearance-storage'
 import { modePref, skinPref } from './context'
 import { DEFAULT_SKIN_NAME } from './presets'
 
@@ -62,5 +63,26 @@ describe('a profile that has never chosen a mode', () => {
   it('still honours an explicit choice', () => {
     modePref.assign('default', 'light')
     expect(modePref.resolve('default')).toBe('light')
+  })
+})
+
+describe('backend skin adoption', () => {
+  beforeEach(() => window.localStorage.clear())
+
+  it('adopts the configured backend skin only before Desktop has a choice', () => {
+    expect(hasStoredSkinPreference('default')).toBe(false)
+    expect(hasStoredSkinPreference('work')).toBe(false)
+
+    skinPref.assign('default', 'ember')
+
+    expect(hasStoredSkinPreference('default')).toBe(true)
+    expect(hasStoredSkinPreference('work')).toBe(true)
+  })
+
+  it('recognizes a named profile assignment without changing the default slot', () => {
+    skinPref.assign('work', 'ember')
+
+    expect(hasStoredSkinPreference('work')).toBe(true)
+    expect(hasStoredSkinPreference('default')).toBe(false)
   })
 })
