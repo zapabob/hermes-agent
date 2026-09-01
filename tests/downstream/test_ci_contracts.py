@@ -121,10 +121,13 @@ def test_release_builds_never_implicitly_publish_from_electron_builder() -> None
     )
 
     builder_commands = [
-        line.strip() for line in commands.splitlines() if "run builder --" in line
+        line.strip()
+        for line in commands.splitlines()
+        if "run builder --" in line or "run-electron-builder.mjs" in line
     ]
     assert len(builder_commands) == 2
     assert all("--publish never" in command for command in builder_commands)
+    assert "$env:GITHUB_WORKSPACE" in builder_commands[1]
 
 
 def test_sandbox_node_trusts_the_local_mitm_ca() -> None:

@@ -130,7 +130,14 @@ jobs:
           try {
             npm ci --no-audit --no-fund
             npm --workspace apps/desktop run build
-            npm --workspace apps/desktop run builder -- --win nsis --publish never --config.directories.output=$baselineOutput
+            Push-Location (Join-Path $baselineRoot 'apps/desktop')
+            try {
+              # Package the historical source with the current invocation
+              # guard so an old wrapper cannot infer publishing under CI.
+              node (Join-Path $env:GITHUB_WORKSPACE 'apps/desktop/scripts/run-electron-builder.mjs') --win nsis --publish never --config.directories.output=$baselineOutput
+            } finally {
+              Pop-Location
+            }
           } finally {
             Pop-Location
           }
