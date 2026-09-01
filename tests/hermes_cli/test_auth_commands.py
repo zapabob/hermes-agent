@@ -890,7 +890,7 @@ def test_logout_resets_codex_config_when_auth_state_already_cleared(tmp_path, mo
     logout_command(SimpleNamespace(provider="openai-codex"))
 
     out = capsys.readouterr().out
-    assert "Logged out of OpenAI Codex." in out
+    assert "Logged out of OpenAI Codex (ChatGPT subscription)." in out
     config_text = (hermes_home / "config.yaml").read_text()
     assert "provider: auto" in config_text
     assert "base_url: https://openrouter.ai/api/v1" in config_text

@@ -1479,10 +1479,16 @@ def _run_agent_browser_capture(argv: list[str], timeout: float):
         "env": _build_browser_env(),
     }
     if not _is_windows():
-        return subprocess.run(argv, capture_output=True, **kwargs)
+        return subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, **kwargs)
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as stdout_file, \
          tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as stderr_file:
-        proc = subprocess.run(argv, stdout=stdout_file, stderr=stderr_file, **kwargs)
+        proc = subprocess.run(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=stdout_file,
+            stderr=stderr_file,
+            **kwargs,
+        )
         stdout_file.seek(0)
         stderr_file.seek(0)
         return subprocess.CompletedProcess(

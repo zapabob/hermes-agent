@@ -122,7 +122,7 @@ class TestTencentTokenhubModelCatalog:
 
     def test_default_model(self):
         from hermes_cli.models import get_default_model_for_provider
-        assert get_default_model_for_provider("tencent-tokenhub") == "hy3-preview"
+        assert get_default_model_for_provider("tencent-tokenhub") == "hy4-preview"
 
 
 # =============================================================================
@@ -134,10 +134,10 @@ class TestTencentTokenhubCanonicalProvider:
     """Tencent TokenHub appears in the interactive model picker."""
 
 
-    def test_description_contains_hy3(self):
+    def test_description_contains_hy4(self):
         from hermes_cli.models import CANONICAL_PROVIDERS
         entry = next(p for p in CANONICAL_PROVIDERS if p.slug == "tencent-tokenhub")
-        assert "Hy3 Preview" in entry.tui_desc
+        assert "Hy4 preview" in entry.tui_desc
 
 
 # =============================================================================
