@@ -18,22 +18,41 @@ def utc_now() -> str:
 
 
 class SecurityStore:
-    def __init__(self, root: Path | None = None) -> None:
+    def __init__(self, root: Path | None = None, *, read_only: bool = False) -> None:
         self.root = root or (get_hermes_home() / "security")
-        self.root.mkdir(parents=True, exist_ok=True)
         self.path = self.root / "security.db"
+        self.read_only = read_only
         self._lock = threading.RLock()
-        self._initialize()
+        if not self.read_only:
+            self.root.mkdir(parents=True, exist_ok=True)
+            self._initialize()
+
+    @property
+    def available(self) -> bool:
+        return self.path.is_file()
+
+    def _require_writable(self) -> None:
+        if self.read_only:
+            raise RuntimeError("security store is read-only")
 
     @contextmanager
     def connection(self) -> Iterator[sqlite3.Connection]:
-        con = sqlite3.connect(self.path, timeout=30)
+        if self.read_only:
+            if not self.available:
+                raise FileNotFoundError(self.path)
+            con = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True, timeout=30)
+        else:
+            con = sqlite3.connect(self.path, timeout=30)
         con.row_factory = sqlite3.Row
-        con.execute("PRAGMA journal_mode=WAL")
+        if self.read_only:
+            con.execute("PRAGMA query_only=ON")
+        else:
+            con.execute("PRAGMA journal_mode=WAL")
         con.execute("PRAGMA foreign_keys=ON")
         try:
             yield con
-            con.commit()
+            if not self.read_only:
+                con.commit()
         finally:
             con.close()
 
@@ -78,6 +97,8 @@ class SecurityStore:
                         con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
 
     def lookup_hash(self, sha256: str) -> sqlite3.Row | None:
+        if not self.available:
+            return None
         with self.connection() as con:
             return con.execute("SELECT * FROM malware_hashes WHERE sha256=?", (sha256,)).fetchone()
 
@@ -92,6 +113,7 @@ class SecurityStore:
         first_seen: str | None = None,
         last_seen: str | None = None,
     ) -> None:
+        self._require_writable()
         canonical = sha256.strip().lower()
         if len(canonical) != 64 or any(character not in "0123456789abcdef" for character in canonical):
             raise ValueError("sha256 must be 64 lowercase hexadecimal characters")
@@ -117,6 +139,8 @@ class SecurityStore:
             )
 
     def is_allowed(self, sha256: str, path: str) -> bool:
+        if not self.available:
+            return False
         with self.connection() as con:
             row = con.execute(
                 "SELECT 1 FROM allowlist WHERE ((kind='sha256' AND value=?) OR (kind='path' AND value=?)) "
@@ -126,6 +150,8 @@ class SecurityStore:
         return row is not None
 
     def cache_get(self, sha256: str, cache_key: str) -> ScanResult | None:
+        if not self.available:
+            return None
         with self.connection() as con:
             row = con.execute(
                 "SELECT * FROM scan_results WHERE sha256=? AND cache_key=? ORDER BY id DESC LIMIT 1",
@@ -149,6 +175,7 @@ class SecurityStore:
         )
 
     def record_scan(self, result: ScanResult, cache_key: str) -> None:
+        self._require_writable()
         findings = json.dumps([item.to_dict() for item in result.findings], ensure_ascii=False, sort_keys=True)
         versions = json.dumps(result.engine_versions, ensure_ascii=False, sort_keys=True)
         with self._lock, self.connection() as con:
@@ -178,6 +205,7 @@ class SecurityStore:
             )
 
     def event(self, event_type: str, subject: str, verdict: str | None, action: str, details: dict[str, Any]) -> None:
+        self._require_writable()
         with self._lock, self.connection() as con:
             con.execute(
                 "INSERT INTO detection_events(event_type,subject,verdict,action,details_json,created_at) VALUES(?,?,?,?,?,?)",
@@ -185,6 +213,7 @@ class SecurityStore:
             )
 
     def upsert_feed(self, name: str, version: str, status: str, details: dict[str, Any]) -> None:
+        self._require_writable()
         with self._lock, self.connection() as con:
             con.execute(
                 "INSERT INTO feed_state(name,version,updated_at,status,details_json) VALUES(?,?,?,?,?) "
@@ -194,11 +223,21 @@ class SecurityStore:
             )
 
     def feed_versions(self) -> dict[str, str]:
+        if not self.available:
+            return {}
         with self.connection() as con:
             rows = con.execute("SELECT name,version FROM feed_state ORDER BY name").fetchall()
         return {row["name"]: row["version"] for row in rows}
 
     def status_summary(self) -> dict[str, Any]:
+        if not self.available:
+            return {
+                "files_scanned": 0,
+                "detections": 0,
+                "quarantine_count": 0,
+                "last_scan": None,
+                "last_signature_update": None,
+            }
         with self.connection() as con:
             scans = con.execute(
                 "SELECT COUNT(*) AS files_scanned, MAX(scanned_at) AS last_scan FROM scan_results"
@@ -224,6 +263,8 @@ class SecurityStore:
         allowed = {"feed_state", "quarantine_items", "detection_events"}
         if table not in allowed:
             raise ValueError("unsupported table")
+        if not self.available:
+            return []
         order = "created_at" if table != "feed_state" else "updated_at"
         with self.connection() as con:
             rows = con.execute(f"SELECT * FROM {table} ORDER BY {order} DESC LIMIT ?", (limit,)).fetchall()

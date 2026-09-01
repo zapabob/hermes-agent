@@ -32,25 +32,33 @@ def is_reparse_point(path: Path) -> bool:
 
 
 class SecurityService:
-    def __init__(self, store: SecurityStore | None = None, config: dict | None = None) -> None:
-        self.store = store or SecurityStore()
+    def __init__(
+        self,
+        store: SecurityStore | None = None,
+        config: dict | None = None,
+        *,
+        read_only: bool = False,
+    ) -> None:
+        self.store = store or SecurityStore(read_only=read_only)
+        self.read_only = read_only or self.store.read_only
         root_config = config if config is not None else load_config()
         self.config = dict((root_config.get("security") or {}).get("malware") or {})
         timeout = int(self.config.get("scanner_timeout", 30))
         yara_rules = self.store.root / "feeds" / "yara"
-        yara_rules.mkdir(parents=True, exist_ok=True)
-        bundled_rules = Path(__file__).parent / "rules"
-        for bundled in bundled_rules.glob("*.yar"):
-            destination = yara_rules / bundled.name
-            if not destination.exists():
-                shutil.copy2(bundled, destination)
+        if not self.read_only:
+            yara_rules.mkdir(parents=True, exist_ok=True)
+            bundled_rules = Path(__file__).parent / "rules"
+            for bundled in bundled_rules.glob("*.yar"):
+                destination = yara_rules / bundled.name
+                if not destination.exists():
+                    shutil.copy2(bundled, destination)
         self.engines = (
             HashReputationEngine(self.store),
             ClamAVEngine(timeout, self.store.root / "feeds" / "clamav" / "current"),
             YaraEngine(yara_rules, timeout=timeout),
             StaticHeuristicsEngine(),
         )
-        self.vault = QuarantineVault(self.store)
+        self.vault = QuarantineVault(self.store, read_only=self.read_only)
 
     def versions(self) -> dict[str, str]:
         return engine_versions(self.engines)

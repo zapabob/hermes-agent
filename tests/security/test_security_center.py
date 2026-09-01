@@ -104,6 +104,27 @@ def service_for(tmp_path: Path, engine: object) -> SecurityService:
     return service
 
 
+def test_read_only_service_does_not_create_security_state(tmp_path: Path) -> None:
+    root = tmp_path / "security"
+
+    service = SecurityService(SecurityStore(root, read_only=True), {}, read_only=True)
+
+    assert service.status()["summary"]["files_scanned"] == 0
+    assert not root.exists()
+
+
+def test_read_only_store_reads_existing_state_without_writing(tmp_path: Path) -> None:
+    root = tmp_path / "security"
+    writable = SecurityStore(root)
+    writable.upsert_feed("hash_reputation", "2026.09.01", "ok", {})
+
+    read_only = SecurityStore(root, read_only=True)
+
+    assert read_only.feed_versions() == {"hash_reputation": "2026.09.01"}
+    with pytest.raises(RuntimeError, match="read-only"):
+        read_only.upsert_feed("hash_reputation", "changed", "ok", {})
+
+
 def test_unavailable_authoritative_scanner_is_not_clean(tmp_path: Path) -> None:
     target = tmp_path / "sample.txt"
     target.write_text("harmless", encoding="utf-8")
@@ -346,6 +367,20 @@ def test_clamd_failure_falls_back_to_clamscan_with_managed_database(tmp_path: Pa
         findings = ClamAVEngine(database_dir=database).scan(target, hashlib.sha256(target.read_bytes()).hexdigest())
     assert findings[0].score == 90
     assert run.call_args_list[1].args[0][:2] == [commands["clamscan"], f"--database={database}"]
+
+
+def test_explicit_clamav_database_never_falls_back_to_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    managed = tmp_path / "selected-profile" / "feeds" / "clamav" / "current"
+    other_profile = tmp_path / "other-profile" / "feeds" / "clamav" / "current"
+    other_profile.mkdir(parents=True)
+    monkeypatch.setenv("CLAMAV_DATABASE_DIR", str(other_profile))
+
+    engine = ClamAVEngine(database_dir=managed)
+
+    assert engine.database_dir == managed
 
 
 def test_quarantine_tamper_is_rejected_and_metadata_is_complete(tmp_path: Path) -> None:

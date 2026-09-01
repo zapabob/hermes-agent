@@ -68,20 +68,27 @@ class VaultKey:
 
 
 class QuarantineVault:
-    def __init__(self, store: SecurityStore) -> None:
+    def __init__(self, store: SecurityStore, *, read_only: bool = False) -> None:
         self.store = store
         self.root = store.root / "quarantine"
-        self.root.mkdir(parents=True, exist_ok=True)
-        _restrict_windows_acl(self.root, directory=True)
-        self.key = VaultKey(store.root).load_or_create()
+        self.read_only = read_only or store.read_only
+        self.key: bytes | None = None
+        if not self.read_only:
+            self.root.mkdir(parents=True, exist_ok=True)
+            _restrict_windows_acl(self.root, directory=True)
+            self.key = VaultKey(store.root).load_or_create()
 
     def _encrypt(self, source: Path, destination: Path, sha256: str) -> None:
+        if self.key is None:
+            raise RuntimeError("quarantine vault is read-only")
         nonce = os.urandom(12)
         ciphertext = AESGCM(self.key).encrypt(nonce, source.read_bytes(), sha256.encode("ascii"))
         destination.write_bytes(_MAGIC + nonce + ciphertext)
         _restrict_windows_acl(destination)
 
     def _decrypt(self, source: Path, sha256: str) -> bytes:
+        if self.key is None:
+            raise RuntimeError("quarantine vault is read-only")
         payload = source.read_bytes()
         if not payload.startswith(_MAGIC) or len(payload) < len(_MAGIC) + 28:
             raise ValueError("invalid quarantine blob")
@@ -134,6 +141,8 @@ class QuarantineVault:
         return item_id
 
     def inspect(self, item_id: str) -> dict[str, object]:
+        if not self.store.available:
+            raise KeyError(item_id)
         with self.store.connection() as con:
             row = con.execute("SELECT * FROM quarantine_items WHERE id=?", (item_id,)).fetchone()
         if row is None:

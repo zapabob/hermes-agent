@@ -49,7 +49,7 @@ class ClamAVEngine:
         self.command = self.clamd_command or self.clamscan_command
         configured = os.environ.get("CLAMAV_DATABASE_DIR")
         configured_dir = Path(configured) if configured else None
-        if database_dir and database_dir.exists():
+        if database_dir is not None:
             self.database_dir = database_dir
         elif configured_dir and configured_dir.exists():
             self.database_dir = configured_dir
