@@ -4,12 +4,12 @@ Frozen upstream: 5fc308a70719a83cccdbba4c0e39c23f5a8239d5
 
 | Metric | Value |
 | --- | ---: |
-| All fork-specific LOC | 485097 |
-| Upstream-owned fork LOC | 160156 |
-| Fork-owned LOC | 324941 |
-| UTR | 0.330153 |
+| All fork-specific LOC | 485365 |
+| Upstream-owned fork LOC | 160203 |
+| Fork-owned LOC | 325162 |
+| UTR | 0.330067 |
 | Carry Surface | 1369 files |
-| CWC | 451237 |
+| CWC | 452647 |
 
 LOC is added plus deleted lines relative to the frozen upstream tree.
 Generated metric reports are excluded to avoid self-referential totals.
@@ -22,7 +22,7 @@ and 1 for tests, docs, workflows, and generated documentation.
 | --- | ---: | ---: | ---: | ---: |
 | hermes_cli/update_cmd.py | 19 | 1450 | 2 | 55100 |
 | apps/desktop/electron/main.ts | 20 | 918 | 3 | 55080 |
-| hermes_cli/web_server.py | 15 | 1647 | 2 | 49410 |
+| hermes_cli/web_server.py | 15 | 1694 | 2 | 50820 |
 | apps/desktop/src/plugins/hermes-bots/plugin.js | 18 | 902 | 2 | 32472 |
 | tui_gateway/server.py | 10 | 814 | 2 | 16280 |
 | hermes_cli/models.py | 9 | 584 | 2 | 10512 |
