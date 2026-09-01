@@ -5,6 +5,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 SCRIPT_PATH = (
     Path(__file__).resolve().parents[2]
@@ -260,7 +262,10 @@ def test_symlinked_config_stays_a_symlink(tmp_path: Path):
                     encoding="utf-8")
     migrator, config_path = _allowlist_migrator(mod, tmp_path, "placeholder: true\n")
     config_path.unlink()
-    config_path.symlink_to(real)
+    try:
+        config_path.symlink_to(real)
+    except OSError as exc:
+        pytest.skip(f"symlink creation is unavailable: {exc}")
 
     migrator.migrate()
 
@@ -652,20 +657,15 @@ def test_skill_installs_cleanly_under_skills_guard():
         source="official/migration/openclaw-migration",
     )
 
-    # The migration script has several known false-positive findings from the
-    # security scanner.  None represent actual threats — they are all legitimate
-    # uses in a migration CLI tool:
-    #
-    # agent_config_mod   — references AGENTS.md to migrate workspace instructions
-    # python_os_environ  — reads MIGRATION_JSON_OUTPUT to enable JSON output mode
-    #                      (feature flag, not an env dump)
-    # hermes_config_mod  — print statements in the post-migration summary that
-    #                      tell the user to *review* ~/.hermes/config.yaml;
-    #                      the script never writes to that file
-    #
-    # Accept "caution" or "safe" — just not "dangerous" from a *real* threat.
-    assert result.verdict in {"safe", "caution", "dangerous"}, f"Unexpected verdict: {result.verdict}"
-    KNOWN_FALSE_POSITIVES = {"agent_config_mod", "python_os_environ", "hermes_config_mod"}
+    # The migration script's references to agent config files are legitimate:
+    # it mentions AGENTS.md to migrate workspace instructions and points the
+    # user at ~/.hermes/config.yaml in its post-migration summary — it never
+    # writes to either. Under skills-guard-v2 (#92021) these score as
+    # informational _ref findings (the old critical agent_config_mod /
+    # hermes_config_mod findings no longer fire for bare mentions), so the
+    # verdict is "safe" with no modification-intent findings at all.
+    assert result.verdict == "safe", f"Unexpected verdict: {result.verdict}"
+    KNOWN_FALSE_POSITIVES = {"agent_config_ref", "hermes_config_ref"}
     for f in result.findings:
         assert f.pattern_id in KNOWN_FALSE_POSITIVES, f"Unexpected finding: {f}"
 
@@ -818,7 +818,4 @@ def test_messaging_settings_handles_invalid_utf8_in_telegram_allowlist(tmp_path:
     assert items and items[0]["status"] == "migrated"
     env_text = (target / ".env").read_text(encoding="utf-8")
     assert "123456789" in env_text
-
-
-
 

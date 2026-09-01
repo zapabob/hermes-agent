@@ -11,6 +11,8 @@ The live profile on disk must stay untouched.
 
 import tarfile
 
+import pytest
+
 from hermes_cli.profiles import export_profile, _DEFAULT_EXPORT_EXCLUDE_ROOT
 
 # Long enough to match agent.redact prefix patterns (sk- + 10+ chars).
@@ -116,14 +118,17 @@ class TestExportSecretScrub:
         profile_dir.mkdir(parents=True)
 
         outside = tmp_path / "outside-skill.md"
-        outside.write_text(f"secret {_LEAKED_KEY}\n")
+        outside.write_text(f"secret {_LEAKED_KEY}\n", encoding="utf-8")
 
         skill_dir = profile_dir / "skills" / "linked"
         skill_dir.mkdir(parents=True)
         link = skill_dir / "SKILL.md"
-        link.symlink_to(outside)
+        try:
+            link.symlink_to(outside)
+        except OSError as exc:
+            pytest.skip(f"symlink creation is unavailable: {exc}")
 
-        (profile_dir / "config.yaml").write_text("model: gpt-4\n")
+        (profile_dir / "config.yaml").write_text("model: gpt-4\n", encoding="utf-8")
         _patch_named_profile(monkeypatch, profiles_root, profile_dir)
 
         result = export_profile("linkme", str(tmp_path / "linkme.tar.gz"))
@@ -134,5 +139,5 @@ class TestExportSecretScrub:
             archived = tf.extractfile(skill_members[0]).read().decode("utf-8")
 
         assert _LEAKED_KEY not in archived
-        assert _LEAKED_KEY in outside.read_text()
+        assert _LEAKED_KEY in outside.read_text(encoding="utf-8")
         assert link.is_symlink()

@@ -38,7 +38,7 @@ _STOCK_NPM_BY_NODE_MAJOR = {
 
 
 def _root_manifest() -> dict:
-    return json.loads((REPO_ROOT / "package.json").read_text())
+    return json.loads((REPO_ROOT / "package.json").read_text(encoding="utf-8"))
 
 
 def _parse_major_minor_patch(version: str) -> tuple[int, int, int]:
@@ -109,7 +109,7 @@ class TestEnginesAreSatisfiable:
     def test_node_floor_is_met_by_the_managed_runtime(self):
         """The Node major the installers provision must clear engines.node."""
         node_range = _root_manifest()["engines"]["node"]
-        install_sh = (REPO_ROOT / "scripts" / "install.sh").read_text()
+        install_sh = (REPO_ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
         for line in install_sh.splitlines():
             if line.startswith("NODE_VERSION="):
                 managed_major = int(line.split("=", 1)[1].strip().strip('"').strip("'"))
@@ -138,7 +138,7 @@ class TestEnginesAreSatisfiable:
         `npm ci` with EBADENGINE (#80769).
         """
         npm_range = _root_manifest()["engines"]["npm"]
-        install_sh = (REPO_ROOT / "scripts" / "install.sh").read_text()
+        install_sh = (REPO_ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
         for line in install_sh.splitlines():
             if line.startswith("NODE_VERSION="):
                 managed_major = int(line.split("=", 1)[1].strip().strip('"').strip("'"))
@@ -163,7 +163,11 @@ class TestEnginesAreSatisfiable:
         the desktop floor beyond it silently force-migrates every user's
         toolchain for no dependency reason.
         """
-        desktop = json.loads((REPO_ROOT / "apps" / "desktop" / "package.json").read_text())
+        desktop = json.loads(
+            (REPO_ROOT / "apps" / "desktop" / "package.json").read_text(
+                encoding="utf-8"
+            )
+        )
         node_range = desktop["engines"]["node"]
         # The tightest floor any dependency actually declares (react-router
         # 8.3.0 -> >=22.22.0). If this legitimately rises, the assertion
@@ -206,5 +210,5 @@ class TestManifestMirrors:
     def test_lockfile_engines_match_the_manifest(self):
         """A stale lockfile mirror re-imposes the old floor on `npm ci`."""
         manifest = _root_manifest()["engines"]
-        lock = json.loads((REPO_ROOT / "package-lock.json").read_text())
+        lock = json.loads((REPO_ROOT / "package-lock.json").read_text(encoding="utf-8"))
         assert lock["packages"][""]["engines"] == manifest
