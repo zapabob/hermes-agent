@@ -2896,7 +2896,7 @@ class TestAuxiliaryAuthRefreshRetry:
                 {cache_key: (stale_client, "claude-haiku-4-5-20251001", None)},
             ),
             patch(
-                "agent.anthropic_adapter.read_claude_code_credentials",
+                "agent.anthropic_credentials.read_claude_code_credentials",
                 return_value={
                     "accessToken": "expired-token",
                     "refreshToken": "refresh-token",
@@ -2904,7 +2904,7 @@ class TestAuxiliaryAuthRefreshRetry:
                 },
             ),
             patch(
-                "agent.anthropic_adapter.refresh_anthropic_oauth_pure",
+                "agent.anthropic_credentials.refresh_anthropic_oauth_pure",
                 return_value={
                     "access_token": "fresh-token",
                     "refresh_token": "refresh-token-2",
@@ -2912,7 +2912,7 @@ class TestAuxiliaryAuthRefreshRetry:
                 },
             ) as mock_refresh_oauth,
             patch(
-                "agent.anthropic_adapter._write_claude_code_credentials"
+                "agent.anthropic_credentials._write_claude_code_credentials"
             ) as mock_write,
         ):
             from agent.auxiliary_client import _refresh_provider_credentials

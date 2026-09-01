@@ -34,7 +34,7 @@ def test_load_heals_legacy_row_and_exposes_it_to_resolver(tmp_path, monkeypatch)
     for key in ("ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(
-        "agent.anthropic_adapter.read_claude_code_credentials",
+        "agent.anthropic_credentials.read_claude_code_credentials",
         lambda: None,
     )
     token = "sk-ant-oat-legacy-manual"
@@ -61,5 +61,4 @@ def test_load_heals_legacy_row_and_exposes_it_to_resolver(tmp_path, monkeypatch)
     assert entry.auth_type == AUTH_TYPE_OAUTH
     assert persisted["credential_pool"]["anthropic"][0]["auth_type"] == AUTH_TYPE_OAUTH
     assert resolve_anthropic_token() == token
-
 
