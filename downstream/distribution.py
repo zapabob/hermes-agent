@@ -11,6 +11,10 @@ from urllib.parse import quote
 
 _METADATA_PATH = Path(__file__).with_name("distribution.json")
 _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
+_SEMVER = re.compile(
+    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
+    r"(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"
+)
 
 
 @dataclass(frozen=True)
@@ -26,6 +30,8 @@ class RepositoryMetadata:
 @dataclass(frozen=True)
 class UpstreamMetadata:
     slug: str
+    version: str
+    release_commit_sha: str
     snapshot_sha: str
 
 
@@ -54,6 +60,7 @@ class DistributionMetadata:
     id: str
     display_name: str
     version: str
+    version_source: str
     repository: RepositoryMetadata
     upstream: UpstreamMetadata
     platform: PlatformMetadata
@@ -85,7 +92,19 @@ def load_distribution(path: Path | None = None) -> DistributionMetadata:
     channels = _require_mapping(root.get("channels"), "channels")
     update = _require_mapping(root.get("update"), "update")
 
+    version = _require_string(root, "version")
+    version_source = _require_string(root, "version_source")
+    upstream_version = _require_string(upstream, "version")
+    release_commit_sha = _require_string(upstream, "release_commit_sha").lower()
     snapshot_sha = _require_string(upstream, "snapshot_sha").lower()
+    if version_source != "upstream":
+        raise ValueError("distribution.version_source must be 'upstream'")
+    if not _SEMVER.fullmatch(version):
+        raise ValueError("distribution.version must be a semantic version")
+    if version != upstream_version:
+        raise ValueError("distribution.version must match upstream.version")
+    if not _FULL_SHA.fullmatch(release_commit_sha):
+        raise ValueError("upstream.release_commit_sha must be a 40-character lowercase SHA")
     if not _FULL_SHA.fullmatch(snapshot_sha):
         raise ValueError("upstream.snapshot_sha must be a 40-character lowercase SHA")
 
@@ -114,7 +133,8 @@ def load_distribution(path: Path | None = None) -> DistributionMetadata:
         schema_version=int(root.get("schema_version", 0)),
         id=_require_string(root, "id"),
         display_name=_require_string(root, "display_name"),
-        version=_require_string(root, "version"),
+        version=version,
+        version_source=version_source,
         repository=RepositoryMetadata(
             slug=_require_string(repository, "slug"),
             web=_require_string(repository, "web"),
@@ -125,6 +145,8 @@ def load_distribution(path: Path | None = None) -> DistributionMetadata:
         ),
         upstream=UpstreamMetadata(
             slug=_require_string(upstream, "slug"),
+            version=upstream_version,
+            release_commit_sha=release_commit_sha,
             snapshot_sha=snapshot_sha,
         ),
         platform=PlatformMetadata(

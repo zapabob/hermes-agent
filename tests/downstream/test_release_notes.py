@@ -6,7 +6,7 @@ from downstream.release_notes import render_release_notes
 def test_release_notes_are_truthful_deterministic_and_complete() -> None:
     manifest = {
         "product_name": "Hermes Agent Windows Workstation Edition",
-        "downstream_version": "0.20.5-win.1",
+        "downstream_version": "0.21.0",
         "downstream_commit_sha": "a" * 40,
         "upstream_snapshot_sha": "b" * 40,
         "release_channel": "stable",

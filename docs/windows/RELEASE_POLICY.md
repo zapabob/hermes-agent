@@ -4,20 +4,23 @@ Official Hermes is the innovation stream. Hermes Agent Windows Workstation
 Edition is a qualified downstream baseline for native Windows workstations.
 The two projects retain separate release, issue, and support authorities.
 
-## Frozen release trains
+## Upstream-aligned release trains
 
-A release train starts from one exact upstream commit:
+A release train starts from one exact official release and retains its semantic
+version without a downstream suffix:
 
 ```text
-upstream vX.Y.Z
-  -> Windows vX.Y.Z-win.1
-  -> Windows vX.Y.Z-win.2
+official Hermes vX.Y.Z
+  -> Windows qualification at vX.Y.Z
+  -> downstream revision identified by its commit SHA
 ```
 
 The train may contain selected security backports, Windows-critical fixes, and
-downstream feature fixes. It never follows moving upstream `main`. Every
-manifest records the upstream SHA, downstream SHA, distribution version,
+downstream feature fixes. It never follows moving upstream `main`, and it does
+not mint an independent semantic-version series. Every manifest records the
+official version and release commit, frozen upstream SHA, downstream SHA,
 channel, architecture, artifact hashes, signing state, and qualification state.
+The official release history and changelog are the version authority.
 
 ## Stable and preview
 
@@ -35,8 +38,9 @@ and is never inferred from GitHub-hosted runners.
 ## Publication
 
 Main-branch pushes build and qualify preview artifacts but do not publish a
-public GitHub Release. Only a version tag matching the distribution metadata,
-such as `v0.20.5-win.1`, may publish the stable bundle. The release contains the
+public GitHub Release. Only a version tag matching the official-form
+distribution metadata, such as `v0.21.0`, may publish the stable bundle. The
+release contains the
 NSIS installer, portable ZIP, `release-manifest.json`, `SHA256SUMS.txt`, release
 notes, qualification reports, and upgrade-baseline identity.
 

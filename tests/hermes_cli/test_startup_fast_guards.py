@@ -87,7 +87,7 @@ def test_fast_version_parity_off_termux(tmp_path):
     out = result.stdout
     for field in (
         "Hermes Agent v",
-        "Distribution: Hermes Agent Windows Workstation Edition 0.20.5-win.1",
+        "Distribution: Hermes Agent Windows Workstation Edition 0.21.0",
         f"Frozen upstream: {UPSTREAM_SNAPSHOT_SHA[:12]}",
         "Downstream revision:",
         "Update channel: stable",

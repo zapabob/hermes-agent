@@ -13,7 +13,7 @@ unrelated Python, Node, or Electron processes.
 
 ## Antivirus or SmartScreen warning
 
-The `0.20.5-win.1` candidate is unsigned unless its manifest says otherwise.
+The `0.21.0` candidate is unsigned unless its manifest says otherwise.
 Verify the SHA-256 hash and GitHub provenance, then submit a false-positive
 sample to the security vendor when appropriate. Do not disable real-time
 protection globally and do not add a broad drive exclusion.

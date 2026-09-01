@@ -103,8 +103,10 @@ procedure is in the [Windows installation guide](docs/windows/INSTALL.md).
 - External Go watchdog for bounded Desktop/backend and optional embedding recovery.
 - Consumer NVIDIA workstation evidence kept separate from GPU-free hosted CI.
 
-Release candidate: `0.20.5-win.1`. Supported channels: `stable` and `preview`.
-Qualified artifacts are published only from the matching version tag on the
+Release candidate: `0.21.0`. This version follows the official Hermes release;
+downstream revisions are identified by commit SHA rather than a forked version
+suffix. Supported channels are `stable` and `preview`. Qualified artifacts are
+published only from the matching official-form version tag on the
 [downstream Releases page](https://github.com/zapabob/hermes-agent-windows/releases).
 Until the first stable asset is present there, use the source route above. See
 the [release policy](docs/windows/RELEASE_POLICY.md) and

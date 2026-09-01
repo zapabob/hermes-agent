@@ -11,7 +11,7 @@ explicit `-DemoRoot` must not already exist.
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File `
   scripts\demo\windows-demo.ps1 `
-  -InstallerPath .\Hermes-Agent-Windows-0.20.5-win.1-x64-Setup.exe `
+  -InstallerPath .\Hermes-Agent-Windows-0.21.0-x64-Setup.exe `
   -DemoRoot "$env:TEMP\HermesWindowsWorkstationDemo"
 ```
 
@@ -27,7 +27,7 @@ Start the local model first, close every non-demo `Hermes.exe`, then run:
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File `
   scripts\demo\windows-demo.ps1 `
-  -InstallerPath .\Hermes-Agent-Windows-0.20.5-win.1-x64-Setup.exe `
+  -InstallerPath .\Hermes-Agent-Windows-0.21.0-x64-Setup.exe `
   -ModelId local-model `
   -RunConversation `
   -ExerciseRecovery

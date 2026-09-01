@@ -27,7 +27,7 @@ Run the collector from the exact candidate checkout:
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File `
   scripts\windows\Get-HermesWorkstationQualification.ps1 `
-  -ArtifactPath .\Hermes-Agent-Windows-0.20.5-win.1-x64-Setup.exe `
+  -ArtifactPath .\Hermes-Agent-Windows-0.21.0-x64-Setup.exe `
   -SleepResumeResult passed `
   -RestartRecoveryResult passed `
   -OutputPath .\workstation-qualification.json

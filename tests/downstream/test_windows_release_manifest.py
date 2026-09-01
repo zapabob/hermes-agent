@@ -55,7 +55,7 @@ def test_release_bundle_contains_required_identity_hashes_and_truthful_signing(
 
     assert manifest["product_name"] == "Hermes Agent Windows Workstation Edition"
     assert manifest["distribution_id"] == "hermes-agent-windows"
-    assert manifest["downstream_version"] == "0.20.5-win.1"
+    assert manifest["downstream_version"] == "0.21.0"
     assert manifest["downstream_commit_sha"] == "a" * 40
     assert manifest["upstream_snapshot_sha"] == UPSTREAM_SNAPSHOT_SHA
     assert manifest["release_channel"] == "stable"

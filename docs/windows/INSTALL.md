@@ -21,11 +21,11 @@ Download the `Hermes-Agent-Windows-<version>-x64-Setup.exe`,
 Confirm the digest before running the installer:
 
 ```powershell
-Get-FileHash .\Hermes-Agent-Windows-0.20.5-win.1-x64-Setup.exe -Algorithm SHA256
+Get-FileHash .\Hermes-Agent-Windows-0.21.0-x64-Setup.exe -Algorithm SHA256
 Get-Content .\SHA256SUMS.txt
 ```
 
-The current `0.20.5-win.1` candidate is intentionally represented as unsigned
+The current `0.21.0` candidate is intentionally represented as unsigned
 unless `release-manifest.json` records `installer_signed: true`. Windows
 SmartScreen or endpoint protection may therefore request confirmation. Check
 the exact SHA-256 value and GitHub provenance before proceeding. Do not disable

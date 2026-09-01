@@ -48,13 +48,13 @@ import { isMain } from './utils.mjs'
 function loadDistributionIdentity(desktopRoot) {
   const metadataPath = resolve(desktopRoot, '../..', 'downstream', 'distribution.json')
   const distribution = JSON.parse(readFileSync(metadataPath, 'utf8'))
-  const match = /^(\d+)\.(\d+)\.(\d+)-win\.(\d+)$/.exec(distribution.version)
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.exec(distribution.version)
   if (!match) {
     throw new Error(`unsupported distribution version: ${distribution.version}`)
   }
   return {
     ...distribution,
-    windowsVersion: match.slice(1).join('.')
+    windowsVersion: [...match.slice(1), '0'].join('.')
   }
 }
 

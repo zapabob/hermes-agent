@@ -9,7 +9,7 @@ describe('Windows executable identity', () => {
 
     expect(distribution.id).toBe('hermes-agent-windows')
     expect(distribution.display_name).toBe('Hermes Agent Windows Workstation Edition')
-    expect(distribution.version).toBe('0.20.5-win.1')
-    expect(distribution.windowsVersion).toBe('0.20.5.1')
+    expect(distribution.version).toBe('0.21.0')
+    expect(distribution.windowsVersion).toBe('0.21.0.0')
   })
 })

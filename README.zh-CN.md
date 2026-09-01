@@ -55,8 +55,9 @@ uv run hermes desktop
 - 由外部 Go watchdog 对 Desktop/backend 及可选 embedding 执行有限恢复
 - consumer NVIDIA workstation 实机证据与无 GPU 的 hosted CI 分开记录
 
-release candidate 为 `0.20.5-win.1`，支持 `stable` 与 `preview` channel。
-通过验证的产物只从对应 tag 发布到
+release candidate 为 `0.21.0`。版本号跟随 Hermes 上游，下游修订使用 commit SHA
+而不是独立 suffix 识别。支持 `stable` 与 `preview` channel。通过验证的产物只从
+与上游同格式的对应 tag 发布到
 [下游 Releases](https://github.com/zapabob/hermes-agent-windows/releases)。
 在首个 stable asset 实际存在前，请使用上面的 source route。
 另见 [release policy](docs/windows/RELEASE_POLICY.md) 与
