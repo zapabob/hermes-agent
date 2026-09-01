@@ -23,6 +23,8 @@ import { sessionTileDelegate } from '@/store/session-states'
 import type { ModelOptionsResponse } from '@/types/hermes'
 
 interface ModelControlsOptions {
+  cacheOwnerConnectionId?: string
+  cacheProfile?: string
   queryClient: QueryClient
   requestGateway: <T = unknown>(method: string, params?: Record<string, unknown>) => Promise<T>
 }
@@ -36,7 +38,12 @@ interface ModelSwitchGatewayResponse {
   warning?: string
 }
 
-export function useModelControls({ queryClient, requestGateway }: ModelControlsOptions) {
+export function useModelControls({
+  cacheOwnerConnectionId,
+  cacheProfile,
+  queryClient,
+  requestGateway
+}: ModelControlsOptions) {
   const { t } = useI18n()
   const copy = t.desktop
   const profileRefreshEpochRef = useRef(0)
@@ -53,7 +60,8 @@ export function useModelControls({ queryClient, requestGateway }: ModelControlsO
       provider: string,
       model: string,
       includeGlobal: boolean,
-      profile = $activeGatewayProfile.get()
+      profile = cacheProfile || $activeGatewayProfile.get(),
+      ownerConnectionId = cacheOwnerConnectionId
     ) => {
       const patch = (prev: ModelOptionsResponse | undefined) => {
         // Selection state can update before the catalog query has resolved.
@@ -68,13 +76,16 @@ export function useModelControls({ queryClient, requestGateway }: ModelControlsO
         return { ...prev, provider, model, providers }
       }
 
-      queryClient.setQueryData<ModelOptionsResponse>(modelOptionsQueryKey(profile, sessionId), patch)
+      queryClient.setQueryData<ModelOptionsResponse>(
+        modelOptionsQueryKey(profile, sessionId, ownerConnectionId),
+        patch
+      )
 
       if (includeGlobal) {
-        queryClient.setQueryData<ModelOptionsResponse>(modelOptionsQueryKey(profile), patch)
+        queryClient.setQueryData<ModelOptionsResponse>(modelOptionsQueryKey(profile, null, ownerConnectionId), patch)
       }
     },
-    [queryClient]
+    [cacheOwnerConnectionId, cacheProfile, queryClient]
   )
 
   // Settings → Model writes the profile default, which the backend applies to
@@ -115,6 +126,7 @@ export function useModelControls({ queryClient, requestGateway }: ModelControlsO
       }
 
       const profileRefreshEpoch = profileRefreshEpochRef.current
+      const profile = cacheProfile || $activeGatewayProfile.get()
 
       try {
         if ($activeSessionId.get()) {
@@ -132,7 +144,7 @@ export function useModelControls({ queryClient, requestGateway }: ModelControlsO
           }
 
           const options = queryClient.getQueryData<ModelOptionsResponse>(
-            modelOptionsQueryKey($activeGatewayProfile.get())
+            modelOptionsQueryKey(profile, null, cacheOwnerConnectionId)
           )
 
           return !manualPickRemoved(options?.providers, $currentProvider.get(), $currentModel.get())
@@ -146,7 +158,7 @@ export function useModelControls({ queryClient, requestGateway }: ModelControlsO
         // that lands while getGlobalModelInfo is in flight wins over this older
         // default — value comparisons alone miss re-selecting the same row.
         const selectionGeneration = getComposerSelectionGeneration()
-        const result = await getGlobalModelInfo()
+        const result = await getGlobalModelInfo(profile)
 
         if (
           profileRefreshEpochRef.current !== profileRefreshEpoch ||
@@ -172,7 +184,7 @@ export function useModelControls({ queryClient, requestGateway }: ModelControlsO
         // The delayed session.info event still updates this once the agent is ready.
       }
     },
-    [queryClient]
+    [cacheOwnerConnectionId, cacheProfile, queryClient]
   )
 
   // Returns whether the switch succeeded so callers can await it before applying
@@ -191,14 +203,14 @@ export function useModelControls({ queryClient, requestGateway }: ModelControlsO
       const primaryRuntimeId = $activeSessionId.get()
       const liveSessionId = 'sessionId' in selection ? (selection.sessionId ?? null) : primaryRuntimeId
       const touchesPrimary = !liveSessionId || liveSessionId === primaryRuntimeId
-      const liveGatewayProfile = $activeGatewayProfile.get()
-      const selectionTarget = `${liveGatewayProfile}\u0000${liveSessionId ?? '<new-session>'}`
+      const liveGatewayProfile = cacheProfile || $activeGatewayProfile.get()
+      const selectionTarget = `${cacheOwnerConnectionId ?? '<ambient>'}\u0000${liveGatewayProfile}\u0000${liveSessionId ?? '<new-session>'}`
       const selectionEpoch = (selectionEpochByTargetRef.current.get(selectionTarget) ?? 0) + 1
       selectionEpochByTargetRef.current.set(selectionTarget, selectionEpoch)
 
       const selectionIsCurrent = () =>
         selectionEpochByTargetRef.current.get(selectionTarget) === selectionEpoch &&
-        $activeGatewayProfile.get() === liveGatewayProfile &&
+        (cacheProfile !== undefined || $activeGatewayProfile.get() === liveGatewayProfile) &&
         (!touchesPrimary || $activeSessionId.get() === primaryRuntimeId)
 
       const commitSelection = (applied: ModelSelection = selection) => {
@@ -272,6 +284,20 @@ export function useModelControls({ queryClient, requestGateway }: ModelControlsO
           return false
         }
 
+        // A routed owner has an isolated catalogue cache that must be refreshed
+        // after acknowledgement. The ambient cache keeps the downstream
+        // no-refetch contract because the response already supplied the
+        // authoritative runtime identity.
+        if (cacheOwnerConnectionId && !result?.deferred) {
+          void queryClient.invalidateQueries({
+            queryKey: modelOptionsQueryKey(
+              liveGatewayProfile,
+              liveSessionId,
+              cacheOwnerConnectionId
+            )
+          })
+        }
+
         return true
       } catch (err) {
         // An OLDER gateway refuses a mid-turn switch outright (4009) instead of
@@ -290,7 +316,14 @@ export function useModelControls({ queryClient, requestGateway }: ModelControlsO
         return false
       }
     },
-    [copy.modelSwitchFailed, requestGateway, updateModelOptionsCache]
+    [
+      cacheOwnerConnectionId,
+      cacheProfile,
+      copy.modelSwitchFailed,
+      queryClient,
+      requestGateway,
+      updateModelOptionsCache
+    ]
   )
 
   return { applySavedMainModel, refreshCurrentModel, selectModel }

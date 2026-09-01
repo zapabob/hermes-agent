@@ -3836,14 +3836,77 @@ function McpSetupButton({ profile, entry, onDone, ensureProfile }) {
         return
       }
     }
-    const start = await mcpRpc('mcp.servers.oauth.start', { profile, name: entry.name })
+    // Bind the OAuth callback on the user's machine. A remote gateway's own
+    // loopback listener is unreachable from the browser running here.
+    const mcpOauthBridge =
+      typeof window !== 'undefined' && window.hermesDesktop && window.hermesDesktop.mcpOauth
+        ? window.hermesDesktop.mcpOauth
+        : null
+    let listener = null
+    if (mcpOauthBridge) {
+      try {
+        listener = await mcpOauthBridge.listen()
+      } catch {
+        listener = null
+      }
+    }
+
+    let start = await mcpRpc('mcp.servers.oauth.start', {
+      profile,
+      name: entry.name,
+      ...(listener ? { client_redirect_uri: listener.redirectUri } : {})
+    })
+
+    // An older gateway may reject the client callback parameter. Tear the
+    // listener down and retry once with its legacy backend-local flow.
+    if (!start.ok && listener) {
+      try {
+        await mcpOauthBridge.cancel(listener.id)
+      } catch {
+        /* listener teardown is best-effort */
+      }
+      listener = null
+      start = await mcpRpc('mcp.servers.oauth.start', { profile, name: entry.name })
+    }
+
     const payload = start.result && (start.result.result || start.result)
     const authUrl = payload && (payload.auth_url || payload.verification_url)
     const sessionId = payload && payload.session_id
     if (!start.ok || !authUrl || !sessionId) {
+      if (listener) {
+        try {
+          await mcpOauthBridge.cancel(listener.id)
+        } catch {
+          /* listener teardown is best-effort */
+        }
+      }
       setPhase('error')
       setMessage((start.error) || 'Could not start OAuth')
       return
+    }
+
+    if (listener) {
+      const listenerId = listener.id
+      void (async () => {
+        const callback = await mcpOauthBridge.wait(listenerId)
+        if (callback.error === 'cancelled') {
+          return
+        }
+
+        const relay = await mcpRpc('mcp.servers.oauth.callback', {
+          profile,
+          name: entry.name,
+          session_id: sessionId,
+          code: callback.code || undefined,
+          state: callback.state || undefined,
+          error: callback.error || undefined
+        })
+        const result = relay.result && (relay.result.result || relay.result)
+        if (!relay.ok || (result && result.ok === false)) {
+          setPhase('error')
+          setMessage((result && result.error_message) || relay.error || 'OAuth callback relay failed')
+        }
+      })()
     }
     // Open the auth URL in the native browser, same as provider OAuth.
     try {

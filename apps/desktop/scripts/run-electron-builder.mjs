@@ -37,7 +37,9 @@ function electronBuilderCli() {
 }
 
 const dist = electronDistDir()
-const args = []
+// A local build packages artifacts only. Pin this explicitly so CI-like
+// environments never make electron-builder infer an unintended publish step.
+const args = ["--publish", "never"]
 if (dist && fs.existsSync(distBinary(dist))) {
   args.push(`-c.electronDist=${dist}`)
 } else {

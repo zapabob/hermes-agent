@@ -27,6 +27,7 @@ import * as path from 'node:path'
 
 import { _electron, type ElectronApplication, type Page } from '@playwright/test'
 
+import { resolveElectronBinary } from './electron-binary'
 import { type MockServerOptions, startMockServer } from './mock-server'
 import { installErrorBannerGuard } from './test'
 
@@ -284,35 +285,13 @@ function assertDistBuilt(): void {
 
 /**
  * Find the Electron binary. In the nix devshell, `electron` is on PATH.
- * As a fallback, use the node_modules/.bin/electron from the desktop package.
+ * As a fallback, use the node_modules/electron install from either package.
  */
 export function findElectron(): string {
   // In dev mode, we use the `electron` binary directly (not the packaged app).
   // The dev:electron script in package.json does exactly this: `electron .`
   // after building. We replicate that here.
-  const executable = process.platform === 'win32' ? 'electron.exe' : 'electron'
-  const localElectron = [
-    path.join(DESKTOP_ROOT, 'node_modules', 'electron', 'dist', executable),
-    path.join(REPO_ROOT, 'node_modules', 'electron', 'dist', executable),
-  ].find(candidate => fs.existsSync(candidate))
-
-  if (localElectron) {
-    return localElectron
-  }
-
-  // Fall back to PATH
-  const locator = process.platform === 'win32' ? 'where' : 'which'
-  const result = spawnSync(locator, ['electron'], {
-    encoding: 'utf8',
-  })
-
-  if (result.status === 0 && result.stdout.trim()) {
-    return result.stdout.trim()
-  }
-
-  throw new Error(
-    'Electron binary not found. Run "npm install" from the repo root to install devDependencies.',
-  )
+  return resolveElectronBinary([DESKTOP_ROOT, REPO_ROOT])
 }
 
 /**

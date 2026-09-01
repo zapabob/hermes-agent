@@ -1,13 +1,16 @@
 import { requestGatewayForAgent, requestGatewayForProfile, retainGatewayForSessionTurn } from '@/store/gateway'
 
-export interface SessionProfileRoute {
+export interface SessionOwnerRoute {
   connectionId: string
   mode?: 'local' | 'remote'
   profile: string
   targetProfile?: string
 }
 
-export type SessionOwnerScope = undefined | null | string | SessionProfileRoute
+/** @deprecated Alias kept for existing downstream imports. */
+export type SessionProfileRoute = SessionOwnerRoute
+
+export type SessionOwnerScope = undefined | null | string | SessionOwnerRoute
 
 // ── Session-scoped RPC routing (the #89206 class) ───────────────────────────
 // A session-scoped RPC (session.resume / session.activate / session.usage /
