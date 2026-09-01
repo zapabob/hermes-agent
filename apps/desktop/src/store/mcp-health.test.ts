@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { dismissNotification, notify } from '@/store/notifications'
 
 // The store wires itself to gateway/profile atoms and the REST layer at import
 // time paths; mock the seams (same shape as updates.test.ts) so this test only
@@ -13,6 +15,7 @@ vi.mock('@/i18n', () => ({
 }))
 
 vi.mock('@/store/notifications', () => ({
+  dismissNotification: vi.fn(),
   notify: vi.fn()
 }))
 
@@ -25,7 +28,7 @@ vi.mock('@/store/session', () => ({
   $gatewayState: { get: () => 'closed', subscribe: () => () => {} }
 }))
 
-const { shouldNotifyOnTransition } = await import('./mcp-health')
+const { MCP_HEALTH_STATUS_STORAGE_KEY, recordMcpHealthResult, shouldNotifyOnTransition } = await import('./mcp-health')
 
 type Status = 'error' | 'needs-auth' | 'ok'
 
@@ -52,5 +55,39 @@ describe('shouldNotifyOnTransition', () => {
     ['error', 'ok', false]
   ])('previous=%s next=%s → notify=%s', (previous, next, expected) => {
     expect(shouldNotifyOnTransition(previous, next)).toBe(expected)
+  })
+})
+
+describe('recordMcpHealthResult', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+    vi.mocked(dismissNotification).mockClear()
+    vi.mocked(notify).mockClear()
+  })
+
+  it('does not repeat an unchanged warning after an app restart', () => {
+    window.localStorage.setItem(
+      MCP_HEALTH_STATUS_STORAGE_KEY,
+      JSON.stringify({ 'default::stripe-persisted': 'needs-auth' })
+    )
+
+    recordMcpHealthResult('default', 'stripe-persisted', 'needs-auth')
+
+    expect(notify).not.toHaveBeenCalled()
+  })
+
+  it('dismisses a warning on recovery and notifies if authentication later expires again', () => {
+    window.localStorage.setItem(
+      MCP_HEALTH_STATUS_STORAGE_KEY,
+      JSON.stringify({ 'default::stripe-recovery': 'needs-auth' })
+    )
+
+    recordMcpHealthResult('default', 'stripe-recovery', 'ok')
+
+    expect(dismissNotification).toHaveBeenCalledWith('mcp-health-default::stripe-recovery')
+
+    recordMcpHealthResult('default', 'stripe-recovery', 'needs-auth')
+
+    expect(notify).toHaveBeenCalledTimes(1)
   })
 })

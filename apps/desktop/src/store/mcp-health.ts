@@ -15,7 +15,8 @@
 import { getHermesConfigRecord, type McpTestResult, testMcpServer } from '@/hermes'
 import { translateNow } from '@/i18n'
 import { classifyProbe, freshProbe, probeCache, probeKey } from '@/lib/mcp-probe-cache'
-import { notify } from '@/store/notifications'
+import { persistStringRecord, storedStringRecord } from '@/lib/storage'
+import { dismissNotification, notify } from '@/store/notifications'
 import { $activeGatewayProfile, normalizeProfileKey } from '@/store/profile'
 import { $gatewayState } from '@/store/session'
 
@@ -23,6 +24,7 @@ import { $gatewayState } from '@/store/session'
 // HTTP probes at most) and the notification is transition-gated below, so
 // there is nothing for a user to meaningfully tune.
 const CHECK_INTERVAL_MS = 30 * 60_000
+export const MCP_HEALTH_STATUS_STORAGE_KEY = 'hermes-desktop-mcp-health-status-v1'
 
 export type McpHealthStatus = 'error' | 'needs-auth' | 'ok'
 
@@ -61,10 +63,35 @@ function openMcpServerPage(name: string): void {
   window.location.hash = `#/skills?tab=mcp&server=${encodeURIComponent(name)}`
 }
 
-function recordResult(profileKey: string, name: string, status: McpHealthStatus): void {
+function storedStatus(key: string): McpHealthStatus | null {
+  const value = storedStringRecord(MCP_HEALTH_STATUS_STORAGE_KEY)[key]
+
+  return value === 'error' || value === 'needs-auth' || value === 'ok' ? value : null
+}
+
+function persistStatus(key: string, status: McpHealthStatus): void {
+  persistStringRecord(MCP_HEALTH_STATUS_STORAGE_KEY, {
+    ...storedStringRecord(MCP_HEALTH_STATUS_STORAGE_KEY),
+    [key]: status
+  })
+}
+
+export function recordMcpHealthResult(profileKey: string, name: string, status: McpHealthStatus): void {
   const key = `${profileKey}::${name}`
-  const previous = lastStatus.get(key) ?? null
+  const notificationId = `mcp-health-${key}`
+  const previous = lastStatus.get(key) ?? storedStatus(key)
   lastStatus.set(key, status)
+  persistStatus(key, status)
+
+  if (status === 'ok') {
+    if (previous === 'error' || previous === 'needs-auth') {
+      dismissNotification(notificationId)
+    }
+
+    notifiedThisSession.delete(key)
+
+    return
+  }
 
   if (!shouldNotifyOnTransition(previous, status) || notifiedThisSession.has(key)) {
     return
@@ -79,7 +106,7 @@ function recordResult(profileKey: string, name: string, status: McpHealthStatus)
       label: translateNow(needsAuth ? 'notifications.mcp.signIn' : 'notifications.mcp.view'),
       onClick: () => openMcpServerPage(name)
     },
-    id: `mcp-health-${key}`,
+    id: notificationId,
     kind: 'warning',
     message: translateNow(needsAuth ? 'notifications.mcp.needsAuthMessage' : 'notifications.mcp.errorMessage', name),
     title: translateNow(needsAuth ? 'notifications.mcp.needsAuthTitle' : 'notifications.mcp.errorTitle')
@@ -138,7 +165,7 @@ async function sweep(): Promise<void> {
       probeCache.set(key, { at: Date.now(), result })
     }
 
-    recordResult(profileKey, name, classifyProbe(result))
+    recordMcpHealthResult(profileKey, name, classifyProbe(result))
   }
 }
 
