@@ -16,6 +16,8 @@ Improvements over v2:
   - Richer tool call/result detail in summarizer input
 """
 
+import contextlib
+import contextvars
 import copy
 import hashlib
 import json
@@ -57,6 +59,120 @@ def _safe_int(value: Any) -> int | None:
         return None
 
 
+# ── Pinned summary route ─────────────────────────────────────────────────
+# The summary call normally resolves its provider/model from
+# ``auxiliary.compression``. One caller needs to override that for a single
+# attempt: after the host's progress-aware timeout aborts a stalled summary
+# (#78981), ``agent.conversation_compression`` re-runs compression with the
+# route pinned to a configured ``fallback_chain`` entry. Nothing raised out
+# of the stalled call, so the auxiliary client's own fallback handling — which
+# only runs from its exception path — never saw that failure.
+#
+# A ContextVar, not an attribute on the compressor: the aborted worker is
+# detached and still alive on the pool, and the compressor object is shared
+# with it. Context is copied per worker (``propagate_context_to_thread``), so
+# the pin reaches the retry's whole synchronous call chain and cannot leak
+# into the stalled attempt or any unrelated auxiliary call.
+#
+# Coverage is the single ``_generate_summary`` LLM call only. That is one call
+# per compression run (its only non-recursive call site is the compress path;
+# the two recursive calls are the deliberate main-model retry that must NOT
+# re-issue the pin). Lean ``tail_mode`` additionally runs
+# ``_build_chunk_digests``, which issues its own ``call_llm`` calls directly.
+# Those digests consult ``attempt_summary_route_kwargs()`` (non-consuming):
+# during a stall-fallback retry they follow the summary onto the healthy
+# fallback backend instead of returning to the stalled primary. The consumed
+# echo below preserves the pin's single-use contract for the SUMMARY call —
+# the main-model retry still never re-issues the pinned route.
+_SUMMARY_ROUTE_PIN: contextvars.ContextVar[Optional[Dict[str, Any]]] = (
+    contextvars.ContextVar("hermes_summary_route_pin", default=None)
+)
+
+# Echo of the route the summary call consumed, for SIBLING aux calls of the
+# same attempt (lean digests). Context-local like the pin itself, so it can
+# never leak across threads or into an unrelated compression attempt.
+_SUMMARY_ROUTE_CONSUMED: contextvars.ContextVar[Optional[Dict[str, Any]]] = (
+    contextvars.ContextVar("hermes_summary_route_consumed", default=None)
+)
+
+# call_llm kwargs a pinned route may set. ``timeout`` lets a fallback entry
+# keep its own deadline instead of inheriting one the primary already burned
+# (same per-entry semantics the aux client applies to chain candidates).
+_PINNED_ROUTE_FIELDS: tuple[str, ...] = (
+    "provider",
+    "model",
+    "base_url",
+    "api_key",
+    "api_mode",
+    "timeout",
+)
+
+
+@contextlib.contextmanager
+def pin_summary_route(route: Optional[Dict[str, Any]]):
+    """Pin the next summary LLM call in this context to an explicit route.
+
+    ``route`` is a mapping of :data:`_PINNED_ROUTE_FIELDS`; ``None`` is a
+    no-op passthrough so callers can wire it unconditionally. Re-entrant-safe:
+    restores the previous pin on exit.
+    """
+    token = _SUMMARY_ROUTE_PIN.set(route if isinstance(route, dict) else None)
+    try:
+        yield
+    finally:
+        _SUMMARY_ROUTE_PIN.reset(token)
+
+
+def take_pinned_summary_route() -> Optional[Dict[str, Any]]:
+    """Read and consume the pinned summary route, if one is installed.
+
+    Single use by design. ``_generate_summary`` retries itself on the main
+    model when the summary route fails; re-issuing the pinned route there
+    would spend a second full deadline on the backend that just failed.
+
+    The consumed route is echoed into ``_SUMMARY_ROUTE_CONSUMED`` so that
+    SIBLING auxiliary calls in the same attempt (the lean chunk digests,
+    which run after the summary) can keep addressing the healthy fallback
+    backend instead of silently returning to the stalled task route
+    (#96634 post-merge review, secondary item).
+    """
+    route = _SUMMARY_ROUTE_PIN.get()
+    if route is None:
+        return None
+    _SUMMARY_ROUTE_PIN.set(None)
+    _SUMMARY_ROUTE_CONSUMED.set(route)
+    return route
+
+
+def attempt_summary_route_kwargs() -> Dict[str, Any]:
+    """Route kwargs for sibling aux calls of the CURRENT summary attempt.
+
+    Non-consuming. Prefers a still-pending pin (digest paths that run before
+    the summary), else the route the summary call just consumed. Empty when
+    no stall-fallback pin is active — normal task routing applies.
+    """
+    route = _SUMMARY_ROUTE_PIN.get() or _SUMMARY_ROUTE_CONSUMED.get()
+    if not route:
+        return {}
+    return {
+        field: route[field]
+        for field in _PINNED_ROUTE_FIELDS
+        if route.get(field) not in (None, "")
+    }
+
+
+def _pinned_summary_call_kwargs() -> Dict[str, Any]:
+    """Consume the pinned route as explicit ``call_llm`` keyword arguments."""
+    route = take_pinned_summary_route()
+    if not route:
+        return {}
+    return {
+        field: route[field]
+        for field in _PINNED_ROUTE_FIELDS
+        if route.get(field) not in (None, "")
+    }
+
+
 _SUMMARY_PERMANENT_QUOTA_MARKERS: tuple[str, ...] = (
     "insufficient_quota",
     "quota exceeded",
@@ -72,19 +188,24 @@ _SUMMARY_MISSING_CREDENTIAL_MARKERS: tuple[str, ...] = (
     "no api key found",
 )
 
-_HYGIENE_IDLE_TIMEOUT_MARKERS: tuple[str, ...] = (
+_HYGIENE_PREAGENT_ONLY_COOLDOWN_MARKERS: tuple[str, ...] = (
     "session hygiene compression timed out",
+    "hygiene compression deferred: turn-hold budget expired",
 )
 
 
-def _is_hygiene_idle_timeout_error(error: object) -> bool:
-    """Return True when the durable cooldown came from a hygiene watchdog timeout.
+def _is_hygiene_preagent_only_cooldown(error: object) -> bool:
+    """Return True for a cooldown that belongs only to pre-agent hygiene.
 
-    That persist is intentional for the pre-agent hygiene pass (#74136) but
-    must not block the in-conversation compressor (#86972).
+    Hygiene watchdog timeouts and turn-hold deferrals intentionally persist
+    retry spacing for the pre-agent pass (#74136), but neither is evidence of
+    an auxiliary-model failure and neither may block the in-agent compressor
+    (#86972).
     """
     text = str(error or "").strip().casefold()
-    return any(marker in text for marker in _HYGIENE_IDLE_TIMEOUT_MARKERS)
+    return any(
+        marker in text for marker in _HYGIENE_PREAGENT_ONLY_COOLDOWN_MARKERS
+    )
 
 
 def _is_summary_access_or_quota_error(exc: Exception) -> bool:
@@ -262,6 +383,33 @@ def _strip_persistence_markers(messages: List[Dict[str, Any]]) -> None:
     for msg in messages:
         if isinstance(msg, dict):
             msg.pop(_DB_PERSISTED_MARKER, None)
+
+
+def stamp_db_persisted_markers(messages: List[Dict[str, Any]]) -> None:
+    """Fulfil the post-commit contract of ``SessionDB.archive_and_compact()``.
+
+    ``archive_and_compact()`` atomically soft-archives the previous active
+    rows and inserts *messages* as the new active set — after it returns,
+    every dict in *messages* IS durably stored. Stamp ``_DB_PERSISTED_MARKER``
+    on those exact dict instances so the append-only flush
+    (``_persist_session`` → ``_flush_messages_to_session_db_unlocked``)
+    skips them instead of re-INSERTing the whole compacted transcript.
+
+    This is the single stamp site for ALL ``archive_and_compact`` callers
+    (in-place batch commit, micro-compaction sync, proactive prune). The
+    marker must land on the dicts the caller actually keeps as the live
+    message list: ``compress()`` output is marker-swept by design
+    (``_strip_persistence_markers``, #57491 — the sweep protects the
+    ROTATION flush to a child session), so a committed in-place set that
+    is returned to the caller unstamped is re-written as "new" by the next
+    persist walk and the live transcript doubles on every compaction
+    (#98450: ~58K → ~512K tokens). Call this ONLY after the commit
+    succeeded — an unstamped dict after a failed commit is correct
+    (the flush then durably writes it).
+    """
+    for msg in messages:
+        if isinstance(msg, dict):
+            msg[_DB_PERSISTED_MARKER] = True
 
 
 def _prune_stale_reasoning_replay(messages: List[Dict[str, Any]]) -> int:
@@ -2762,11 +2910,11 @@ class ContextCompressor(ContextEngine):
                 self._last_summary_error = None
             return None
 
-        # Hygiene idle-watchdog timeouts persist the same column so the
-        # pre-agent pass can skip (#74136), but they are not evidence of a
-        # 429/aux-model fault. The in-conversation compressor has its own
-        # budget and must still be allowed to run (#86972).
-        if _is_hygiene_idle_timeout_error(state.get("error")):
+        # Hygiene watchdog timeouts and turn-hold deferrals persist the same
+        # column so the pre-agent pass can skip (#74136), but they are not
+        # evidence of a 429/aux-model fault. The in-conversation compressor has
+        # its own budget and must still be allowed to run (#86972).
+        if _is_hygiene_preagent_only_cooldown(state.get("error")):
             # A later hygiene write can overwrite a previous aux-model row
             # on the shared column. Drop any in-memory cooldown so the
             # in-agent compressor is not still blocked after this refresh.
@@ -2788,9 +2936,16 @@ class ContextCompressor(ContextEngine):
         cooldown_seconds: float,
         error: Optional[str],
     ) -> None:
-        cooldown_until = time.time() + cooldown_seconds
-        self._summary_failure_cooldown_until = time.monotonic() + cooldown_seconds
+        now_mono = time.monotonic()
+        new_mono = now_mono + float(cooldown_seconds)
+        # Never shorten a longer live deadline (#96775). A later stall or
+        # timeout records the latest error text but keeps the later of the
+        # two clocks.
+        if new_mono > self._summary_failure_cooldown_until:
+            self._summary_failure_cooldown_until = new_mono
         self._last_summary_error = error
+        remaining = max(0.0, self._summary_failure_cooldown_until - time.monotonic())
+        cooldown_until = time.time() + remaining
 
         session_db = getattr(self, "_session_db", None)
         session_id = getattr(self, "_session_id", "")
@@ -2811,14 +2966,19 @@ class ContextCompressor(ContextEngine):
             self._cooldown_persist_failed = True
             logger.debug("compression failure cooldown persist failed (non-sqlite): %s", exc)
 
-    def record_timeout_failure(self, error: str) -> None:
-        """Record a consecutive timeout failure using the shared cooldown ladder.
+    def record_timeout_failure(self, error: str, failure_kind: str = "timeout") -> None:
+        """Record a consecutive timeout/stall failure using the shared ladder.
 
-        Used by both the summary-LLM exception handler (inline at line ~3714)
-        and the host-level ``compress_context`` timeout wrapper in
-        ``run_compress_context_with_progress_timeout``. Avoids re-implementing
-        the ladder at each call site (#62452).
+        Used by the summary-LLM exception handler, the host-level
+        ``compress_context`` timeout wrapper, and stall-interrupted
+        pre-commit cancellation (#62452, #96775).
+
+        The persisted error is prefixed with the attempt identity so durable
+        cooldown state remains strategy- and failure-aware across restarts.
         """
+        strategy = getattr(self, "tail_mode", None) or "unknown"
+        kind = failure_kind or "timeout"
+        stamped = f"backoff:{kind}:strategy={strategy}: {error}"
         _TIMEOUT_COOLDOWN_LADDER = (60, 300, 900)
         self._consecutive_timeout_failures = (
             getattr(self, "_consecutive_timeout_failures", 0) + 1
@@ -2827,7 +2987,7 @@ class ContextCompressor(ContextEngine):
             min(self._consecutive_timeout_failures,
                 len(_TIMEOUT_COOLDOWN_LADDER)) - 1
         ]
-        self._record_compression_failure_cooldown(float(cooldown), error)
+        self._record_compression_failure_cooldown(float(cooldown), stamped)
 
     def _clear_compression_failure_cooldown(self) -> None:
         # #76354 review F4: fence check BEFORE cooldown-clear. A late worker
@@ -2867,6 +3027,17 @@ class ContextCompressor(ContextEngine):
             logger.debug("compression failure cooldown clear failed: %s", exc)
         except Exception as exc:
             logger.debug("compression failure cooldown clear failed (non-sqlite): %s", exc)
+
+    def _compression_cancelled(self) -> bool:
+        """Read the host-owned cooperative cancellation signal, if installed."""
+        cancelled_check = getattr(self, "_compression_cancelled_check", None)
+        if not callable(cancelled_check):
+            return False
+        try:
+            return bool(cancelled_check())
+        except Exception:
+            logger.debug("compression cancellation check failed", exc_info=True)
+            return False
 
     def update_model(
         self,
@@ -3121,7 +3292,7 @@ class ContextCompressor(ContextEngine):
         proactive_prune_min_result_chars: int = 8000,
         proactive_prune_min_reclaim_tokens: int = 4096,
         min_tail_user_messages: int = 1,
-        tail_mode: str = "legacy",
+        tail_mode: str = "lean",
     ):
         self.model = model
         self.base_url = base_url
@@ -3131,7 +3302,7 @@ class ContextCompressor(ContextEngine):
         # Lean tail mode (#compaction-v2): "lean" = small clamped recency
         # tail + verbatim-user-message summary section + recovery pointers;
         # "legacy" = 0.20*window tail (shipping behavior).
-        self.tail_mode = tail_mode if tail_mode in ("legacy", "lean") else "legacy"
+        self.tail_mode = tail_mode if tail_mode in ("legacy", "lean") else "lean"
         # Per-model threshold overrides (longest substring match wins).
         # Stored as a plain dict; resolved in _resolve_threshold(), then the
         # small-context floor is applied on top.
@@ -4166,9 +4337,9 @@ class ContextCompressor(ContextEngine):
                     exc,
                 )
                 return messages, 0
-            for msg in pruned_msgs:
-                if isinstance(msg, dict):
-                    msg[_DB_PERSISTED_MARKER] = True
+            # Shared post-commit contract with the in-place batch commit and
+            # the micro-compaction sync (#98450) — one stamp site for the class.
+            stamp_db_persisted_markers(pruned_msgs)
         self._proactive_prune_rearm_tokens = next_rearm_tokens
         return pruned_msgs, pruned_count
 
@@ -4555,6 +4726,8 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         never raises. Chunks run sequentially on the same transport as the
         main summary.
         """
+        if self._compression_cancelled():
+            return ""
         text = _serialize_turns_for_digest(
             turns, getattr(self, "_lean_pristine_tools", None),
         )
@@ -4567,12 +4740,17 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             n_chunks = _LEAN_DIGEST_MAX_CHUNKS
         digests: list[str] = []
         for ci in range(n_chunks):
+            if self._compression_cancelled():
+                break
             segment = text[ci * chunk_size:(ci + 1) * chunk_size]
             if not segment.strip():
                 continue
             try:
                 from agent.auxiliary_client import call_llm
 
+                # During a stall-fallback retry, follow the summary onto the
+                # pinned healthy route (non-consuming read) instead of
+                # re-addressing the stalled task backend (#96634 follow-up).
                 resp = call_llm(
                     messages=[{
                         "role": "user",
@@ -4580,6 +4758,7 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
                     }],
                     task="compression",
                     max_tokens=_LEAN_DIGEST_MAX_TOKENS,
+                    **attempt_summary_route_kwargs(),
                 )
                 body = (
                     resp.choices[0].message.content
@@ -4716,7 +4895,10 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         the middle turns without a summary rather than inject a useless
         placeholder.
         """
-        now = time.monotonic()
+        prompt_started_at = time.monotonic()
+        if self._compression_cancelled():
+            raise AuxiliaryExplicitCancellation()
+        now = prompt_started_at
         if now < self._summary_failure_cooldown_until:
             logger.debug(
                 "Skipping context summary during cooldown (%.0fs remaining)",
@@ -5061,6 +5243,8 @@ This compaction should PRIORITISE preserving all information related to the focu
                     aux_model=_aux_model,
                     effective_aux_context=_aux_context,
                 )
+            if self._compression_cancelled():
+                raise AuxiliaryExplicitCancellation()
             # ``_validate_llm_response`` only guarantees ``choices[0].message``
             # exists, not that it's an object with ``.content``. Some
             # OpenAI-compatible proxies / local backends return a dict- or
@@ -5827,8 +6011,8 @@ This compaction should PRIORITISE preserving all information related to the focu
         SimpleNamespace), for logging/display only. Matching logic must use
         :meth:`_tool_call_id_variants` instead — see its docstring."""
         if isinstance(tc, dict):
-            return tc.get("call_id", "") or tc.get("id", "") or ""
-        return getattr(tc, "call_id", "") or getattr(tc, "id", "") or ""
+            return (tc.get("call_id", "") or tc.get("id", "") or "").strip()
+        return (getattr(tc, "call_id", "") or getattr(tc, "id", "") or "").strip()
 
     @staticmethod
     def _tool_call_id_variants(tc) -> set:
@@ -5865,33 +6049,19 @@ This compaction should PRIORITISE preserving all information related to the focu
         silently dropped by the repair pass, re-exposing the original orphans.
         Stripping at the source avoids this entire class of mismatch.
         """
-        surviving_call_ids: set = set()
-        for msg in messages:
-            if msg.get("role") == "assistant":
-                for tc in msg.get("tool_calls") or []:
-                    surviving_call_ids |= self._tool_call_id_variants(tc)
+        from agent.agent_runtime_helpers import _classify_tool_call_orphans
 
-        result_call_ids: set = set()
-        for msg in messages:
-            if msg.get("role") == "tool":
-                cid = msg.get("tool_call_id")
-                if cid:
-                    # Expand alias spellings on the RESULT side too — a
-                    # composite ``call|item`` tool_call_id must match a
-                    # tool_call registered under either half (#63000).
-                    result_call_ids |= tool_result_id_variants(cid)
+        (
+            surviving_call_ids,
+            result_call_ids,
+            orphaned_result_msgs,
+            missing_tool_calls,
+        ) = _classify_tool_call_orphans(messages)
+        orphaned_results = {id(m) for m in orphaned_result_msgs}
 
         # 1. Remove tool results whose call_id has no matching assistant tool_call
-        orphaned_results = result_call_ids - surviving_call_ids
         if orphaned_results:
-            messages = [
-                m for m in messages
-                if not (
-                    m.get("role") == "tool"
-                    and (rv := tool_result_id_variants(m.get("tool_call_id")))
-                    and not (rv & surviving_call_ids)
-                )
-            ]
+            messages = [m for m in messages if id(m) not in orphaned_results]
             if not self.quiet_mode:
                 logger.info("Compression sanitizer: removed %d orphaned tool result(s)", len(orphaned_results))
 
@@ -5903,7 +6073,7 @@ This compaction should PRIORITISE preserving all information related to the focu
         #    matching result — checking only one variant per side is exactly
         #    the mismatch this method exists to avoid.
         stripped_count = 0
-        if surviving_call_ids - result_call_ids:
+        if missing_tool_calls:
             # --- In-flight tool chain protection (issue #79278) -------------
             # A strip here must distinguish a *pending* tool_call (the model's
             # live request whose result the executor has not yet appended) from
@@ -7137,9 +7307,9 @@ This compaction should PRIORITISE preserving all information related to the focu
             return
         try:
             session_db.archive_and_compact(session_id, compacted_messages)
-            for msg in compacted_messages:
-                if isinstance(msg, dict):
-                    msg[_DB_PERSISTED_MARKER] = True
+            # Shared post-commit contract with the in-place batch commit and
+            # the proactive prune (#98450) — one stamp site for the class.
+            stamp_db_persisted_markers(compacted_messages)
         except Exception:
             logger.info(
                 "Micro-compaction DB sync failed — resume will double-load "

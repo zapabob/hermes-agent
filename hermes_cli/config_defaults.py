@@ -295,6 +295,14 @@ DEFAULT_CONFIG = {
         # from gateway_timeout (which kills the turn) and
         # gateway_notify_interval ("still working" heartbeats). 0 = disable.
         "session_stall_timeout": 300,
+        # Transcript-sanitiser repeated-heal escalation threshold (#96870).
+        # After this many pre-send heal passes within a 10-minute session
+        # window, log one ERROR (session id + heal pattern) and queue a
+        # ONE-TIME out-of-band user notice pointing at /debug share or
+        # `hermes doctor`. Delivered via the status channel only —
+        # conversation context / prompt caching untouched. 0 = disable
+        # escalation (per-window WARNINGs still fire).
+        "sanitizer_heal_escalation_threshold": 3,
         # Long-lived reconnect-loop escalation (seconds). A platform that has
         # been continuously failing/reconnecting for this long gets
         # needs_attention flagged in gateway runtime status (visible in
@@ -830,9 +838,9 @@ DEFAULT_CONFIG = {
                                       # threshold and this token count. Clamped to
                                       # the model's context length at apply-time.
         "target_ratio": 0.20,         # fraction of threshold to preserve as recent tail
-        "tail_mode": "legacy",        # tail retention policy (#87326):
-                                      #   "legacy" — 0.20×window verbatim tail (default)
-                                      #   "lean"   — clamped 2.5%-of-window tail
+        "tail_mode": "lean",          # tail retention policy (#87326):
+                                      #   "legacy" — 0.20×window verbatim tail
+                                      #   "lean"   — clamped 2.5%-of-window tail (default)
                                       #              (10K floor / 25K cap) plus chunked
                                       #              digests, a mechanical anchor index,
                                       #              verbatim user messages, and
@@ -977,10 +985,11 @@ DEFAULT_CONFIG = {
                                       # the ChatGPT Codex backend; every other
                                       # route/model is unaffected. Hermes' local
                                       # compression stays armed as the fallback.
-        "codex_responses_compact_threshold": 200000,  # Server-side compaction trigger
-                                      # (input tokens). Clamped below the local
-                                      # compression threshold at request time so
-                                      # the server compacts before Hermes does.
+        "codex_responses_compact_threshold": None,  # Optional absolute server compaction
+                                      # trigger in input tokens. None follows the
+                                      # resolved local compression trigger with a
+                                      # safety margin. Explicit values only clamp
+                                      # downward so the server compacts first.
         "in_place": True,             # When True, compaction rewrites the message
                                       # list and rebuilds the system prompt WITHOUT
                                       # rotating the session id — the conversation

@@ -6854,6 +6854,45 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
 
         self._execute_write(_do)
 
+    def _bump_conversation_generation(self, conn, session_id: str, end_reason: str) -> None:
+        """Advance this peer's conversation generation past a boundary.
+
+        Called inside the transaction that writes the boundary, so the
+        generation and the ``end_reason`` that caused it commit together.
+
+        Only ``_RESET_END_REASONS`` count: ``compression`` continues one
+        conversation, and an accidental close is not a replacement.  Rows with
+        no ``session_key`` have no routing peer to advance.
+
+        The counter deliberately does NOT read the session rows.  An aggregate
+        over them (COUNT/MAX of boundaries) can return a pair it already
+        emitted once ``delete_session()`` or bulk pruning removes an ended row,
+        which would hand a new conversation a retired affinity identity.  This
+        value only ever increments, so a generation is never reused for a peer
+        even if every row behind it is gone.
+        """
+        if end_reason not in _RESET_END_REASONS:
+            return
+        row = conn.execute(
+            "SELECT source, session_key FROM sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+        if row is None:
+            return
+        source = str(row["source"] or "").strip()
+        session_key = str(row["session_key"] or "").strip()
+        if not source or not session_key:
+            return
+        conn.execute(
+            """
+            INSERT INTO conversation_generations (source, session_key, generation)
+            VALUES (?, ?, 1)
+            ON CONFLICT(source, session_key) DO UPDATE
+                SET generation = conversation_generations.generation + 1
+            """,
+            (source, session_key),
+        )
+
     def end_session(self, session_id: str, end_reason: str) -> None:
         """Mark a session as ended.
 
@@ -6865,11 +6904,15 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         intentionally need to re-end a closed session with a new reason.
         """
         def _do(conn):
-            conn.execute(
+            changed = conn.execute(
                 "UPDATE sessions SET ended_at = ?, end_reason = ? "
                 "WHERE id = ? AND ended_at IS NULL",
                 (time.time(), end_reason, session_id),
-            )
+            ).rowcount
+            # Only a boundary this call actually wrote advances the generation:
+            # the first end_reason wins, so a no-op must not rotate the peer.
+            if changed:
+                self._bump_conversation_generation(conn, session_id, end_reason)
         self._execute_write(_do)
 
     def reopen_session(self, session_id: str) -> None:
@@ -6940,6 +6983,11 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 f"OR end_reason IN ({_RECOVERABLE_END_REASONS_SQL}))",
                 (now, reason, session_id),
             )
+            # /new and the policy auto-resets promote rather than end_session,
+            # so the generation has to advance here too — in the same
+            # transaction as the boundary, and only when one was written.
+            if cursor.rowcount:
+                self._bump_conversation_generation(conn, session_id, reason)
             return cursor.rowcount
 
         try:
@@ -7101,10 +7149,16 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             return
 
         def _do(conn):
+            # Merge-max with any longer live deadline so a later shorter
+            # write cannot reopen the thrash window (#96775). The error
+            # column always takes the latest diagnostic.
             conn.execute(
-                "UPDATE sessions SET compression_failure_cooldown_until = ?, "
+                "UPDATE sessions SET compression_failure_cooldown_until = CASE "
+                "WHEN compression_failure_cooldown_until IS NOT NULL "
+                " AND compression_failure_cooldown_until > ? "
+                "THEN compression_failure_cooldown_until ELSE ? END, "
                 "compression_failure_error = ? WHERE id = ?",
-                (cooldown_until, error, session_id),
+                (cooldown_until, cooldown_until, error, session_id),
             )
 
         try:
@@ -12899,6 +12953,96 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         if parent_id:
             return branched == parent_id or delegated == parent_id
         return branched is not None or delegated is not None
+
+    def is_explicit_fork_child(self, session_id: str) -> bool:
+        """True when ``session_id`` is a /branch, delegate, or tool child row.
+
+        Read-only public view of :meth:`_is_explicit_fork_child_row` for
+        callers that must respect the fork boundary without re-implementing
+        its marker rules (``agent/prompt_cache_scope.py`` keeps a declared
+        conversation key from crossing it). A missing row is not a fork.
+        """
+        session = self.get_session(session_id)
+        return bool(session and self._is_explicit_fork_child_row(session))
+
+    def declared_scope_identity(self, session_id: str) -> Tuple[bool, str]:
+        """Fork verdict and recorded ``source`` for *session_id*, in ONE read.
+
+        ``agent/prompt_cache_scope.py`` needs both to resolve a host-declared
+        conversation scope, and both live on the same ``sessions`` row; asking
+        for them separately read that row twice per resolution (@teknium1 on
+        #98811).  The marker rules stay here, beside
+        :meth:`is_explicit_fork_child`, instead of being re-implemented by the
+        caller.
+
+        A missing row is not a fork and has no source, which is the right
+        answer before ``_ensure_db_session`` persists it.  This raises whatever
+        :meth:`get_session` raises: the caller fails closed on a DB error, and
+        merging the two reads cannot weaken that, because the fork check was
+        already the first of the two.
+        """
+        session = self.get_session(session_id)
+        if not session:
+            return False, ""
+        return (
+            self._is_explicit_fork_child_row(session),
+            str(session.get("source") or "").strip(),
+        )
+
+    def latest_conversation_boundary(
+        self, session_key: str, source: str
+    ) -> Optional[int]:
+        """How many conversation boundaries this routing peer has crossed.
+
+        A boundary is a row this peer ended at an intentional conversation
+        break — the ``_RESET_END_REASONS`` set (``/new``, ``/switch``, idle,
+        daily, suspended, resume_pending_expired).  That is the same fence
+        :meth:`find_latest_gateway_session_for_peer` refuses to reach behind,
+        so the two agree on where one conversation stops and the next begins
+        and cannot drift.
+
+        The peer is ``(session_key, source)``, the SAME identity tuple recovery
+        uses — never the key alone.  ``X-Hermes-Session-Key`` accepts any
+        authenticated caller-supplied string, so an API conversation may
+        legally carry the same key as a Telegram row in one database; keying
+        on the string alone would let a ``/new`` on that unrelated row rotate
+        this conversation's affinity identity while recovery correctly refuses
+        to cross the same line.
+
+        Returns the count, or ``None`` when this peer has never been reset.
+
+        The value comes from ``conversation_generations``, which
+        :meth:`_bump_conversation_generation` advances inside the transaction
+        that writes each boundary — NOT from an aggregate over the session
+        rows.  An aggregate cannot prove non-reuse: ``delete_session()``
+        orphans children and deletes the row, and bulk prune selects ended
+        rows, so ``COUNT``/``MAX`` over boundaries can return a pair it already
+        emitted and hand a new conversation a retired affinity identity.  It is
+        also wall-clock-free, so a backwards NTP correction cannot reorder it.
+
+        Databases upgraded mid-conversation start at no generation and take
+        their first one from the next boundary written; a conversation that
+        reset before the upgrade shares its predecessor's scope once, which
+        costs a warm prompt-cache bucket and never crosses an identity.
+
+        These rows are never garbage-collected, by design: dropping one resets
+        the peer to "no generation", so its next boundary writes ``1`` again
+        and re-issues a scope a retired conversation already used — the ABA
+        this counter exists to prevent.  See the schema comment in
+        ``hermes_state_common.py``.
+        """
+        if not session_key or not source:
+            return None
+        with self._read_ctx() as conn:
+            row = conn.execute(
+                "SELECT generation FROM conversation_generations "
+                "WHERE source = ? AND session_key = ?",
+                (source, session_key),
+            ).fetchone()
+        if row is None or row["generation"] is None:
+            return None
+        generation = int(row["generation"])
+        return generation if generation > 0 else None
 
     def _is_compression_child_row(self, child: Dict[str, Any]) -> bool:
         parent_id = child.get("parent_session_id")

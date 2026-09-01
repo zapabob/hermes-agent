@@ -4,6 +4,7 @@ import json
 import sqlite3
 import pytest
 import time
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 from agent.context_compressor import (
@@ -12,6 +13,7 @@ from agent.context_compressor import (
     SUMMARY_PREFIX,
     COMPRESSED_SUMMARY_METADATA_KEY,
     _PRUNE_MIN_CHARS,
+    _LEAN_USER_MESSAGES_HEADING,
     _summarize_tool_result,
     _is_summary_access_or_quota_error,
 )
@@ -23,6 +25,60 @@ class StubProviderError(Exception):
         super().__init__(message)
         self.status_code = status_code
         self.response = response
+
+
+def test_lean_chunk_digests_stop_after_host_cancellation(compressor, monkeypatch):
+    """A cancelled total-deadline candidate must not dispatch another digest."""
+    import agent.context_compressor as context_compressor_module
+
+    cancelled = False
+    calls = 0
+
+    def fake_call_llm(**_kwargs):
+        nonlocal cancelled, calls
+        calls += 1
+        cancelled = True
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="digest"))]
+        )
+
+    monkeypatch.setattr(context_compressor_module, "_LEAN_DIGEST_CHUNK_CHARS", 20)
+    monkeypatch.setattr(context_compressor_module, "_LEAN_DIGEST_MAX_CHUNKS", 8)
+    monkeypatch.setattr("agent.auxiliary_client.call_llm", fake_call_llm)
+    compressor._compression_cancelled_check = lambda: cancelled
+
+    result = compressor._build_chunk_digests(
+        [{"role": "tool", "content": "x" * 200, "tool_call_id": "call-1"}]
+    )
+
+    assert calls == 1
+    assert "Segment 2/" not in result
+
+
+def test_lean_chunk_digests_do_not_start_after_deadline(compressor, monkeypatch):
+    """The shared compaction deadline is checked before the first digest."""
+    import agent.context_compressor as context_compressor_module
+    from agent.conversation_compression import CompressionCommitFence
+
+    calls = 0
+
+    def fake_call_llm(**_kwargs):
+        nonlocal calls
+        calls += 1
+        raise AssertionError("digest request started after total deadline")
+
+    fence = CompressionCommitFence(total_ceiling_seconds=1.0)
+    compressor._compression_cancelled_check = lambda: fence.is_cancelled
+    monkeypatch.setattr("agent.auxiliary_client.call_llm", fake_call_llm)
+
+    with patch(
+        "agent.conversation_compression.time.monotonic",
+        return_value=time.monotonic() + 2.0,
+    ):
+        assert compressor._build_chunk_digests(
+            [{"role": "user", "content": "late digest"}]
+        ) == ""
+    assert calls == 0
 
 
 @pytest.fixture()
@@ -709,7 +765,8 @@ class TestNonStringContent:
 
         assert summary.startswith(f"{SUMMARY_PREFIX}\n{HISTORICAL_TASK_HEADING}\n")
         assert "do something" in summary
-        assert summary.endswith("plain summary text")
+        assert "plain summary text" in summary
+        assert _LEAN_USER_MESSAGES_HEADING in summary
 
 
 
@@ -3462,6 +3519,7 @@ class TestPreLlmFeasibilityCheck:
         protected tail already holds most of the tokens, leaving a tiny
         middle window. The skip must fire and _generate_summary must not
         be called."""
+        compressor.tail_mode = "legacy"
         compressor._ineffective_compression_count = 1
         msgs = [{"role": "system", "content": "system prompt"}]
         # Small middle: a few lightweight early exchanges.
@@ -3542,3 +3600,60 @@ class TestPreLlmFeasibilityCheck:
             feasibility_skip=compressor._last_feasibility_skip,
         )
         assert compressor._fallback_compression_streak == 1
+
+
+class TestSanitizeToolPairsWhitespace:
+    """_sanitize_tool_pairs must strip whitespace from tool_call_id before
+    comparing, matching the fix applied to agent_runtime_helpers.py in
+    commit fa3ab2ffd.  Without stripping, a valid tool result whose
+    tool_call_id has surrounding whitespace is misclassified as orphaned
+    and silently replaced with a [Result unavailable] stub.
+    """
+
+    def _make(self):
+        with patch("agent.context_compressor.get_model_context_length", return_value=100000):
+            return ContextCompressor(model="test/model", quiet_mode=True,
+                                     protect_first_n=2, protect_last_n=2)
+
+    def _assistant(self, call_id):
+        return {
+            "role": "assistant", "content": "",
+            "tool_calls": [{"id": call_id, "type": "function",
+                             "function": {"name": "f", "arguments": "{}"}}],
+        }
+
+    def test_leading_whitespace_on_result_id_preserved(self):
+        c = self._make()
+        msgs = [
+            self._assistant("call_abc"),
+            {"role": "tool", "tool_call_id": " call_abc", "content": "ok"},
+        ]
+        out = c._sanitize_tool_pairs(msgs)
+        tool_msgs = [m for m in out if m.get("role") == "tool"]
+        assert len(tool_msgs) == 1
+        assert tool_msgs[0]["content"] == "ok", "valid result must not be treated as orphaned"
+
+    def test_trailing_whitespace_on_result_id_preserved(self):
+        c = self._make()
+        msgs = [
+            self._assistant("call_xyz"),
+            {"role": "tool", "tool_call_id": "call_xyz  ", "content": "data"},
+        ]
+        out = c._sanitize_tool_pairs(msgs)
+        tool_msgs = [m for m in out if m.get("role") == "tool"]
+        assert len(tool_msgs) == 1
+        assert tool_msgs[0]["content"] == "data"
+
+    def test_truly_orphaned_still_removed(self):
+        """Whitespace-trimmed ID that still has no match must be removed.
+        The assistant's call_real has no matching result, so a stub is
+        inserted in its place — the original orphaned entry must be gone."""
+        c = self._make()
+        msgs = [
+            self._assistant("call_real"),
+            {"role": "tool", "tool_call_id": " call_orphan ", "content": "stale"},
+        ]
+        out = c._sanitize_tool_pairs(msgs)
+        tool_call_ids = [m.get("tool_call_id") for m in out if m.get("role") == "tool"]
+        assert "call_orphan" not in tool_call_ids, "genuinely orphaned result must be removed"
+        assert " call_orphan " not in tool_call_ids, "original whitespace form must also be gone"

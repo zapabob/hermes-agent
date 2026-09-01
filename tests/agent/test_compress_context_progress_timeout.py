@@ -8,17 +8,119 @@ for the owned wrapper used when callers do not pass a ``commit_fence``.
 
 from __future__ import annotations
 
+import concurrent.futures
 import threading
 import time
 from unittest.mock import MagicMock
 
 import pytest
 
+import agent.conversation_compression as cc
 from agent.conversation_compression import (
     CompressionCommitFence,
+    context_compression_timed_out,
+    mark_context_compression_timed_out,
+    reset_context_compression_timeout_outcome,
     resolve_context_compression_timeouts,
     run_compress_context_with_progress_timeout,
 )
+
+
+class TestContextCompressionTimeoutState:
+    """Thread-safe typed timeout state (#98741, on top of #98424's flag)."""
+
+    def test_timeout_state_first_use_is_atomic(self, monkeypatch):
+        from types import SimpleNamespace
+
+        agent = SimpleNamespace()
+        reset_constructor_entered = threading.Event()
+        marker_constructor_finished = threading.Event()
+        release_reset_constructor = threading.Event()
+        reset_finished = threading.Event()
+        marker_finished = threading.Event()
+        seen = {}
+        original_local = threading.local
+
+        class DelayedLocal(original_local):
+            def __new__(cls):
+                state = super().__new__(cls)
+                if threading.current_thread().name == "timeout-resetter":
+                    reset_constructor_entered.set()
+                    assert release_reset_constructor.wait(timeout=2)
+                else:
+                    marker_constructor_finished.set()
+                return state
+
+        monkeypatch.setattr(cc.threading, "local", DelayedLocal)
+
+        def resetter():
+            reset_context_compression_timeout_outcome(agent)
+            reset_finished.set()
+            assert marker_finished.wait(timeout=2)
+            seen["resetter"] = context_compression_timed_out(agent)
+
+        def marker():
+            mark_context_compression_timed_out(agent)
+            marker_finished.set()
+            assert reset_finished.wait(timeout=2)
+            seen["marker"] = context_compression_timed_out(agent)
+
+        reset_thread = threading.Thread(target=resetter, name="timeout-resetter")
+        mark_thread = threading.Thread(target=marker, name="timeout-marker")
+        reset_thread.start()
+        assert reset_constructor_entered.wait(timeout=2)
+        mark_thread.start()
+
+        # A fixed implementation publishes the initialization lock before
+        # constructing the state. The old implementation lets the marker
+        # publish a competing state while the resetter is paused here.
+        if "_context_compression_timeout_state_lock" not in vars(agent):
+            assert marker_constructor_finished.wait(timeout=2)
+        release_reset_constructor.set()
+
+        reset_thread.join(timeout=2)
+        mark_thread.join(timeout=2)
+
+        assert not reset_thread.is_alive()
+        assert not mark_thread.is_alive()
+        assert seen == {"resetter": False, "marker": True}
+
+    def test_timeout_outcome_is_isolated_between_overlapping_entrypoints(self):
+        from types import SimpleNamespace
+
+        agent = SimpleNamespace()
+        worker_marked = threading.Event()
+        main_reset = threading.Event()
+        seen = {}
+
+        def worker():
+            reset_context_compression_timeout_outcome(agent)
+            mark_context_compression_timed_out(agent)
+            worker_marked.set()
+            assert main_reset.wait(timeout=2)
+            seen["worker"] = context_compression_timed_out(agent)
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+        assert worker_marked.wait(timeout=2)
+
+        reset_context_compression_timeout_outcome(agent)
+        seen["main"] = context_compression_timed_out(agent)
+        main_reset.set()
+        thread.join(timeout=2)
+
+        assert not thread.is_alive()
+        assert seen == {"main": False, "worker": True}
+
+    def test_attribute_fallback_for_minimal_doubles(self):
+        class Slotted:
+            __slots__ = ("_last_compression_timed_out",)
+
+        agent = Slotted()
+        mark_context_compression_timed_out(agent)
+        assert context_compression_timed_out(agent) is True
+        reset_context_compression_timeout_outcome(agent)
+        assert context_compression_timed_out(agent) is False
 
 
 class TestResolveContextCompressionTimeouts:
@@ -70,7 +172,10 @@ class TestRunCompressContextWithProgressTimeout:
             messages=original,
             system_prompt_fallback="fallback-prompt",
             idle_timeout_seconds=0.05,
-            total_ceiling_seconds=0.2,
+            # Leave enough total budget for a busy Windows runner to start the
+            # daemon worker; this case exercises inactivity cancellation, not
+            # the separate total-ceiling path.
+            total_ceiling_seconds=2.0,
             on_timeout=lambda idle, waited, since: warnings.append(
                 (idle, waited, since)
             ),
@@ -422,6 +527,7 @@ class TestCompressContextForwarderOwnsTimeout:
 
         assert out_msgs is original
         assert out_prompt == "sys"
+        assert agent._last_compression_timed_out is True
         assert calls["n"] == 1
         agent._emit_warning.assert_called_once()
         assert agent.context_compressor._consecutive_timeout_failures == 1
@@ -531,5 +637,6 @@ class TestCompressContextForwarderOwnsTimeout:
             commit_fence=fence,
         )
         assert seen["fence"] is fence
+        assert agent._last_compression_timed_out is False
         assert prompt == "sys"
         assert msgs[0]["content"] == "ok"

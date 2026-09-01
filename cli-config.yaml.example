@@ -649,9 +649,13 @@ compression:
   # fallback and still handles every non-eligible session.
   codex_responses_native: false
 
-  # Server-side compaction trigger in input tokens. Clamped below the local
-  # compression threshold at request time so the server compacts first.
-  codex_responses_compact_threshold: 200000
+  # Optional absolute server compaction trigger in input tokens. The default
+  # null value follows the resolved local compression trigger with an 8192 token
+  # safety margin. For example, a local trigger of 765000 selects 756808.
+  # A positive integer stays absolute and only clamps downward when needed so
+  # the server compacts first. Invalid values use this automatic behavior. If
+  # the local trigger is unavailable, automatic mode uses 200000.
+  codex_responses_compact_threshold: null
 
   # Number of non-system messages to protect at the head of the transcript, in
   # ADDITION to the system prompt (which is always implicitly protected).
@@ -1097,6 +1101,16 @@ agent:
   # gateway logs a WARNING and notifies the user to try /new. Does not kill
   # the turn (see gateway_timeout). 0 = disable. Default 300.
   # session_stall_timeout: 300
+
+  # Transcript-sanitiser repeated-heal escalation (#96870). The pre-send
+  # sanitiser silently repairs empty non-final turns on the wire copy; after
+  # this many heal passes within a 10-minute session window Hermes logs one
+  # ERROR (with session id + heal pattern) and sends a ONE-TIME out-of-band
+  # notice to the user suggesting /debug share or `hermes doctor`. The notice
+  # goes through the status channel only — conversation context and prompt
+  # caching are untouched. Set 0 to disable escalation (per-window WARNINGs
+  # still fire). Default 3.
+  # sanitizer_heal_escalation_threshold: 3
 
   # Related in-agent compression timeouts (they live under the top-level
   # compression: block, shown here for discoverability next to the stall

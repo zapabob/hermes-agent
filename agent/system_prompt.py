@@ -226,8 +226,19 @@ def _frozen_plugin_prompt_sections(agent: Any) -> tuple:
 
         rendered = tuple(render_system_prompt_sections(_plugin_session_info(agent)))
     except Exception as exc:
-        logger.warning("Plugin system prompt sections could not be rendered: %s", exc)
-        rendered = ()
+        # Fail-open: a plugin whose render raises at a rebuild boundary
+        # keeps its last good bytes (stashed by invalidate_system_prompt)
+        # instead of silently vanishing from the prompt.
+        previous = getattr(agent, "_plugin_system_prompt_sections_previous", None)
+        if previous:
+            logger.warning(
+                "Plugin system prompt sections failed to re-render (%s); "
+                "keeping the previous frozen sections", exc,
+            )
+            rendered = previous
+        else:
+            logger.warning("Plugin system prompt sections could not be rendered: %s", exc)
+            rendered = ()
     setattr(agent, attr, rendered)
     return rendered
 
@@ -288,6 +299,89 @@ def _plugin_section_blocks(sections: tuple, position: str) -> List[str]:
     selected = [section for section in sections if section.position == position]
     block = format_system_prompt_sections(selected)
     return [block] if block else []
+
+
+def _session_start_like(agent: Any, now: Any) -> Any:
+    """Best-known conversation start time, or ``now`` as a fallback.
+
+    ``Conversation started:`` must reference when the conversation actually
+    began, not when the system prompt was last (re)built.  The prompt is
+    rebuilt on compression, fresh-agent gateway turns, and resume paths, and
+    stamping build time made the date drift forward across midnight (a chat
+    that started on Wednesday read as "Conversation started: Thursday" after
+    a Thursday-morning resume), contradicting the fresh per-turn time hint.
+    Prefer, in order:
+
+    0. the LINEAGE-ROOT session id's embedded timestamp — compaction can
+       rotate the session id, and each rotated id embeds its OWN mint time,
+       so after months of compactions rung 1 alone would quietly re-birth
+       the conversation at its latest rotation. Walking to the lineage root
+       (same walk as ``_conversation_root_id``) recovers the ORIGINAL
+       birth stamp — a Bot Mode forever-chat keeps knowing when it was
+       first born, across every compaction (maintainer-directed, #98426);
+    1. the timestamp embedded in ``session_id`` (``YYYYMMDD_HHMMSS_...``) —
+       immutable for the life of the session, so the line is byte-stable
+       across every rebuild boundary (preserving prefix-cache KV);
+    2. ``agent.session_start`` (session-creation stamp);
+    3. ``now`` (initial/legacy build without either).
+
+    Session-id and ``session_start`` stamps are recorded in the box's local
+    wall-clock; attach that zone first, then convert to the configured /
+    rendered zone (``now``'s tzinfo) so the displayed date is consistent with
+    the per-turn clock even when the box's TZ differs from the configured one.
+    """
+    from datetime import datetime
+
+    try:
+        machine_local_tz = datetime.now().astimezone().tzinfo
+    except (ValueError, OSError):
+        machine_local_tz = None
+
+    def _to_display_tz(dt: Any) -> Any:
+        if machine_local_tz is not None and dt.tzinfo is None:
+            try:
+                dt = dt.replace(tzinfo=machine_local_tz)
+            except ValueError:
+                pass
+        if getattr(now, "tzinfo", None) is not None and dt.tzinfo is not None:
+            try:
+                dt = dt.astimezone(now.tzinfo)
+            except (ValueError, OSError):
+                pass
+        return dt
+
+    # 0. Lineage root: compaction rotation mints NEW ids with NEW embedded
+    # stamps. Walk to the root id (cached on the agent — the lineage only
+    # grows at compaction, and this function runs at that exact boundary,
+    # so one walk per rebuild is fresh enough) and prefer ITS embedded
+    # timestamp: the conversation's true birth. Fail-open to rung 1.
+    session_id = getattr(agent, "session_id", None)
+    root_id = None
+    try:
+        db = getattr(agent, "_session_db", None)
+        if db is not None and isinstance(session_id, str) and session_id:
+            root_id = db.get_conversation_root(session_id)
+    except Exception:
+        root_id = None
+    for candidate in (root_id, session_id):
+        if isinstance(candidate, str) and candidate:
+            m = re.match(r"^(\d{8})_(\d{6})", candidate)
+            if m:
+                try:
+                    embedded = datetime.strptime(
+                        f"{m.group(1)}_{m.group(2)}", "%Y%m%d_%H%M%S"
+                    )
+                    return _to_display_tz(embedded)
+                except ValueError:
+                    pass
+
+    # 2. Session-creation stamp set by the runner.
+    session_start = getattr(agent, "session_start", None)
+    if hasattr(session_start, "astimezone"):
+        return _to_display_tz(session_start)
+
+    # 3. Fallback: build time.
+    return now
 
 
 def _agent_home(agent: Any) -> Optional[Path]:
@@ -908,9 +1002,19 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     if _offset:  # '-0400' -> 'UTC-04:00'
         _zone_bits.append(f"UTC{_offset[:3]}:{_offset[3:]}")
     _zone_suffix = f" ({', '.join(_zone_bits)})" if _zone_bits else ""
+    _start = _session_start_like(agent, now)
     timestamp_line = (
-        f"Conversation started: {now.strftime('%A, %B %d, %Y')}{_zone_suffix}"
+        f"Conversation started: {_start.strftime('%A, %B %d, %Y')}{_zone_suffix}"
     )
+    # Long-lived sessions retain their immutable birth date while also
+    # recording the date of this cache-boundary rebuild. Same-day sessions
+    # keep the single-line byte-stable shape.
+    if now.strftime("%Y%m%d") != _start.strftime("%Y%m%d"):
+        timestamp_line += (
+            "\nToday's date (as of the last context rebuild): "
+            f"{now.strftime('%A, %B %d, %Y')} — trust this over the start "
+            "date for what day it is now; query tools for exact time."
+        )
     # Bot Chat sessions are effectively eternal — a birth date frozen in the
     # prompt becomes confidently-wrong misinformation within days. Timeless
     # prompts keep the identity lines but drop the date (the timezone still
@@ -967,10 +1071,21 @@ def invalidate_system_prompt(agent: Any) -> None:
     """Invalidate the cached system prompt, forcing a rebuild on the next turn.
 
     Called after context compression events. Also reloads memory from disk
-    so the rebuilt prompt captures any writes from this session.
+    so the rebuilt prompt captures any writes from this session, and clears
+    the frozen plugin-section snapshot so plugins re-render at the same
+    boundary (maintainer-directed, #95681 arc): a plugin section is just
+    another prompt block carrying state — freezing it while memory, skills,
+    and guidance refresh would recreate the stale-block disease inside
+    plugin-land. The previous bytes are stashed so a plugin whose render
+    RAISES falls back to its last good section instead of vanishing
+    (fail-open guard, not a freeze).
     """
     agent._cached_system_prompt = None
     agent._cached_system_prompt_static = None
+    _snapshot_attr = "_plugin_system_prompt_sections_snapshot"
+    if hasattr(agent, _snapshot_attr):
+        agent._plugin_system_prompt_sections_previous = getattr(agent, _snapshot_attr)
+        delattr(agent, _snapshot_attr)
     if agent._memory_store:
         agent._memory_store.load_from_disk()
 

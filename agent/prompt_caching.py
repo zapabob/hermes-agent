@@ -34,7 +34,32 @@ class PromptCachePlan:
         return _count_cache_markers(self.messages, self.tools)
 
 
-def _apply_cache_marker(msg: dict, cache_marker: dict, native_anthropic: bool = False) -> None:
+def envelope_tool_part_cache_markers_supported(
+    provider: str | None, base_url: str | None
+) -> bool:
+    """Whether the envelope-layout route honors part-level markers on role:tool.
+
+    OpenRouter (and Nous Portal, which proxies to it) relocate a
+    ``cache_control`` sitting on a tool message's content part onto the
+    ``tool_result`` block during their OpenAI→Anthropic translation, so the
+    marker is honored there. LiteLLM-style OpenAI-wire proxies instead map
+    content parts verbatim: the part-level marker lands at
+    ``tool_result.content[0]``, which the Anthropic Messages schema forbids —
+    a non-retryable HTTP 400 that kills the whole turn (#89886). On those
+    routes tool messages must not carry part-level markers at all; the
+    breakpoint budget reallocates to the nearest eligible message instead.
+    """
+    from agent.agent_runtime_helpers import _is_litellm_route
+
+    return not _is_litellm_route((provider or "").strip().lower(), base_url or "")
+
+
+def _apply_cache_marker(
+    msg: dict,
+    cache_marker: dict,
+    native_anthropic: bool = False,
+    tool_part_markers: bool = True,
+) -> None:
     """Add cache_control to a single message, handling all format variations."""
     role = msg.get("role", "")
     content = msg.get("content")
@@ -43,6 +68,12 @@ def _apply_cache_marker(msg: dict, cache_marker: dict, native_anthropic: bool = 
         # Native Anthropic layout: top-level marker; the adapter moves it
         # inside the tool_result block.
         msg["cache_control"] = cache_marker
+        return
+
+    if role == "tool" and not tool_part_markers:
+        # Envelope route whose OpenAI→Anthropic translation copies content
+        # parts verbatim (LiteLLM et al.): a part-level marker becomes
+        # tool_result.content[0].cache_control → non-retryable 400 (#89886).
         return
 
     if content is None or content == "":
@@ -63,20 +94,22 @@ def _apply_cache_marker(msg: dict, cache_marker: dict, native_anthropic: bool = 
         if role == "user":
             stable_prefix = find_stable_prefix(content)
             if stable_prefix is not None:
-                # Builder-declared boundary (#81867): the scaffold carries the
-                # breakpoint, the volatile invocation tail rides unmarked so a
-                # changed ticket ID or timestamp no longer invalidates the
-                # whole skill body. Request-local only — the canonical session
-                # message stays a plain string.
-                msg["content"] = [
-                    {
-                        "type": "text",
-                        "text": stable_prefix,
-                        "cache_control": cache_marker,
-                    },
-                    {"type": "text", "text": content[len(stable_prefix):]},
-                ]
-                return
+                suffix = content[len(stable_prefix):]
+                if suffix.strip():
+                    # Builder-declared boundary (#81867): the scaffold carries the
+                    # breakpoint, the volatile invocation tail rides unmarked so a
+                    # changed ticket ID or timestamp no longer invalidates the
+                    # whole skill body. Request-local only — the canonical session
+                    # message stays a plain string.
+                    msg["content"] = [
+                        {
+                            "type": "text",
+                            "text": stable_prefix,
+                            "cache_control": cache_marker,
+                        },
+                        {"type": "text", "text": suffix},
+                    ]
+                    return
         msg["content"] = [
             {"type": "text", "text": content, "cache_control": cache_marker}
         ]
@@ -88,7 +121,9 @@ def _apply_cache_marker(msg: dict, cache_marker: dict, native_anthropic: bool = 
             last["cache_control"] = cache_marker
 
 
-def _can_carry_marker(msg: dict, native_anthropic: bool) -> bool:
+def _can_carry_marker(
+    msg: dict, native_anthropic: bool, tool_part_markers: bool = True
+) -> bool:
     """True if a marker on this message is actually honored by the provider.
 
     On the native Anthropic layout every message works (top-level markers are
@@ -97,9 +132,16 @@ def _can_carry_marker(msg: dict, native_anthropic: bool) -> bool:
     assistant turns that are pure tool_calls) and empty tool messages would
     receive a top-level marker the provider ignores — wasting one of the four
     breakpoints. Skip those so the breakpoints land on messages that count.
+
+    ``tool_part_markers=False`` (LiteLLM-style envelope routes, #89886)
+    additionally excludes ALL role:tool messages: their part-level marker
+    would be forwarded verbatim into ``tool_result.content[]`` and rejected
+    with a non-retryable 400, so the breakpoint must reallocate instead.
     """
     if native_anthropic:
         return True
+    if msg.get("role") == "tool" and not tool_part_markers:
+        return False
     content = msg.get("content")
     if content is None or content == "":
         return False
@@ -204,7 +246,7 @@ def _apply_system_cache_markers(
         and content.startswith(static_system_prefix)
     ):
         suffix = content[len(static_system_prefix):]
-        if suffix:
+        if suffix.strip():
             suffix_part: dict = {"type": "text", "text": suffix}
             if mark_suffix:
                 suffix_part["cache_control"] = cache_marker
@@ -217,7 +259,7 @@ def _apply_system_cache_markers(
                 suffix_part,
             ]
             return 2 if mark_suffix else 1
-        # Empty suffix: the stored prompt IS the static prefix. Mark it as
+        # Empty/whitespace-only suffix: the stored prompt IS the static prefix. Mark it as
         # one whole block — a [marked-prefix, ""] split would put an empty
         # text block on the wire (HTTP 400 on native Anthropic).
         _apply_cache_marker(message, cache_marker, native_anthropic=native_anthropic)
@@ -390,8 +432,14 @@ def build_prompt_cache_plan(
     native_anthropic: bool = False,
     static_system_prefix: str | None = None,
     direct_native_tool_cache: bool = False,
+    tool_part_markers: bool = True,
 ) -> PromptCachePlan:
-    """Build isolated cache sections for one resolved request destination."""
+    """Build isolated cache sections for one resolved request destination.
+
+    ``tool_part_markers=False`` (LiteLLM-style envelope routes, #89886)
+    keeps ``cache_control`` off role:tool content parts; breakpoints
+    reallocate to the nearest eligible non-tool message.
+    """
     messages = copy.deepcopy(api_messages or [])
     strip_anthropic_cache_control(messages)
     planned_tools = strip_anthropic_tool_cache_control(tools)
@@ -402,6 +450,7 @@ def build_prompt_cache_plan(
             cache_ttl=cache_ttl,
             native_anthropic=native_anthropic,
             static_system_prefix=static_system_prefix,
+            tool_part_markers=tool_part_markers,
         )
         return PromptCachePlan(messages=planned_messages, tools=planned_tools)
 
@@ -436,6 +485,7 @@ def apply_anthropic_cache_control(
     cache_ttl: str = "5m",
     native_anthropic: bool = False,
     static_system_prefix: str | None = None,
+    tool_part_markers: bool = True,
 ) -> List[Dict[str, Any]]:
     """Apply Anthropic cache-control markers to API messages.
 
@@ -452,6 +502,10 @@ def apply_anthropic_cache_control(
     cost — a shallow top-level copy suffices because
     :func:`strip_anthropic_cache_control` is copy-on-write on content parts —
     and the rest of the copy-on-write contract is unchanged (#90971).
+
+    ``tool_part_markers=False`` (LiteLLM-style envelope routes, #89886)
+    keeps markers off role:tool messages entirely; the breakpoint budget
+    reallocates to the nearest eligible non-tool message.
 
     Returns:
         Shallow copy of message list with selective deep copies of modified messages.
@@ -492,10 +546,19 @@ def apply_anthropic_cache_control(
         i
         for i in range(len(messages))
         if messages[i].get("role") != "system"
-        and _can_carry_marker(messages[i], native_anthropic=native_anthropic)
+        and _can_carry_marker(
+            messages[i],
+            native_anthropic=native_anthropic,
+            tool_part_markers=tool_part_markers,
+        )
     ]
     for idx in non_sys[-remaining:]:
         messages[idx] = copy.deepcopy(messages[idx])
-        _apply_cache_marker(messages[idx], marker, native_anthropic=native_anthropic)
+        _apply_cache_marker(
+            messages[idx],
+            marker,
+            native_anthropic=native_anthropic,
+            tool_part_markers=tool_part_markers,
+        )
 
     return messages

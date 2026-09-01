@@ -183,6 +183,7 @@ from agent.message_sanitization import (  # noqa: F401
     _strip_non_ascii,
     _sanitize_messages_non_ascii,
     _sanitize_tools_non_ascii,
+    _looks_like_image_content_rejection,
     _strip_images_from_messages,
     _sanitize_structure_non_ascii,
     coalesce_tool_call_id as _sanitize_coalesce_tool_call_id,
@@ -522,6 +523,7 @@ class AIAgent:
         checkpoint_max_file_size_mb: int = 10,
         pass_session_id: bool = False,
         requested_provider: str = None,
+        capabilities: Dict[str, bool] | None = None,
     ):
         """Forwarder — see ``agent.agent_init.init_agent``."""
         if tool_delay is not None:
@@ -538,6 +540,7 @@ class AIAgent:
             api_key=api_key,
             provider=provider,
             requested_provider=requested_provider,
+            capabilities=capabilities,
             api_mode=api_mode,
             acp_command=acp_command,
             acp_args=acp_args,
@@ -797,6 +800,11 @@ class AIAgent:
         self.session_estimated_cost_usd = 0.0
         self.session_cost_status = "unknown"
         self.session_cost_source = "none"
+
+        # Session boundary: the usage anchor describes the OLD session's
+        # transcript — a fresh/branched/resumed session must fall back to
+        # full estimation until its first provider response re-anchors.
+        self._usage_anchor = None
         
         # Turn counter (added after reset_session_state was first written — #2635)
         self._user_turn_count = 0
@@ -893,10 +901,26 @@ class AIAgent:
             return_load_result=True,
         )
 
-    def switch_model(self, new_model, new_provider, api_key='', base_url='', api_mode=''):
+    def switch_model(
+        self,
+        new_model,
+        new_provider,
+        api_key='',
+        base_url='',
+        api_mode='',
+        capabilities=None,
+    ):
         """Forwarder — see ``agent.agent_runtime_helpers.switch_model``."""
         from agent.agent_runtime_helpers import switch_model
-        return switch_model(self, new_model, new_provider, api_key, base_url, api_mode)
+        return switch_model(
+            self,
+            new_model,
+            new_provider,
+            api_key,
+            base_url,
+            api_mode,
+            capabilities,
+        )
 
     def _safe_print(self, *args, **kwargs):
         """Print that silently handles broken pipes / closed stdout.
@@ -8194,17 +8218,31 @@ class AIAgent:
         auto-compress abort.  Auto-compress callers use the default
         ``force=False``.
         """
+        # Per-attempt signal consumed by turn-start preflight (#98424) and the
+        # in-loop pre-API/overflow consumers. A stalled compression must not
+        # be mistaken for a structural no-op and followed by the oversized
+        # provider request it was meant to prevent. The typed helper upgrades
+        # the simple attribute to thread-local state guarded by a per-agent
+        # lock so overlapping automatic/manual entrypoints cannot clobber each
+        # other's outcome (#98741).
         from agent.conversation_compression import (
             CompressionCommitFence,
             compress_context,
+            mark_context_compression_timed_out,
+            reset_context_compression_timeout_outcome,
             resolve_context_compression_timeouts,
             run_compress_context_with_progress_timeout,
         )
+        reset_context_compression_timeout_outcome(self)
         from agent.portal_tags import (
+            get_affinity_scope,
             get_conversation_context,
+            reset_affinity_scope,
             reset_conversation_context,
+            set_affinity_scope,
             set_conversation_context,
         )
+        from agent.prompt_cache_scope import declared_conversation_scope_safe
         # Out-of-turn compaction entry points — ``/compact`` (cli.py), the
         # gateway ``/compress`` command and its hygiene sweep (both of which
         # build a throwaway agent), and partial head compression — call this
@@ -8224,6 +8262,16 @@ class AIAgent:
             root = self._conversation_root_id()
             if root:
                 token = set_conversation_context(root)
+        # Same fallback for the ROUTING scope: out-of-turn compaction would
+        # otherwise send the summarizer's call with no sticky key at all, or
+        # (worse, on a per-response host) with a key that no longer matches
+        # the conversation it is compacting. Only set when the host declared
+        # one — unset keeps the pre-#96811 conversation-id fallback.
+        affinity_token = None
+        if get_affinity_scope() is None:
+            declared = declared_conversation_scope_safe(self)
+            if declared:
+                affinity_token = set_affinity_scope(declared)
         # Every AIAgent compression has a fence, including ordinary in-turn and
         # manual paths. hard_interrupt() uses this exact instance to serialize
         # cancel admission against begin_commit().
@@ -8257,129 +8305,275 @@ class AIAgent:
 
             # Callers that already own a progress-aware wait (gateway session
             # hygiene) pass commit_fence and must not be double-wrapped.
-            if commit_fence is not None:
-                return _run(active_fence)
+            direct_path = commit_fence is not None
+            idle_timeout = total_ceiling = None
+            if not direct_path:
+                idle_timeout, total_ceiling = resolve_context_compression_timeouts()
+                if idle_timeout <= 0:
+                    direct_path = True
 
-            idle_timeout, total_ceiling = resolve_context_compression_timeouts()
-            if idle_timeout <= 0:
-                return _run(active_fence)
-
-            def _snapshot_worker(fence=None):
-                # #76354 review F3: the pooled worker must NEVER share the
-                # caller's live transcript. Plugin/legacy context engines are
-                # allowed to mutate their input list in place; after a host
-                # timeout the worker stays alive, so a shared list would let
-                # a late engine rewrite the live conversation (roles,
-                # ordering, persisted content) behind the caller's back.
-                # Deep-snapshot here, on the worker thread, so the caller's
-                # list object is never touched by pooled code. Results are
-                # published to caller-visible state only via the returned
-                # value of an ADMITTED commit (the host discards results on
-                # timeout/cancel); durable SessionDB mutation is already
-                # gated behind the commit fence inside compress_context.
-                snapshot = copy.deepcopy(messages)
-                result_msgs, result_prompt = _run(
-                    fence, target_messages=snapshot
-                )
-                if result_msgs is snapshot:
-                    # No-op/abort path returned the snapshot unchanged: hand
-                    # back the caller's ORIGINAL list so identity-based
-                    # semantics (len/identity no-op detection, flush dedup
-                    # by id()) keep working.
-                    return messages, result_prompt
-                return result_msgs, result_prompt
-
-            # Resolve the fallback prompt lazily on timeout only. Eager
-            # rebuild here would raise before compress_context runs whenever
-            # _cached_system_prompt is unset and _build_system_prompt fails
-            # (lock-refresher / noop-exception tests rely on that path).
-            def _fallback_prompt():
-                cached = getattr(self, "_cached_system_prompt", None)
-                if cached:
-                    return cached
-                try:
-                    return self._build_system_prompt(system_message)
-                except Exception:
-                    logger.debug(
-                        "compress_context timeout fallback prompt rebuild "
-                        "failed; using raw system_message",
-                        exc_info=True,
+            if direct_path:
+                result = _run(active_fence)
+            else:
+                def _snapshot_worker(fence=None):
+                    # #76354 review F3: the pooled worker must NEVER share the
+                    # caller's live transcript. Plugin/legacy context engines are
+                    # allowed to mutate their input list in place; after a host
+                    # timeout the worker stays alive, so a shared list would let
+                    # a late engine rewrite the live conversation (roles,
+                    # ordering, persisted content) behind the caller's back.
+                    # Deep-snapshot here, on the worker thread, so the caller's
+                    # list object is never touched by pooled code. Results are
+                    # published to caller-visible state only via the returned
+                    # value of an ADMITTED commit (the host discards results on
+                    # timeout/cancel); durable SessionDB mutation is already
+                    # gated behind the commit fence inside compress_context.
+                    snapshot = copy.deepcopy(messages)
+                    result_msgs, result_prompt = _run(
+                        fence, target_messages=snapshot
                     )
-                    return system_message or ""
+                    if result_msgs is snapshot:
+                        # No-op/abort path returned the snapshot unchanged: hand
+                        # back the caller's ORIGINAL list so identity-based
+                        # semantics (len/identity no-op detection, flush dedup
+                        # by id()) keep working.
+                        return messages, result_prompt
+                    return result_msgs, result_prompt
 
-            def _on_timeout(idle, waited, since_progress):
-                logger.warning(
-                    "Context compression made no progress for %.1fs "
-                    "(total wait %.1fs, ceiling %.1fs); continuing without "
-                    "compression",
-                    since_progress,
-                    waited,
-                    total_ceiling,
-                )
-                touch = getattr(self, "_touch_activity", None)
-                if callable(touch):
+                # Resolve the fallback prompt lazily on timeout only. Eager
+                # rebuild here would raise before compress_context runs whenever
+                # _cached_system_prompt is unset and _build_system_prompt fails
+                # (lock-refresher / noop-exception tests rely on that path).
+                def _fallback_prompt():
+                    cached = getattr(self, "_cached_system_prompt", None)
+                    if cached:
+                        return cached
                     try:
-                        touch(
-                            "context compression timed out",
-                            provenance=ActivityProvenance.AGENT_COMPRESSION_TIMEOUT,
-                        )
+                        return self._build_system_prompt(system_message)
                     except Exception:
                         logger.debug(
-                            "compress_context timeout activity touch failed",
+                            "compress_context timeout fallback prompt rebuild "
+                            "failed; using raw system_message",
                             exc_info=True,
                         )
-                # Same timeout cooldown ladder as summary-LLM timeouts
-                # (#62452): avoid re-burning the full idle budget every turn.
-                compressor = getattr(self, "context_compressor", None)
-                if compressor is not None:
-                    record = getattr(compressor, "record_timeout_failure", None)
-                    if callable(record):
+                        return system_message or ""
+
+                timeout_cause = {
+                    "total_exhausted": False,
+                    "progress_observed": False,
+                }
+
+                def _on_timeout_cause(total_exhausted, progress_observed):
+                    timeout_cause["total_exhausted"] = total_exhausted
+                    timeout_cause["progress_observed"] = progress_observed
+
+                def _on_timeout(idle, waited, since_progress):
+                    mark_context_compression_timed_out(self)
+                    total_exhausted = timeout_cause["total_exhausted"]
+                    progress_observed = timeout_cause["progress_observed"]
+                    if total_exhausted:
+                        logger.warning(
+                            "Context compression reached its total ceiling "
+                            "after %.1fs (progress observed=%s); continuing "
+                            "without compression",
+                            waited,
+                            progress_observed,
+                        )
+                    else:
+                        logger.warning(
+                            "Context compression made no progress for %.1fs "
+                            "(total wait %.1fs, ceiling %.1fs); continuing "
+                            "without compression",
+                            since_progress,
+                            waited,
+                            total_ceiling,
+                        )
+                    touch = getattr(self, "_touch_activity", None)
+                    if callable(touch):
                         try:
-                            record(
-                                "host compress_context timeout "
-                                "(no summary progress)"
+                            touch(
+                                "context compression timed out",
+                                provenance=ActivityProvenance.AGENT_COMPRESSION_TIMEOUT,
                             )
                         except Exception:
                             logger.debug(
-                                "failed to record compress_context timeout "
-                                "cooldown",
+                                "compress_context timeout activity touch failed",
                                 exc_info=True,
                             )
-                emit = getattr(self, "_emit_warning", None)
-                if callable(emit):
-                    emit(
-                        "⚠ Context compression timed out "
-                        f"after {idle:.1f}s with no output from the summary "
-                        "model. No messages were dropped — continuing without "
-                        "compression. Run /compress to retry, /new for a clean "
-                        "session, or check auxiliary.compression."
-                    )
+                    # Same timeout cooldown ladder as summary-LLM timeouts
+                    # (#62452): avoid re-burning the full idle budget every turn.
+                    compressor = getattr(self, "context_compressor", None)
+                    if compressor is not None:
+                        record = getattr(compressor, "record_timeout_failure", None)
+                        if callable(record):
+                            try:
+                                reason = (
+                                    "host compress_context total ceiling "
+                                    "exhausted"
+                                    if total_exhausted
+                                    else "host compress_context timeout "
+                                    "(no summary progress)"
+                                )
+                                record(
+                                    reason,
+                                    failure_kind=(
+                                        "ceiling_exhausted"
+                                        if total_exhausted
+                                        else "stalled"
+                                    ),
+                                )
+                            except Exception:
+                                logger.debug(
+                                    "failed to record compress_context timeout "
+                                    "cooldown",
+                                    exc_info=True,
+                                )
+                    emit = getattr(self, "_emit_warning", None)
+                    if callable(emit):
+                        if total_exhausted:
+                            progress = (
+                                " after summary output was observed"
+                                if progress_observed
+                                else ""
+                            )
+                            emit(
+                                "⚠ Context compression reached its total ceiling "
+                                f"after {waited:.1f}s{progress}. No messages were "
+                                "dropped — continuing without compression. Run "
+                                "/compress to retry or /new for a clean session."
+                            )
+                        else:
+                            emit(
+                                "⚠ Context compression timed out "
+                                f"after {idle:.1f}s with no output from the summary "
+                                "model. No messages were dropped — continuing "
+                                "without compression. Run /compress to retry, /new "
+                                "for a clean session, or check "
+                                "auxiliary.compression."
+                            )
 
-            def _on_commit_overrun(waited, ceiling):
-                # Commit-phase ceiling breach: the SessionDB mutation is in
-                # flight and must complete (abandoning it mid-commit would
-                # diverge live messages from durable session state), so this
-                # only surfaces the overrun — it never cancels the commit.
-                emit = getattr(self, "_emit_warning", None)
-                if callable(emit):
-                    emit(
-                        "⚠ Context compression commit is taking unusually "
-                        f"long ({waited:.0f}s, ceiling {ceiling:.0f}s). "
-                        "Waiting for it to finish safely — if this persists, "
-                        "check SessionDB health (disk / lock contention)."
-                    )
+                def _on_commit_overrun(waited, ceiling):
+                    # Commit-phase ceiling breach: the SessionDB mutation is in
+                    # flight and must complete (abandoning it mid-commit would
+                    # diverge live messages from durable session state), so this
+                    # only surfaces the overrun — it never cancels the commit.
+                    emit = getattr(self, "_emit_warning", None)
+                    if callable(emit):
+                        emit(
+                            "⚠ Context compression commit is taking unusually "
+                            f"long ({waited:.0f}s, ceiling {ceiling:.0f}s). "
+                            "Waiting for it to finish safely — if this persists, "
+                            "check SessionDB health (disk / lock contention)."
+                        )
 
-            result = run_compress_context_with_progress_timeout(
-                worker=_snapshot_worker,
-                messages=messages,
-                system_prompt_fallback=_fallback_prompt,
-                idle_timeout_seconds=idle_timeout,
-                total_ceiling_seconds=total_ceiling,
-                on_timeout=_on_timeout,
-                on_commit_overrun=_on_commit_overrun,
-                fence=active_fence,
-                telemetry_agent=self,
+                def _publish_new_fence():
+                    # The stall-fallback retry (#78981) needs a fence the aborted
+                    # attempt cannot veto. Publish it on the same serialized slot
+                    # hard_interrupt() reads, so a /stop during the retry admits
+                    # against the attempt that is actually running. The finally
+                    # below restores whatever the caller had either way.
+                    retry_fence = CompressionCommitFence()
+                    with fence_registration_lock:
+                        self._active_compression_commit_fence = retry_fence
+                    return retry_fence
+
+                result = run_compress_context_with_progress_timeout(
+                    worker=_snapshot_worker,
+                    messages=messages,
+                    system_prompt_fallback=_fallback_prompt,
+                    idle_timeout_seconds=idle_timeout,
+                    total_ceiling_seconds=total_ceiling,
+                    on_timeout=_on_timeout,
+                    on_timeout_cause=_on_timeout_cause,
+                    on_commit_overrun=_on_commit_overrun,
+                    fence=active_fence,
+                    telemetry_agent=self,
+                    new_fence=_publish_new_fence,
+                )
+            # _DB_PERSISTED_MARKER lives at module level in
+            # agent.context_compressor; conversation_compression only
+            # imports it locally (cannot be imported from there). Imported
+            # UNCONDITIONALLY (no fallback): both modules are already
+            # hard dependencies at this point — agent.context_compressor is
+            # imported at the top of this module (line ~162), and
+            # agent.conversation_compression is imported at the top of this
+            # very method and its compress_context is invoked below. The
+            # only way these imports can fail while the wrapper is
+            # functional is a renamed/removed symbol, and that must fail
+            # LOUDLY: a silent fallback literal ("_db_persisted") would
+            # split the stamping key from the flush's and quietly resurrect
+            # the duplicate-row bug this fix removed.
+            from agent.context_compressor import _DB_PERSISTED_MARKER
+            from agent.conversation_compression import (
+                _messages_match_scoped_identity,
+
             )
+
+            def _sync_persisted_markers(target_messages, source_messages):
+                if not isinstance(target_messages, list) or not isinstance(
+                    source_messages, list
+                ):
+                    return
+                # Compression runs against a deepcopy snapshot on the pooled
+                # worker path, so publish stamps land on the result list first.
+                # Mirror them back onto the live caller lists by scoped
+                # identity after publish succeeds; timestamp-less repeated
+                # content is ambiguous, so we stamp every scoped match instead
+                # of stopping at the first one.
+                for source_message in source_messages:
+                    if not (
+                        isinstance(source_message, dict)
+                        and source_message.get(_DB_PERSISTED_MARKER)
+                    ):
+                        continue
+                    source_timestamp = source_message.get("timestamp")
+                    matched_exact_timestamp = False
+                    if source_timestamp is not None:
+                        for target_message in target_messages:
+                            if not isinstance(target_message, dict):
+                                continue
+                            if target_message.get(_DB_PERSISTED_MARKER):
+                                continue
+                            if not _messages_match_scoped_identity(
+                                target_message, source_message
+                            ):
+                                continue
+                            if target_message.get("timestamp") != source_timestamp:
+                                continue
+                            target_message[_DB_PERSISTED_MARKER] = True
+                            matched_exact_timestamp = True
+                        if matched_exact_timestamp:
+                            continue
+                    for target_message in target_messages:
+                        if not isinstance(target_message, dict):
+                            continue
+                        if target_message.get(_DB_PERSISTED_MARKER):
+                            continue
+                        if not _messages_match_scoped_identity(
+                            target_message, source_message
+                        ):
+                            continue
+                        target_message[_DB_PERSISTED_MARKER] = True
+
+            if isinstance(result, tuple) and result:
+                result_messages = result[0]
+                if isinstance(result_messages, list):
+                    # Direct-path callers bypass the snapshot worker, so they
+                    # still need the same post-publish mirror onto the live
+                    # caller list even when the returned list already points at
+                    # the active transcript.
+                    if direct_path or result_messages is not messages:
+                        _sync_persisted_markers(messages, result_messages)
+                    session_messages = getattr(self, "_session_messages", None)
+                    if (
+                        isinstance(session_messages, list)
+                        and session_messages is not messages
+                    ):
+                        # Intentional: durable-parent adoption can leave
+                        # `_session_messages` on the pre-adoption live list
+                        # while `messages` now points at the adopted snapshot,
+                        # so both lists need the post-publish marker sync.
+                        _sync_persisted_markers(session_messages, result_messages)
             # compress_context ran on a daemon pool worker thread; the session
             # id rotation updated hermes_logging._session_context (a
             # threading.local) on the WORKER thread, not this one. Propagate
@@ -8417,6 +8611,8 @@ class AIAgent:
             # tag into the surrounding scope.
             if token is not None:
                 reset_conversation_context(token)
+            if affinity_token is not None:
+                reset_affinity_scope(affinity_token)
 
     def _set_tool_guardrail_halt(self, decision: ToolGuardrailDecision) -> None:
         """Record the first guardrail decision that should stop this turn."""
@@ -8673,6 +8869,7 @@ class AIAgent:
         persist_user_timestamp: Optional[float] = None,
         persist_user_display_kind: Optional[str] = None,
         persist_user_display_metadata: Optional[Dict[str, Any]] = None,
+        persist_user_platform_id: Optional[str] = None,
         moa_config: Optional[dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Forwarder — see ``agent.conversation_loop.run_conversation``."""
@@ -8692,9 +8889,12 @@ class AIAgent:
         from agent import relay_runtime
         from agent.conversation_loop import run_conversation
         from agent.portal_tags import (
+            reset_affinity_scope,
             reset_conversation_context,
+            set_affinity_scope,
             set_conversation_context,
         )
+        from agent.prompt_cache_scope import declared_conversation_scope_safe
         from hermes_cli.observability.relay_shared_metrics import (
             finish_task_run,
             start_task_run,
@@ -9157,6 +9357,13 @@ class AIAgent:
             # (which copy this Context into their thread) — inherits the
             # ``conversation=<root>`` tag with zero per-call-site plumbing.
             token = set_conversation_context(self._conversation_root_id())
+            # Routing/affinity scope for the same turn — the conversation the
+            # HOST declared, when it declared one. Providers fall back to the
+            # attribution id above when it is unset, so this changes nothing
+            # for a host that keeps one session id per conversation (#96811).
+            affinity_token = set_affinity_scope(
+                declared_conversation_scope_safe(self)
+            )
             # Publish the session accounting handles the same way so auxiliary
             # calls record their token usage into session_model_usage (task
             # dimension) — the fix for aux spend being invisible in analytics
@@ -9200,6 +9407,7 @@ class AIAgent:
                         persist_user_timestamp=persist_user_timestamp,
                         persist_user_display_kind=persist_user_display_kind,
                         persist_user_display_metadata=persist_user_display_metadata,
+                        persist_user_platform_id=persist_user_platform_id,
                         moa_config=moa_config,
                     )
                 finally:
@@ -9298,6 +9506,8 @@ class AIAgent:
                         reset_accounting_context(acct_token)
                     if token is not None:
                         reset_conversation_context(token)
+                    if affinity_token is not None:
+                        reset_affinity_scope(affinity_token)
 
     def chat(self, message: str, stream_callback: Optional[callable] = None) -> str:
         """

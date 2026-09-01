@@ -44,11 +44,62 @@ from agent.memory_manager import build_memory_context_block
 from agent.memory_provider import is_trivial_prompt
 from agent.message_metadata import append_message, stamp_message_timestamp
 from agent.model_metadata import (
+    anchored_context_tokens,
     estimate_messages_tokens_rough,
     estimate_request_tokens_rough,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _preflight_request_tokens(
+    agent: Any,
+    messages: List[Dict[str, Any]],
+    system_prompt: str,
+) -> int:
+    """Token estimate for automatic preflight compression.
+
+    When the upcoming request is eligible for native Responses compaction,
+    count the checkpoint-pruned wire payload rather than the full durable
+    transcript. Auxiliary compression still uses the generic estimator
+    (``native_compaction_eligible=False``).
+
+    Usage-anchored fast path: when a provider-reported usage anchor is
+    valid for ``messages`` (see ``anchored_context_tokens``), it already
+    covers system prompt + tool schemas + full history EXACTLY as the
+    provider counted them, with estimation confined to the messages
+    appended since that response. Prefer it over every heuristic.
+    """
+    anchored = anchored_context_tokens(
+        messages, getattr(agent, "_usage_anchor", None)
+    )
+    if anchored is not None:
+        return anchored
+    tools = getattr(agent, "tools", None) or None
+    try:
+        from agent.codex_responses_adapter import (
+            estimate_native_responses_preflight_tokens,
+        )
+
+        native = estimate_native_responses_preflight_tokens(
+            agent,
+            messages,
+            system_prompt=system_prompt or "",
+            tools=tools,
+        )
+        if isinstance(native, int) and not isinstance(native, bool) and native >= 0:
+            return native
+    except Exception:
+        logger.debug(
+            "native Responses preflight estimate unavailable; "
+            "using generic transcript estimate",
+            exc_info=True,
+        )
+    return estimate_request_tokens_rough(
+        messages,
+        system_prompt=system_prompt or "",
+        tools=tools,
+    )
 
 
 def compose_user_api_content(
@@ -328,6 +379,23 @@ def compression_made_progress(
 _compression_made_progress = compression_made_progress
 
 
+class PreflightCompressionTimedOut(RuntimeError):
+    """Raised when an oversized turn cannot safely finish preflight."""
+
+
+def _fail_closed_after_preflight_timeout(agent, request_tokens: int) -> None:
+    """Stop an oversized turn instead of sending its unchanged provider payload."""
+    from agent.conversation_compression import context_compression_timed_out
+
+    if not context_compression_timed_out(agent):
+        return
+    raise PreflightCompressionTimedOut(
+        "Context compression timed out before it could commit while the request "
+        f"was still approximately {request_tokens:,} tokens. The provider call "
+        "was not sent. Run /compress and wait for it to finish, then retry."
+    )
+
+
 def _review_fork_first_request_pending(agent: Any) -> bool:
     """Whether a detached review fork has yet to send its first provider request.
 
@@ -463,6 +531,7 @@ def build_turn_context(
     stream_callback,
     persist_user_message: Optional[Any],
     persist_user_timestamp: Optional[float] = None,
+    persist_user_platform_id: Optional[str] = None,
     *,
     persist_user_display_kind: Optional[str] = None,
     persist_user_display_metadata: Optional[Dict[str, Any]] = None,
@@ -576,6 +645,7 @@ def build_turn_context(
     agent._persist_user_message_idx = None
     agent._persist_user_message_override = persist_user_message
     agent._persist_user_message_timestamp = persist_user_timestamp
+    agent._persist_user_message_platform_id = persist_user_platform_id
     # Generate unique task_id if not provided to isolate VMs between tasks.
     effective_task_id = task_id or str(uuid.uuid4())
     agent._current_task_id = effective_task_id
@@ -712,6 +782,8 @@ def build_turn_context(
         user_msg["display_kind"] = persist_user_display_kind
         if persist_user_display_metadata:
             user_msg["display_metadata"] = persist_user_display_metadata
+    if persist_user_platform_id is not None:
+        user_msg["platform_message_id"] = persist_user_platform_id
 
     append_message(messages, user_msg)
     current_turn_user_idx = len(messages) - 1
@@ -832,10 +904,15 @@ def build_turn_context(
         _idle_gap = time.time() - getattr(agent, "_last_activity_ts", time.time())
         if _idle_gap >= _idle_after:
             _compressor = agent.context_compressor
-            _idle_tokens = estimate_request_tokens_rough(
+            # Route-aware pressure (#96995/#97602 class): on a compacted
+            # native-Codex session the generic durable-history figure
+            # overstates the wire by orders of magnitude and would fire an
+            # idle compaction the next request never needed. Reuse the
+            # preflight estimator (anchor → native pruned → generic).
+            _idle_tokens = _preflight_request_tokens(
+                agent,
                 messages,
-                system_prompt=active_system_prompt or "",
-                tools=agent.tools or None,
+                active_system_prompt or "",
             )
             # Post-compression target size: don't summarise a thread already
             # below what compaction would reduce it to.
@@ -915,10 +992,10 @@ def build_turn_context(
             agent.context_compressor.threshold_tokens,
         )
     ):
-        _preflight_tokens = estimate_request_tokens_rough(
+        _preflight_tokens = _preflight_request_tokens(
+            agent,
             messages,
-            system_prompt=active_system_prompt or "",
-            tools=agent.tools or None,
+            active_system_prompt or "",
         )
         _compressor = agent.context_compressor
         # getattr guard: minimal compressor doubles (SimpleNamespace in the
@@ -1079,14 +1156,15 @@ def build_turn_context(
                 # lower token count — e.g. summarising tool outputs) is
                 # recognised as progress instead of being misread as
                 # "Cannot compress further". Fixes #39548.
-                _preflight_tokens = estimate_request_tokens_rough(
+                _preflight_tokens = _preflight_request_tokens(
+                    agent,
                     messages,
-                    system_prompt=active_system_prompt or "",
-                    tools=agent.tools or None,
+                    active_system_prompt or "",
                 )
                 if not _compression_made_progress(
                     _orig_len, len(messages), _orig_tokens, _preflight_tokens
                 ):
+                    _fail_closed_after_preflight_timeout(agent, _preflight_tokens)
                     _preflight_compression_blocked = True
                     break  # Cannot compress further: neither rows nor tokens moved
                 conversation_history = conversation_history_after_compression(
@@ -1245,6 +1323,24 @@ def build_turn_context(
                 )
                 if callable(_clear_warn):
                     _clear_warn()
+            else:
+                # Route-aware (#96995/#97602 class): the warn site in the
+                # conversation loop now measures the checkpoint-pruned wire
+                # payload on native-Codex sessions, so the re-arm must use
+                # the same figure — otherwise a compacted session that fits
+                # on the wire never clears the dedup and future genuine
+                # overflow warnings stay suppressed.
+                _uncompressed_tokens = _preflight_request_tokens(
+                    agent,
+                    messages,
+                    active_system_prompt or "",
+                )
+                if _uncompressed_tokens <= _ctx_len:
+                    _clear_warn = getattr(
+                        agent, "_clear_context_overflow_warn", None
+                    )
+                    if callable(_clear_warn):
+                        _clear_warn()
 
     if _preflight_compressed:
         # Compression rebuilt the list (tail messages are fresh compaction

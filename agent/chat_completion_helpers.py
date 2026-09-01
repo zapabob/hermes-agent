@@ -3016,6 +3016,13 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
         # short-circuit the freshly activated fallback before it gets a
         # single stream attempt.
         _reset_stale_streak(agent)
+        from agent.native_compaction import resolve_native_compaction_capabilities
+        agent.runtime_capabilities = resolve_native_compaction_capabilities(
+            model=agent.model,
+            base_url=agent.base_url,
+            provider=fb_provider,
+            is_codex_backend=fb_provider == "openai-codex",
+        )
         return True
     except Exception as e:
         if fb_provider == "nous":
