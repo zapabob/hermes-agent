@@ -8,6 +8,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
 import { createRequire } from "node:module"
+import { pathToFileURL } from "node:url"
 
 const require = createRequire(import.meta.url)
 
@@ -36,25 +37,44 @@ function electronBuilderCli() {
   return path.join(path.dirname(pkgJson), rel)
 }
 
-const dist = electronDistDir()
-// A local build packages artifacts only. Pin this explicitly so CI-like
-// environments never make electron-builder infer an unintended publish step.
-const args = ["--publish", "never"]
-if (dist && fs.existsSync(distBinary(dist))) {
-  args.push(`-c.electronDist=${dist}`)
-} else {
-  console.warn(
-    "[run-electron-builder] no local electron dist; electron-builder will fetch " +
-      "via @electron/get (electronVersion + ELECTRON_MIRROR)."
-  )
+export function normalizeLocalBuildArgs(forwardedArgs, dist = null) {
+  const args = []
+  for (let index = 0; index < forwardedArgs.length; index += 1) {
+    const arg = forwardedArgs[index]
+    if (arg === "--publish" || arg === "-p") {
+      index += 1
+      continue
+    }
+    if (arg.startsWith("--publish=") || arg.startsWith("-p=")) continue
+    args.push(arg)
+  }
+  if (dist) args.push(`-c.electronDist=${dist}`)
+  // Repeating this yargs option turns it into an array, which can make
+  // electron-builder enter its implicit CI publish path.
+  args.push("--publish=never")
+  return args
 }
-args.push(...process.argv.slice(2))
 
-const result = spawnSync(process.execPath, [electronBuilderCli(), ...args], {
-  stdio: "inherit",
-})
-if (result.error) {
-  console.error(`[run-electron-builder] spawn failed: ${result.error.message}`)
-  process.exit(1)
+function main() {
+  const dist = electronDistDir()
+  const usableDist = dist && fs.existsSync(distBinary(dist)) ? dist : null
+  if (!usableDist) {
+    console.warn(
+      "[run-electron-builder] no local electron dist; electron-builder will fetch " +
+        "via @electron/get (electronVersion + ELECTRON_MIRROR)."
+    )
+  }
+  const args = normalizeLocalBuildArgs(process.argv.slice(2), usableDist)
+  const result = spawnSync(process.execPath, [electronBuilderCli(), ...args], {
+    stdio: "inherit",
+  })
+  if (result.error) {
+    console.error(`[run-electron-builder] spawn failed: ${result.error.message}`)
+    process.exit(1)
+  }
+  process.exit(result.status == null ? 1 : result.status)
 }
-process.exit(result.status == null ? 1 : result.status)
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main()
+}

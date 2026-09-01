@@ -475,8 +475,9 @@ class TestTerminatePid:
             return SimpleNamespace(returncode=0, stdout="", stderr="")
 
         monkeypatch.setattr(status.subprocess, "run", fake_run)
+        monkeypatch.setattr(status, "_get_process_start_time", lambda _pid: 123)
 
-        status.terminate_pid(123, force=True)
+        status.terminate_pid(123, force=True, expected_start_time=123)
 
         # taskkill is spawned with the no-window flag so the windowless
         # pythonw.exe backend doesn't flash a conhost window on force-kill.

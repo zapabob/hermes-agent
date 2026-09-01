@@ -19,6 +19,7 @@ const desktopPkg = require(path.join(desktopDir, 'package.json'))
 
 const { getPublishConfigs } = require('app-builder-lib/out/publish/PublishManager.js')
 const { getRepositoryInfo } = require('app-builder-lib/out/util/repositoryInfo.js')
+const { normalizeLocalBuildArgs } = await import('./run-electron-builder.mjs')
 
 /**
  * The slice of PlatformPackager that getPublishConfigs actually reads. The
@@ -63,6 +64,16 @@ afterEach(() => {
 })
 
 describe('local desktop pack stays out of the publish path', () => {
+  test('builder wrapper collapses duplicate publish flags to one scalar policy', () => {
+    assert.deepEqual(
+      normalizeLocalBuildArgs(
+        ['--win', 'nsis', 'zip', '--publish', 'always', '--publish=onTag'],
+        'C:\\electron\\dist'
+      ),
+      ['--win', 'nsis', 'zip', '-c.electronDist=C:\\electron\\dist', '--publish=never']
+    )
+  })
+
   test('the pack script pins an explicit publish policy', () => {
     // electron-builder 26 infers `onTagOrDraft` from CI when --publish is
     // absent, and `hermes desktop` runs the pack with CI=1 (_npm_lifecycle_env).
