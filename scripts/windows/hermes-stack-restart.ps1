@@ -200,7 +200,7 @@ function Start-GoA2A {
             Write-LaunchLog "[A2A] Hub port $A2A_HUB_PORT in use — skip."
         } else {
             Write-LaunchLog "[A2A] Starting go-a2a-hub.exe on port $A2A_HUB_PORT"
-            $proc = Start-Process -FilePath $A2A_HUB_EXE -WorkingDirectory $A2A_WORK_DIR -PassThru -NoNewWindow
+            $proc = Start-Process -FilePath $A2A_HUB_EXE -WorkingDirectory $A2A_WORK_DIR -PassThru -WindowStyle Hidden
             Start-Sleep -Seconds 3
             if ($proc.HasExited) {
                 Write-LaunchLog "[A2A] go-a2a-hub exited immediately (exit code $($proc.ExitCode))."
@@ -213,7 +213,7 @@ function Start-GoA2A {
     }
     if (Test-ExeExists $A2A_RR_EXE) {
         Write-LaunchLog "[A2A] Starting go-a2a-roundrobin.exe"
-        $proc = Start-Process -FilePath $A2A_RR_EXE -WorkingDirectory $A2A_WORK_DIR -PassThru -NoNewWindow
+        $proc = Start-Process -FilePath $A2A_RR_EXE -WorkingDirectory $A2A_WORK_DIR -PassThru -WindowStyle Hidden
         Start-Sleep -Seconds 3
         if ($proc.HasExited) {
             Write-LaunchLog "[A2A] go-a2a-roundrobin exited immediately (exit code $($proc.ExitCode))."

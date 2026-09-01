@@ -27,3 +27,16 @@ def test_watchdog_launch_paths_remain_hidden() -> None:
         "[System.Diagnostics.ProcessWindowStyle]::Hidden"
     ) in launcher
     assert "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass" in autostart
+
+
+def test_a2a_server_launch_paths_are_hidden() -> None:
+    launcher = _read("hermes-stack-restart.ps1")
+
+    for executable in ("A2A_HUB_EXE", "A2A_RR_EXE"):
+        launch = next(
+            line
+            for line in launcher.splitlines()
+            if f"Start-Process -FilePath ${executable}" in line
+        )
+        assert "-WindowStyle Hidden" in launch
+        assert "-NoNewWindow" not in launch
