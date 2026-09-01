@@ -84,24 +84,34 @@ def _stop_legacy_watcher(root: Path) -> str | None:
 
 
 def _spawn_watcher(argv: list[str], root: Path) -> subprocess.Popen[bytes]:
-    common: dict[str, Any] = {
-        "stdin": subprocess.DEVNULL,
-        "stdout": subprocess.DEVNULL,
-        "stderr": subprocess.DEVNULL,
-        "env": hermes_subprocess_env(
-            inherit_credentials=False,
-            extra={"HERMES_HOME": str(root.parent.resolve())},
-        ),
-        "start_new_session": sys.platform != "win32",
-    }
+    child_env = hermes_subprocess_env(
+        inherit_credentials=False,
+        extra={"HERMES_HOME": str(root.parent.resolve())},
+    )
     flags = windows_detach_flags() | windows_hide_flags()
     try:
-        return subprocess.Popen(argv, creationflags=flags, **common)
+        return subprocess.Popen(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=child_env,
+            creationflags=flags,
+            start_new_session=sys.platform != "win32",
+        )
     except OSError:
         if sys.platform != "win32":
             raise
         fallback = windows_detach_flags_without_breakaway() | windows_hide_flags()
-        return subprocess.Popen(argv, creationflags=fallback, **common)
+        return subprocess.Popen(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=child_env,
+            creationflags=fallback,
+            start_new_session=False,
+        )
 
 
 def _watch_enable_locked(service: _WatchService) -> dict[str, Any]:
