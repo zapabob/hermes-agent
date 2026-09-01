@@ -11,12 +11,14 @@ import { profileSshOverride } from './connection-config'
 import {
   assertRemoteInstallUpdateClear,
   buildSpawnCommand,
+  classifySshReuseProof,
   cleanupStale,
   connect,
   disconnect,
   expandRemotePath,
   fingerprintToken,
   isForwardBindCollision,
+  isLockfileSkew,
   listRemoteHermesProfiles,
   locateHermes,
   LOCKFILE_SCHEMA_VERSION,
@@ -42,6 +44,23 @@ import {
 const OWNERSHIP_ID = '0123456789abcdef0123456789abcdef'
 const SPAWN_NONCE = '0123456789abcdef'
 const exec = promisify(execCallback)
+
+test('SSH reuse proof rejects a backend whose runtime was replaced', () => {
+  assert.equal(
+    classifySshReuseProof(
+      { ok: true, sshOwnerNonce: SPAWN_NONCE, protocolVersion: 1, runtimeIntact: false },
+      SPAWN_NONCE
+    ),
+    'authenticated-stale'
+  )
+})
+
+test('SSH reuse proof remains compatible when runtime state is absent', () => {
+  assert.equal(
+    classifySshReuseProof({ ok: true, sshOwnerNonce: SPAWN_NONCE, protocolVersion: 1 }, SPAWN_NONCE),
+    'authenticated-ok'
+  )
+})
 
 function ownedLock(over: any = {}) {
   return {
@@ -80,6 +99,7 @@ function fakeSsh(rules: any[] = []) {
       }
 
       const mutexWrapped = cmd.includes('fcntl.flock(fd,fcntl.LOCK_EX)')
+
       const applicableRules = rules.filter(([matcher]) => {
         if (cmd.includes('marker_clear()') && matcher instanceof RegExp && /kill -0/.test(matcher.source)) {
           return false
@@ -91,6 +111,7 @@ function fakeSsh(rules: any[] = []) {
       if ((cmd.includes('os.kill(pid') && !cmd.includes('pidfd_open')) || cmd.includes('printf TERMINATED')) {
         return 'TERMINATED'
       }
+
       for (const [matcher, resp] of applicableRules) {
         const hit = typeof matcher === 'function' ? matcher(cmd) : matcher.test(cmd)
 
@@ -113,6 +134,7 @@ function fakeSsh(rules: any[] = []) {
 test('POSIX relaunch gate refuses live and uncertain install markers without executing Hermes', async () => {
   for (const observation of ['LIVE:4242', 'UNCERTAIN']) {
     const calls: string[] = []
+
     const ssh = {
       async exec(command) {
         calls.push(command)
@@ -120,12 +142,15 @@ test('POSIX relaunch gate refuses live and uncertain install markers without exe
         if (command === 'uname -s; uname -m') {
           return 'Linux\nx86_64\n'
         }
+
         if (command.includes('HERMES_HOME')) {
           return '/home/alice/.hermes\n'
         }
+
         if (command.includes('.hermes-update-in-progress')) {
           return observation
         }
+
         throw new Error(`unexpected command after update gate: ${command}`)
       }
     }
@@ -143,6 +168,7 @@ test('POSIX relaunch gate refuses live and uncertain install markers without exe
 
 test('POSIX relaunch gate permits absent/dead markers and normalizes named-profile homes install-wide', async () => {
   const commands: string[] = []
+
   const ssh = {
     async exec(command) {
       commands.push(command)
@@ -160,6 +186,7 @@ test('POSIX relaunch gate permits absent/dead markers and normalizes named-profi
 test('POSIX relaunch gate rechecks after token upload immediately before process creation', async () => {
   const calls: string[] = []
   let markerChecks = 0
+
   const ssh = {
     async exec(command) {
       calls.push(command)
@@ -167,23 +194,29 @@ test('POSIX relaunch gate rechecks after token upload immediately before process
       if (command === 'uname -s; uname -m') {
         return 'Linux\nx86_64\n'
       }
+
       if (command.includes('HERMES_HOME')) {
         return '/home/alice/.hermes\n'
       }
+
       if (command.includes('.hermes-update-in-progress')) {
         markerChecks += 1
 
         return markerChecks >= 3 ? 'LIVE:4242' : 'CLEAR'
       }
+
       if (/\[ -x /.test(command)) {
         return 'OK'
       }
+
       if (command.includes('serve --help')) {
         return 'YES\n'
       }
+
       if (command.includes('python3 -c')) {
         return ''
       }
+
       if (command.includes('lock.json')) {
         return ''
       }
@@ -369,12 +402,105 @@ test('ownership paths are isolated by ownership ID and spawn nonce', () => {
   assert.equal(spawnLogPath(OWNERSHIP_ID, SPAWN_NONCE), `~/.hermes/desktop-ssh/${OWNERSHIP_ID}/${SPAWN_NONCE}.log`)
 })
 
-test('readLockfile returns null for missing, empty, malformed, or wrong-schema', async () => {
+test('readLockfile returns null ONLY for a missing/empty lockfile', async () => {
   assert.equal(await readLockfile(fakeSsh([[/cat/, '']]), OWNERSHIP_ID), null)
-  assert.equal(await readLockfile(fakeSsh([[/cat/, 'not json']]), OWNERSHIP_ID), null)
-  assert.equal(await readLockfile(fakeSsh([[/cat/, JSON.stringify({ schemaVersion: 999 })]]), OWNERSHIP_ID), null)
   const good = ownedLock({ pid: 1, port: 2 })
   assert.deepEqual(await readLockfile(fakeSsh([[/cat/, JSON.stringify(good)]]), OWNERSHIP_ID), good)
+})
+
+// #95532 fail-closed guard: a lockfile that EXISTS but doesn't match what this
+// build writes is SKEW (foreign fork build, corruption, or a future schema) —
+// it must be distinguishable from "no lockfile" so no reap/overwrite path can
+// treat foreign live state as reapable.
+test('readLockfile classifies existing-but-foreign lockfiles as skew, never null', async () => {
+  // (a) foreign-schema lockfile (fork build wrote a different shape)
+  const foreign = await readLockfile(fakeSsh([[/cat/, 'not json at all']]), OWNERSHIP_ID)
+  assert.equal(isLockfileSkew(foreign), true)
+
+  // (b) truncated lockfile (partial write / corruption)
+  const truncated = await readLockfile(fakeSsh([[/cat/, JSON.stringify(ownedLock()).slice(0, 40)]]), OWNERSHIP_ID)
+
+  assert.equal(isLockfileSkew(truncated), true)
+
+  // (c) future schemaVersion (newer build owns this remote)
+  const future = await readLockfile(
+    fakeSsh([[/cat/, JSON.stringify(ownedLock({ schemaVersion: LOCKFILE_SCHEMA_VERSION + 1 }))]]),
+    OWNERSHIP_ID
+  )
+
+  assert.equal(isLockfileSkew(future), true)
+  // unknown schema number entirely
+  const unknown = await readLockfile(fakeSsh([[/cat/, JSON.stringify({ schemaVersion: 999 })]]), OWNERSHIP_ID)
+  assert.equal(isLockfileSkew(unknown), true)
+
+  // missing ownershipId / foreign ownership
+  const foreignOwner = await readLockfile(
+    fakeSsh([[/cat/, JSON.stringify(ownedLock({ ownershipId: undefined }))]]),
+    OWNERSHIP_ID
+  )
+
+  assert.equal(isLockfileSkew(foreignOwner), true)
+
+  // every skew carries a diagnosable reason and is never a valid lock
+  for (const skew of [foreign, truncated, future, unknown, foreignOwner]) {
+    assert.equal(typeof (skew as any).reason, 'string')
+    assert.notEqual(skew, null)
+  }
+
+  // a valid lock and a missing lockfile are NOT skew
+  assert.equal(isLockfileSkew(await readLockfile(fakeSsh([[/cat/, '']]), OWNERSHIP_ID)), false)
+  assert.equal(isLockfileSkew(await readLockfile(fakeSsh([[/cat/, JSON.stringify(ownedLock())]]), OWNERSHIP_ID)), false)
+})
+
+// #95532: on skew the reap pass must FAIL CLOSED — no kill, no lockfile
+// removal/overwrite, no fresh spawn on top of foreign live state.
+test('connect() fails closed on lockfile schema/ownership skew: skips reap, touches nothing', async () => {
+  const skewShapes: Array<[string, string]> = [
+    ['foreign-schema lockfile', '{"pid":333,"owner":"some-fork-desktop","version":"9.9.9"}'],
+    ['truncated lockfile', JSON.stringify(ownedLock()).slice(0, 40)],
+    ['future schemaVersion', JSON.stringify(ownedLock({ schemaVersion: LOCKFILE_SCHEMA_VERSION + 1 }))]
+  ]
+
+  for (const [label, raw] of skewShapes) {
+    const ssh = fakeSsh([
+      [/uname/, 'Linux\nx86_64'],
+      [/\[ -x/, 'OK'],
+      [/cat .*lock\.json/, raw],
+      [/kill -0/, 'ALIVE'],
+      [/print\("OWNED"/, 'OWNED\n']
+    ])
+
+    await assert.rejects(
+      () => connect(connectDeps(ssh, { reuseToken: 'stored-token' })),
+      (error: any) => error.kind === 'remote-lockfile-skew',
+      `${label}: connect must refuse with remote-lockfile-skew`
+    )
+    assert.ok(
+      !ssh.calls.some(c => /(^|[^-\d])kill -?9? ?\d/.test(c) && !/kill -0/.test(c)),
+      `${label}: must not kill any pid`
+    )
+    assert.ok(!ssh.calls.some(c => /rm -f/.test(c)), `${label}: must not remove any remote file`)
+    assert.ok(!ssh.calls.some(c => /setsid|nohup/.test(c)), `${label}: must not spawn on top of foreign state`)
+    assert.ok(!ssh.calls.some(c => /printf '%s' '.*schemaVersion/.test(c)), `${label}: must not overwrite the lockfile`)
+  }
+})
+
+test('disconnect() fails closed on lockfile skew: never reaps, never drops the foreign lockfile', async () => {
+  const ssh = fakeSsh([
+    [/cat .*lock\.json/, JSON.stringify(ownedLock({ schemaVersion: LOCKFILE_SCHEMA_VERSION + 1 }))],
+    [/kill -0/, 'ALIVE'],
+    [/print\("OWNED"/, 'OWNED\n']
+  ])
+
+  await disconnect(ssh, OWNERSHIP_ID)
+  assert.ok(!ssh.calls.some(c => /(^|[^-\d])kill -?9? ?\d/.test(c) && !/kill -0/.test(c)), 'must not kill any pid')
+  assert.ok(!ssh.calls.some(c => /rm -f/.test(c)), 'must not remove the foreign lockfile or logs')
+})
+
+test('cleanupStale is inert when handed a skew sentinel (defense in depth)', async () => {
+  const ssh = fakeSsh([[/print\("OWNED"/, 'OWNED\n']])
+  await cleanupStale(ssh, OWNERSHIP_ID, { skew: true, reason: 'schema-version' } as any)
+  assert.equal(ssh.calls.length, 0, 'skew must short-circuit before any remote command')
 })
 
 test('writeLockfile mkdir -ps and stamps the schema version', async () => {
@@ -627,6 +753,7 @@ test('cleanupStale kills ONLY a provably-ours pid, always drops the lockfile', a
     [/print\("OWNED"/, 'OWNED\n'],
     [cmd => /printf TERMINATED/.test(cmd), 'TERMINATED\n']
   ])
+
   await cleanupStale(ours, OWNERSHIP_ID, {
     pid: 9,
     spawnNonce: SPAWN_NONCE,
@@ -687,7 +814,10 @@ test('buildSpawnCommand atomically reserves the ownership slot through spawn and
   assert.ok(cmd.includes('.hermes-update-in-progress.mutex'))
   assert.match(cmd, /fcntl\.flock\(fd,fcntl\.LOCK_EX\)/)
   assert.match(cmd, /os\.O_CLOEXEC/)
-  assert.match(cmd, /subprocess\.run\(\["sh","-c",payload,"hermes-update-mutex",str\(fd\)\],pass_fds=\(fd,\),check=False\)/)
+  assert.match(
+    cmd,
+    /subprocess\.run\(\["sh","-c",payload,"hermes-update-mutex",str\(fd\)\],pass_fds=\(fd,\),check=False\)/
+  )
   assert.doesNotMatch(cmd, /os\.set_inheritable\(fd,True\)/)
   assert.match(cmd, /hermes-update-child "\$1"/)
   assert.match(cmd, /eval "exec \$1>&-"/)
@@ -722,17 +852,20 @@ done
       hermesHome: path.join(directory, 'home'),
       logPath
     })
+
     await exec(command, { shell: '/bin/bash' })
 
     for (let attempt = 0; attempt < 40; attempt += 1) {
       try {
         const report = await readFile(reportPath, 'utf8')
         assert.equal(report, '', 'the backend process must not retain the update mutex descriptor')
+
         return
       } catch (error: any) {
         if (error?.code !== 'ENOENT') {
           throw error
         }
+
         await new Promise(resolve => setTimeout(resolve, 25))
       }
     }
@@ -1001,13 +1134,10 @@ test('connect() respawns when the lockfile hermesPath differs from the resolved 
 test('connect() respawns when the lockfile protocolVersion is incompatible', async () => {
   const reuseToken = 'stored-token'
 
-  const lock = {
-    schemaVersion: LOCKFILE_SCHEMA_VERSION,
+  const lock = ownedLock({
     protocolVersion: PROTOCOL_VERSION + 99,
-    pid: 333,
-    port: 40000,
     tokenFingerprint: fingerprintToken(reuseToken)
-  }
+  })
 
   const ssh = fakeSsh([
     [/uname/, 'Linux\nx86_64'],
@@ -1086,6 +1216,7 @@ test('connect() respawns when the lockfile pid is dead (killed dashboard)', asyn
 test('managed update drain preserves a live foreign POSIX owner and its lock bytes', async () => {
   const lock = ownedLock()
   const rawLock = JSON.stringify(lock)
+
   const ssh = fakeSsh([
     [/cat .*lock\.json/, rawLock],
     [/kill -0 333/, 'ALIVE'],
@@ -1110,6 +1241,7 @@ test('managed update drain rechecks the POSIX ownership record before signalling
   const lock = ownedLock()
   const replacement = ownedLock({ pid: 334, spawnNonce: 'fedcba9876543210' })
   let reads = 0
+
   const ssh = fakeSsh([
     [
       /cat .*lock\.json/,
@@ -1134,6 +1266,7 @@ test('managed update drain rechecks the POSIX ownership record before signalling
 test('managed update drain refuses Darwin termination because PID signals cannot be atomically bound', async () => {
   const lock = ownedLock()
   const rawLock = JSON.stringify(lock)
+
   const ssh = fakeSsh([
     [/cat .*lock\.json/, rawLock],
     [/kill -0 333/, 'ALIVE'],
@@ -1158,14 +1291,7 @@ test('managed update drain refuses Darwin termination because PID signals cannot
 
 test('connect() respawns when the dashboard is wedged (alive pid, probe fails)', async () => {
   const reuseToken = 'stored'
-
-  const lock = {
-    schemaVersion: LOCKFILE_SCHEMA_VERSION,
-    protocolVersion: PROTOCOL_VERSION,
-    pid: 333,
-    port: 40000,
-    tokenFingerprint: fingerprintToken(reuseToken)
-  }
+  const lock = ownedLock({ tokenFingerprint: fingerprintToken(reuseToken) })
 
   const ssh = fakeSsh([
     [/uname/, 'Linux\nx86_64'],
@@ -1492,21 +1618,21 @@ test('spawnRemoteDashboard upload uses exclusive-create and O_NOFOLLOW', async (
   assert.ok(!uploadCmd.includes('tk'), 'token must not appear in the upload command')
 })
 
-test('readLockfile rejects lock with non-integer pid', async () => {
+test('readLockfile treats a lock with non-integer pid as skew', async () => {
   const lock = { schemaVersion: LOCKFILE_SCHEMA_VERSION, pid: 'not-a-number', port: 8080 }
-  assert.equal(await readLockfile(fakeSsh([[/cat/, JSON.stringify(lock)]]), OWNERSHIP_ID), null)
+  assert.equal(isLockfileSkew(await readLockfile(fakeSsh([[/cat/, JSON.stringify(lock)]]), OWNERSHIP_ID)), true)
 })
 
-test('readLockfile rejects lock with pid <= 0', async () => {
+test('readLockfile treats a lock with pid <= 0 as skew', async () => {
   const lock = { schemaVersion: LOCKFILE_SCHEMA_VERSION, pid: -1, port: 8080 }
-  assert.equal(await readLockfile(fakeSsh([[/cat/, JSON.stringify(lock)]]), OWNERSHIP_ID), null)
+  assert.equal(isLockfileSkew(await readLockfile(fakeSsh([[/cat/, JSON.stringify(lock)]]), OWNERSHIP_ID)), true)
 })
 
-test('readLockfile rejects lock with port out of range', async () => {
+test('readLockfile treats a lock with port out of range as skew', async () => {
   const lock = { schemaVersion: LOCKFILE_SCHEMA_VERSION, pid: 100, port: 99999 }
-  assert.equal(await readLockfile(fakeSsh([[/cat/, JSON.stringify(lock)]]), OWNERSHIP_ID), null)
+  assert.equal(isLockfileSkew(await readLockfile(fakeSsh([[/cat/, JSON.stringify(lock)]]), OWNERSHIP_ID)), true)
   const lock2 = { schemaVersion: LOCKFILE_SCHEMA_VERSION, pid: 100, port: 0 }
-  assert.equal(await readLockfile(fakeSsh([[/cat/, JSON.stringify(lock2)]]), OWNERSHIP_ID), null)
+  assert.equal(isLockfileSkew(await readLockfile(fakeSsh([[/cat/, JSON.stringify(lock2)]]), OWNERSHIP_ID)), true)
 })
 
 test('readLockfile accepts a complete owned lock', async () => {
@@ -1546,10 +1672,10 @@ test('spawnRemoteDashboard fails with update-required when remote lacks --ssh-se
   )
 })
 
-test('readLockfile rejects a log path outside the exact ownership and spawn path', async () => {
+test('readLockfile treats a log path outside the exact ownership and spawn path as skew', async () => {
   const lock = ownedLock({ logPath: '~/.hermes/desktop-ssh/other.log' })
   const ssh = fakeSsh([[/cat .*lock\.json/, JSON.stringify(lock)]])
-  assert.equal(await readLockfile(ssh, OWNERSHIP_ID), null)
+  assert.equal(isLockfileSkew(await readLockfile(ssh, OWNERSHIP_ID)), true)
 })
 
 test('cleanupStale never deletes a lock-supplied unexpected log path', async () => {
@@ -1557,6 +1683,7 @@ test('cleanupStale never deletes a lock-supplied unexpected log path', async () 
     [/print\("OWNED"/, 'OWNED\n'],
     [cmd => /pidfd_open/.test(cmd), 'TERMINATED\n']
   ])
+
   await cleanupStale(ssh, OWNERSHIP_ID, ownedLock({ logPath: '~/.hermes/unrelated.log' }))
   assert.ok(!ssh.calls.some(command => command.includes('unrelated.log')))
 })
@@ -1672,4 +1799,53 @@ test('remote SSH ownership capability requires both secure bootstrap flags', asy
 
   const unsupported = fakeSsh([[/serve --help/, 'NO\n']])
   assert.equal(await remoteSupportsSshOwnership(unsupported, '/x/hermes'), false)
+})
+
+test('cleanupStale escalates to SIGKILL when the backend survives the graceful wait (#91668 quit-during-active-turn)', async () => {
+  // A serve mid-turn (in-flight LLM call, live MCP children) can ride out
+  // SIGTERM well past the 5s graceful wait. Before-quit races the whole
+  // teardown against 6s and then closes SSH — so a give-up here reparents
+  // the still-running backend to pid 1: exactly the #91668 leak. The
+  // graceful-wait failure must escalate to SIGKILL and still drop the lock.
+  const ssh = fakeSsh([
+    [/print\("OWNED"/, 'OWNED\n'],
+    [(cmd: string) => /kill 9 &&/.test(cmd), new Error('exit 1: pid alive after graceful wait')]
+  ])
+
+  await cleanupStale(ssh, OWNERSHIP_ID, {
+    pid: 9,
+    spawnNonce: SPAWN_NONCE,
+    hermesPath: '/x/hermes',
+    logPath: spawnLogPath(OWNERSHIP_ID, SPAWN_NONCE)
+  })
+
+  assert.ok(
+    ssh.calls.some(c => /kill -9 9\b/.test(c)),
+    'must escalate to SIGKILL after the graceful wait fails'
+  )
+  assert.ok(
+    ssh.calls.some(c => /rm -f .*backend\.lock\.json/.test(c)),
+    'lockfile must still be dropped after the forced kill'
+  )
+})
+
+test('cleanupStale keeps the lockfile when even SIGKILL cannot confirm the pid died', async () => {
+  const ssh = fakeSsh([
+    [/print\("OWNED"/, 'OWNED\n'],
+    [(cmd: string) => /kill 9 &&/.test(cmd), new Error('exit 1: pid alive after graceful wait')],
+    [(cmd: string) => /kill -9 9\b/.test(cmd), new Error('exit 1: unkillable (D-state)')]
+  ])
+
+  await assert.rejects(
+    cleanupStale(ssh, OWNERSHIP_ID, {
+      pid: 9,
+      spawnNonce: SPAWN_NONCE,
+      hermesPath: '/x/hermes',
+      logPath: spawnLogPath(OWNERSHIP_ID, SPAWN_NONCE)
+    }),
+    /Could not terminate/
+  )
+
+  // The record must survive so the next connect's reap pass retries.
+  assert.ok(!ssh.calls.some(c => /rm -f .*backend\.lock\.json/.test(c)))
 })

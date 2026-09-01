@@ -200,6 +200,7 @@ export interface Translations {
       openaiRejectedApiKey: string
       openaiRejectedApiKeyWithStatus: (status: string) => string
       openaiTtsNeedsKey: string
+      codeSkewRestartRequired: string
     }
     voice: {
       configureSpeechToText: string
@@ -987,6 +988,11 @@ export interface Translations {
       reasoning: string
       reasoningOff: string
       defaultsFailed: string
+      loadFailed: string
+      restartRequired: string
+      restartBackend: string
+      restartingBackend: string
+      restartFailed: string
       auxiliaryTitle: string
       resetAllToMain: string
       auxiliaryDesc: string

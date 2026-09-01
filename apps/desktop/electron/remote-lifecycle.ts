@@ -46,6 +46,15 @@ const READY_POLL_INTERVAL_MS = 750
 // Keep startup portable: restricted hosts retain their existing limit.
 const REMOTE_NOFILE_SOFT_LIMIT = 65_536
 
+function classifySshReuseProof(proof, spawnNonce) {
+  return proof?.ok === true &&
+    proof.sshOwnerNonce === spawnNonce &&
+    proof.protocolVersion === PROTOCOL_VERSION &&
+    proof.runtimeIntact !== false
+    ? 'authenticated-ok'
+    : 'authenticated-stale'
+}
+
 function mintToken() {
   return crypto.randomBytes(32).toString('hex')
 }
@@ -349,11 +358,13 @@ async function assertRemoteInstallUpdateClear(ssh, hermesHome) {
   }
 
   const live = /^LIVE:([1-9][0-9]*)$/.exec(observation)
+
   const error: any = new Error(
     live
       ? `Remote Hermes update process ${live[1]} is still running; SSH startup is paused.`
       : 'The remote Hermes update marker is unreadable or malformed; refusing SSH startup.'
   )
+
   error.kind = 'update-in-progress'
   throw error
 }
@@ -390,6 +401,7 @@ function assertSafeRemoteHome(home) {
 function remoteInstallRoot(home) {
   const value = assertSafeRemoteHome(home)
   const profile = value.match(/^(.*)\/profiles\/[^/]+$/)
+
   return profile ? profile[1] : value
 }
 
@@ -417,45 +429,55 @@ async function readLockfile(ssh, ownershipId) {
   try {
     parsed = JSON.parse(text)
   } catch {
-    return null
+    // Exists but doesn't parse: truncated write or a foreign format. NOT the
+    // same as "no lockfile" — see lockfileSkew().
+    return lockfileSkew('unparseable-json')
   }
 
-  if (!parsed || parsed.schemaVersion !== LOCKFILE_SCHEMA_VERSION) {
-    return null
+  if (!parsed || typeof parsed !== 'object') {
+    return lockfileSkew('non-object')
+  }
+
+  if (parsed.schemaVersion !== LOCKFILE_SCHEMA_VERSION) {
+    return lockfileSkew(`schema-version ${JSON.stringify(parsed.schemaVersion ?? null)}`)
   }
 
   const pid = parsed.pid
   const port = parsed.port
 
   if (!Number.isInteger(pid) || pid <= 0 || pid > 4194304) {
-    return null
+    return lockfileSkew('malformed-pid')
   }
 
   // port 0 = spawn-in-progress record (written before readiness); valid
   // ownership proof for cleanup, but never reusable.
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
-    return null
+    return lockfileSkew('malformed-port')
   }
 
   if (parsed.ownershipId !== ownershipId || !/^[0-9a-f]{16}$/.test(parsed.spawnNonce || '')) {
-    return null
+    return lockfileSkew('ownership-mismatch')
   }
 
   if (!/^[0-9a-f]{32}$/.test(parsed.tokenFingerprint || '')) {
-    return null
+    return lockfileSkew('malformed-token-fingerprint')
   }
 
   if (parsed.protocolVersion !== PROTOCOL_VERSION) {
+    // Fully validated ownership (our schema, our ownershipId, our shape) from
+    // a protocol-incompatible build of OUR OWN lineage: the record is not
+    // reusable and readLockfile keeps its historical contract of hiding it,
+    // which routes connect() to a fresh spawn.
     return null
   }
 
   if (parsed.logPath !== spawnLogPath(ownershipId, parsed.spawnNonce)) {
-    return null
+    return lockfileSkew('log-path-mismatch')
   }
 
   for (const field of ['profile', 'hermesPath', 'hermesHome', 'logPath', 'startedAt']) {
     if (typeof parsed[field] !== 'string' || parsed[field].length > 1024) {
-      return null
+      return lockfileSkew(`malformed-field ${field}`)
     }
   }
 
@@ -623,6 +645,12 @@ async function pidIsOurDashboard(
 
 // Kill the stale dashboard ONLY if provably ours, then drop the lockfile.
 async function cleanupStale(ssh, ownershipId, lock, pidAlive = true) {
+  // Defense in depth (#95532): a skew sentinel is foreign/corrupt state, not
+  // an ownership record — never reap or remove anything based on it.
+  if (isLockfileSkew(lock)) {
+    return
+  }
+
   if (
     pidAlive &&
     lock &&
@@ -646,11 +674,27 @@ async function cleanupStale(ssh, ownershipId, lock, pidAlive = true) {
       ).trim()
 
       void result
-    } catch (cause) {
-      const error: any = new Error('Could not terminate the stale SSH backend.')
-      error.kind = 'transient-transport-error'
-      error.cause = cause
-      throw error
+    } catch {
+      // A backend mid-turn (in-flight LLM call, live MCP children) can ride
+      // out SIGTERM past the 5s graceful wait — and before-quit races this
+      // whole teardown against 6s before closing SSH, so giving up here
+      // reparents the still-running serve to pid 1: the #91668 leak, now on
+      // the quit-during-active-turn path. Escalate to SIGKILL and require a
+      // confirmed exit before treating the record as reclaimed.
+      try {
+        await ssh.exec(
+          `kill -9 ${Number(lock.pid)} 2>/dev/null; ` +
+            `i=0; while kill -0 ${Number(lock.pid)} 2>/dev/null; do ` +
+            `i=$((i+1)); [ "$i" -ge 20 ] && exit 1; sleep 0.1; done`
+        )
+      } catch (cause) {
+        // Even SIGKILL could not confirm death (D-state, permissions). Keep
+        // the lockfile so the next connect's reap pass retries.
+        const error: any = new Error('Could not terminate the stale SSH backend.')
+        error.kind = 'transient-transport-error'
+        error.cause = cause
+        throw error
+      }
     }
   }
 
@@ -679,7 +723,9 @@ async function disconnect(ssh, ownershipId) {
 
   const lock = await readLockfile(ssh, ownershipId)
 
-  if (!lock) {
+  if (!lock || isLockfileSkew(lock)) {
+    // Skew (#95532): fail closed — this is not our record, so there is
+    // nothing we may safely reap or remove here.
     return
   }
 
@@ -698,9 +744,11 @@ function buildOwnedStaleTerminationCommand(lock, ownershipId) {
   const nonce = shq(lock.spawnNonce)
   const profile = shq(lock.profile || '')
   const command = `$(ps -ww -o command= -p ${pid} 2>/dev/null || true)`
+
   const executableMatch = lock.hermesHome
     ? `case "$cmd" in *"$path"*|*"$home"*) ;; *) printf REFUSED; exit 0;; esac; `
     : `case "$cmd" in *"$path"*) ;; *) printf REFUSED; exit 0;; esac; `
+
   const identity =
     `cmd=${command}; ` +
     `path=${expectedPath}; home=${expectedHome}; token=${expectedToken}; nonce=${nonce}; profile=${profile}; ` +
@@ -739,6 +787,7 @@ function buildOwnedTerminationCommand(lock, ownershipId) {
   const pid = Number(lock.pid)
   const py = value => JSON.stringify(String(value || ''))
   const expectedToken = spawnTokenPath(ownershipId, lock.spawnNonce)
+
   const script = `
 import os,select,shlex,signal,subprocess,sys,time
 pid=${pid}
@@ -887,6 +936,7 @@ async function terminateOwnedDashboardForUpdate(ssh, expected) {
     error.kind = 'ownership-changed'
     throw error
   }
+
   let lock = await readLockfile(ssh, ownershipId)
 
   if (!lock || !lockMatchesManagedUpdateScope(lock, expected)) {
@@ -954,6 +1004,7 @@ async function terminateOwnedDashboardForUpdate(ssh, expected) {
     if (result === 'ALREADY_STOPPED') {
       return { pid: lock.pid, terminated: false, alreadyStopped: true }
     }
+
     if (result !== 'TERMINATED') {
       const error: any = new Error(
         result === 'REFUSED'
@@ -962,13 +1013,16 @@ async function terminateOwnedDashboardForUpdate(ssh, expected) {
             ? 'Darwin cannot atomically bind a signal to the verified PID; refusing termination.'
             : 'The remote POSIX signal boundary was unavailable.'
       )
-      error.kind = result === 'REFUSED' || result === 'DARWIN_UNAVAILABLE' ? 'ownership-changed' : 'transient-transport-error'
+
+      error.kind =
+        result === 'REFUSED' || result === 'DARWIN_UNAVAILABLE' ? 'ownership-changed' : 'transient-transport-error'
       throw error
     }
   } catch (cause: any) {
     if (cause?.kind === 'ownership-changed') {
       throw cause
     }
+
     const error: any = new Error('Could not terminate the Desktop-owned remote serve for update.')
     error.kind = 'transient-transport-error'
     error.cause = cause
@@ -990,9 +1044,11 @@ function buildSpawnCommand(hermesPath, profile, opts: any = {}) {
   const ownerArg = opts.spawnNonce ? ` --ssh-owner-nonce ${validateSpawnNonce(opts.spawnNonce)}` : ''
   const subCmd = `serve --isolated --host 127.0.0.1 --port 0${tokenArg}${ownerArg}`
   const marker = expandRemotePath(`${remoteInstallRoot(opts.hermesHome || '~/.hermes')}/.hermes-update-in-progress`)
+
   const updateMutex = expandRemotePath(
     `${remoteInstallRoot(opts.hermesHome || '~/.hermes')}/.hermes-update-in-progress.mutex`
   )
+
   // The marker probe, ownership reservation, process creation, and initial
   // lockfile publication must be one remote command. A second Desktop process
   // can therefore never observe an empty lock and spawn before this one records
@@ -1352,6 +1408,26 @@ async function connect(deps) {
   const reuseToken = deps.reuseToken || ''
   const lock = await readLockfile(ssh, ownershipId)
 
+  if (isLockfileSkew(lock)) {
+    // #95532: the lockfile exists but was written by a different (fork) build
+    // or is corrupt. FAIL CLOSED: no reap, no removal, no overwrite, no spawn
+    // on top of foreign live state — reaping here is how live tunnels die.
+    const lpath = lockfilePath(ownershipId)
+    log(
+      `lockfile schema/ownership skew (${lock.reason}) at ${lpath} — failing closed: skipping reap, leaving remote state untouched`
+    )
+
+    const error: any = new Error(
+      `The remote ownership record ${lpath} does not match this Hermes Desktop build (${lock.reason}). ` +
+        'It was probably written by a different or modified desktop build sharing this remote, or the file is corrupt. ' +
+        'Refusing to reap or overwrite it — that could kill a live SSH backend owned by another build. ' +
+        'If nothing else uses this remote, delete that file on the remote host and reconnect.'
+    )
+
+    error.kind = 'remote-lockfile-skew'
+    throw error
+  }
+
   if (lock) {
     const pidAlive = await remotePidAlive(ssh, lock.pid)
 
@@ -1384,6 +1460,7 @@ async function connect(deps) {
         await writeLockfile(ssh, ownershipId, { ...lock, creationTime })
         lock.creationTime = creationTime
       }
+
       assertBootstrapNotSuperseded(signal)
       await assertRemoteInstallUpdateClear(ssh, hermesHome)
       const localPort = await openForward(deps, lock.port)
@@ -1471,6 +1548,7 @@ async function connect(deps) {
       const error: any = new Error(
         'Another SSH connection owns this remote dashboard; a session token is required to reuse it.'
       )
+
       error.kind = 'remote-ownership-contended'
       throw error
     }
@@ -1572,6 +1650,7 @@ export {
   adoptOwnedServedToken,
   assertRemoteInstallUpdateClear,
   buildSpawnCommand,
+  classifySshReuseProof,
   cleanupStale,
   connect,
   connectReservationPath,
@@ -1580,6 +1659,7 @@ export {
   expandRemotePath,
   fingerprintToken,
   isForwardBindCollision,
+  isLockfileSkew,
   listRemoteHermesProfiles,
   locateHermes,
   LOCKFILE_SCHEMA_VERSION,

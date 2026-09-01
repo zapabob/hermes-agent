@@ -75,6 +75,12 @@ describe('formatProbeFailedMessage', () => {
     assert.ok(msg.includes('hermes update'))
     assert.ok(msg.includes('retry'))
   })
+
+  it('distinguishes a timeout from a confirmed blocker', () => {
+    const msg = formatProbeFailedMessage('timed out after 60 seconds')
+    assert.ok(msg.includes('timed out after 60 seconds'))
+    assert.ok(msg.includes('no blocking process was confirmed'))
+  })
 })
 
 // ---------------------------------------------------------------------------

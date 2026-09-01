@@ -63,6 +63,7 @@ import {
   verifyHermesCli
 } from './backend-probes'
 import { waitForDashboardPortAnnouncement } from './backend-ready'
+import { recycleOwnedBackend } from './backend-recycle'
 import { isPidAliveWindows, waitForBackendRelease } from './backend-release-gate'
 import {
   isHostKeyChangedBootFailure,
@@ -87,7 +88,7 @@ import {
   buildBrowserWindowUrl
 } from './browser-windows'
 import { detectBundleSkew } from './bundle-skew'
-import { applyConnectionChange, teardownSshState } from './connection-apply'
+import { applyConnectionChange, sshQuitShouldBlock, teardownSshState } from './connection-apply'
 import {
   apiRequestRegistryConnectionId,
   authModeFromStatus,
@@ -133,8 +134,10 @@ import {
   migrateV1ToRegistry,
   normalizeConnectionInput,
   normalizeRegistry,
+  parseBackendScopeKey,
   reconcileAppliedGlobalConnection,
   reconcileRegistryDrift,
+  registrySourceOwnsPrimaryBackend,
   rememberSshEnumeration,
   removeConnection,
   resolvedConnectionId,
@@ -194,6 +197,7 @@ import {
   pumpStreamToFile,
   resolveGatewayFileBackend
 } from './gateway-file-download'
+import { startGatewaysAfterUpdateAbort, stopGatewayBeforeUpdate } from './gateway-stop-before-update'
 import { probeGatewayWebSocket } from './gateway-ws-probe'
 import { registerGitIpc } from './git-ipc'
 import { selectGitRoot } from './git-root'
@@ -312,11 +316,13 @@ import { createQuickEntryShortcut, quickEntryWindowBounds, sanitizeQuickEntrySet
 import { type ActiveWork, mergeActiveWork, normalizeActiveWork, quitPromptFor } from './quit-guard'
 import * as remoteLifecycle from './remote-lifecycle'
 import {
+  attachPowerResumeRemoteRevalidation,
   ensureHealthyPooledRemoteBackendForDispatch,
   RemoteLivenessTracker,
   RemoteRevalidationCoordinator,
   revalidatePooledRemoteBackends,
-  revalidateRemoteConnection
+  revalidateRemoteConnection,
+  revalidateSuspectPooledRemoteBackends
 } from './remote-liveness'
 import {
   applyRemoteRequestHeaders,
@@ -391,6 +397,7 @@ import {
   scanVenvBlockers,
   stopSafeVenvBlockers
 } from './venv-blocker-scan'
+import { isHermesOwnedVenvDaemon } from './venv-holder-select'
 import { fetchMarketplaceThemes, searchMarketplaceThemes } from './vscode-marketplace'
 import { createWakeIndicatorWindowController } from './wake-indicator-window'
 import { resolveWatchdogPrewarmedBackend } from './watchdog-backend'
@@ -3264,6 +3271,46 @@ function isShimLocked(shimPath) {
   }
 }
 
+// Reap only the Desktop-owned detached Hindsight daemon. External venv
+// holders remain the blocker scan's responsibility and are never killed.
+function killHermesOwnedVenvDaemons(updateRoot) {
+  if (!IS_WINDOWS) {
+    return
+  }
+
+  const scriptsDir = path.join(updateRoot, 'venv', 'Scripts')
+  let holders = []
+
+  try {
+    const out = execFileSync(
+      'powershell',
+      [
+        '-NoProfile',
+        '-Command',
+        'Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.CommandLine } | Select-Object ProcessId, ExecutablePath, CommandLine | ConvertTo-Json -Compress'
+      ],
+      hiddenWindowsChildOptions({ encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15_000 })
+    )
+
+    const parsed = JSON.parse(String(out || '[]'))
+
+    holders = (Array.isArray(parsed) ? parsed : [parsed]).filter(processInfo =>
+      isHermesOwnedVenvDaemon(processInfo?.ExecutablePath, processInfo?.CommandLine, scriptsDir)
+    )
+  } catch {
+    return
+  }
+
+  for (const holder of holders) {
+    const pid = Number(holder?.ProcessId)
+
+    if (Number.isInteger(pid) && pid > 0) {
+      rememberLog(`[updates] stopping Hermes-owned venv daemon (hindsight) PID ${pid} before hand-off`)
+      forceKillProcessTree(pid)
+    }
+  }
+}
+
 // Force-kill the entire process TREE rooted at each PID. Node's child.kill()
 // only signals the direct child, so on Windows a backend `hermes.exe` that
 // spawned its own grandchildren (a `hermes` REPL, a pty terminal session, the
@@ -3614,6 +3661,13 @@ async function releaseBackendLock(updateRoot, tag) {
     stopAllPoolBackends
   })
 
+  // Gateway processes and detached memory daemons are not members of the
+  // Desktop backend pool, but can keep the Windows venv locked. The CLI owns
+  // gateway drain semantics; the selector below admits only Hermes-owned
+  // Hindsight daemons.
+  stopGatewayBeforeUpdate(venvHermesShimPath(updateRoot), HERMES_HOME)
+  killHermesOwnedVenvDaemons(updateRoot)
+
   const shim = venvHermesShimPath(updateRoot)
 
   const gate = await waitForBackendRelease(
@@ -3798,6 +3852,10 @@ async function applyUpdates(opts: { stopSafeBlockers?: boolean } = {}) {
       emitUpdateProgress({ stage: 'error', message, percent: null })
       startHermes().catch(() => {})
 
+      if (IS_WINDOWS) {
+        startGatewaysAfterUpdateAbort(venvHermesShimPath(updateRoot))
+      }
+
       return { ok: false, error: message }
     }
 
@@ -3847,16 +3905,18 @@ async function applyUpdates(opts: { stopSafeBlockers?: boolean } = {}) {
         rememberLog(`[updates] venv-blocked: ${scanOutcome.result.processes.length} process(es) hold the install`)
         emitUpdateProgress({ stage: 'error', message, percent: null })
         startHermes().catch(() => {})
+        startGatewaysAfterUpdateAbort(venvHermesShimPath(updateRoot))
 
         return { ok: false, error: 'venv-blocked', message, blockers: scanOutcome.result.processes }
       }
 
       if (scanOutcome.kind === 'probe-failure') {
-        const message = formatProbeFailedMessage()
+        const message = formatProbeFailedMessage(scanOutcome.error)
 
         rememberLog(`[updates] venv-blocker probe failed: ${scanOutcome.error}`)
         emitUpdateProgress({ stage: 'error', message, percent: null })
         startHermes().catch(() => {})
+        startGatewaysAfterUpdateAbort(venvHermesShimPath(updateRoot))
 
         return { ok: false, error: 'venv-probe-failed', message }
       }
@@ -3986,6 +4046,10 @@ async function applyUpdates(opts: { stopSafeBlockers?: boolean } = {}) {
       rememberLog(`[updates] hand-off not viable, aborting quit: ${handoffOutcome.message}`)
       emitUpdateProgress({ stage: 'error', message, percent: null })
       startHermes().catch(() => {})
+
+      if (IS_WINDOWS) {
+        startGatewaysAfterUpdateAbort(venvHermesShimPath(updateRoot))
+      }
 
       return { ok: false, error: 'updater-spawn-failed', message }
     }
@@ -6408,6 +6472,11 @@ function registerPowerResumeListeners() {
     powerMonitor.on('on-battery', () => broadcastBatteryState(true))
     powerMonitor.on('on-ac', () => broadcastBatteryState(false))
     onBatteryPower = powerMonitor.isOnBatteryPower()
+    attachPowerResumeRemoteRevalidation({
+      log: rememberLog,
+      powerMonitor,
+      revalidate: () => revalidateSuspectPoolAfterResume()
+    })
   } catch {
     // powerMonitor is unavailable before app 'ready' on some platforms; the
     // caller registers after 'ready', so this should not normally throw.
@@ -9713,6 +9782,7 @@ function clearManagedSshRecovery(connectionId, correlationId) {
 const sshBootstrapCoordinator = createBootstrapCoordinator()
 
 let sshQuitTeardownDone = false
+let sshQuitTeardownPromise: Promise<void> | null = null
 let backendQuitTeardownDone = false
 
 function sshScopeKey(profile) {
@@ -10968,6 +11038,19 @@ async function ensureRegistryBackend(connectionId, profile, managedUpdateCorrela
       ...primary,
       profile: profileKey,
       connectionId: id
+    }
+  }
+
+  if (id === registry.primary && source.kind !== 'local' && source.kind !== 'ssh') {
+    const primaryDescriptor = await ensureBackend(profile)
+
+    if (registrySourceOwnsPrimaryBackend(registry, id, primaryDescriptor)) {
+      return {
+        ...primaryDescriptor,
+        profile: profileKey,
+        connectionId: id,
+        sharedRemote: true
+      }
     }
   }
 
@@ -14139,6 +14222,33 @@ function revalidatePool() {
   })
 }
 
+function redialPoolBackendAfterResume(poolKey: string) {
+  const { connectionId, profile } = parseBackendScopeKey(poolKey)
+
+  return backendDialClaims.run(poolKey, () =>
+    connectionId ? ensureRegistryBackend(connectionId, profile) : ensureBackend(profile)
+  )
+}
+
+const suspectPoolSweepScope = {}
+
+function revalidateSuspectPoolAfterResume() {
+  return remoteRevalidation.run(suspectPoolSweepScope, () =>
+    revalidateSuspectPooledRemoteBackends({
+      entries: backendPool.entries(),
+      log: rememberLog,
+      probe: (connection, path, options) => fetchJsonForBackend(connection, path, options),
+      rebuild: poolKey => redialPoolBackendAfterResume(poolKey),
+      retire: async poolKey => {
+        await stopPoolBackend(poolKey)
+        await sshBootstrapCoordinator.cancelAndWait(poolKey)
+        await teardownSshConnection(poolKey)
+      },
+      tracker: remoteLiveness
+    })
+  )
+}
+
 ipcMain.handle('hermes:backend:touch', async (_event, profile) => {
   touchPoolBackend(profile)
 
@@ -14285,6 +14395,19 @@ const hudIpc = registerHudIpc({
   setHudSessionId: value => {
     hudSessionId = value
   }
+})
+
+ipcMain.handle('hermes:backend:recycle', async (_event, profile) => {
+  await recycleOwnedBackend({
+    notifyApplied: sendConnectionApplied,
+    primaryProfile: primaryProfileKey(),
+    profile: typeof profile === 'string' ? profile : '',
+    teardownPool: teardownPoolBackendAndWait,
+    teardownPrimary: () => teardownPrimaryBackendAndWait({ soft: true }),
+    teardownSsh: value => teardownSshConnection(value || null)
+  })
+
+  return { ok: true }
 })
 
 ipcMain.handle('hermes:bootstrap:reset', async () => {
@@ -17351,20 +17474,32 @@ app.on('before-quit', event => {
     })
   }
 
-  if ((sshConnections.size > 0 || sshBootstrapCoordinator.promises().length > 0) && !sshQuitTeardownDone) {
+  if (
+    sshQuitShouldBlock({
+      teardownDone: sshQuitTeardownDone,
+      connectionCount: sshConnections.size,
+      bootstrapPending: sshBootstrapCoordinator.promises().length,
+      inFlight: sshQuitTeardownPromise
+    })
+  ) {
     event.preventDefault()
-    const scopes = [...sshConnections.keys()]
 
-    const pending = Promise.allSettled([
-      ...scopes.map(scope => teardownSshConnection(scope || null)),
-      ...sshBootstrapCoordinator.promises()
-    ])
+    if (!sshQuitTeardownPromise) {
+      const scopes = [...sshConnections.keys()]
 
-    // cleanupStale waits up to 5s for the owned pid to exit (50 * 100ms).
-    // The previous 4s race could close SSH first and leave serve --isolated
-    // reparented to pid 1.
-    void Promise.race([pending, new Promise(resolve => setTimeout(resolve, 6_000))]).then(async () => {
-      await sshBootstrapCoordinator.forceCleanupAll()
+      const pending = Promise.allSettled([
+        ...scopes.map(scope => teardownSshConnection(scope || null)),
+        ...sshBootstrapCoordinator.promises()
+      ])
+
+      sshQuitTeardownPromise = Promise.race([pending, new Promise<void>(resolve => setTimeout(resolve, 6_000))]).then(
+        async () => {
+          await sshBootstrapCoordinator.forceCleanupAll()
+        }
+      )
+    }
+
+    void sshQuitTeardownPromise.then(() => {
       sshQuitTeardownDone = true
       app.quit()
     })

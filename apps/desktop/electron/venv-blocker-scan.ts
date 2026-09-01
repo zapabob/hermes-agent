@@ -298,9 +298,14 @@ export function formatBlockerMessage(result: VenvBlockerScanResult): string {
 /**
  * Build a probe-failure error message.
  */
-export function formatProbeFailedMessage(): string {
+export function formatProbeFailedMessage(error?: string): string {
+  const timeoutDetail = error?.startsWith('timed out after')
+    ? `\n\nThe verification scan ${error}; no blocking process was confirmed.`
+    : ''
+
   return (
-    'Update aborted: Desktop could not verify the Hermes installation is free.\n' +
+    'Update aborted: Desktop could not verify the Hermes installation is free.' +
+    timeoutDetail +
     '\n' +
     'Close other Hermes windows and terminals, then retry.  If the problem\n' +
     'persists, run `hermes update` in a terminal for detailed diagnostics.'
