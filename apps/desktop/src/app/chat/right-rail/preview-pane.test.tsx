@@ -1,4 +1,6 @@
-import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { act, cleanup, fireEvent, render as testingRender, waitFor } from '@testing-library/react'
+import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { onComposerAttachImagesRequest } from '@/app/chat/composer/focus'
@@ -6,6 +8,12 @@ import { $connection, $selectedStoredSessionId } from '@/store/session'
 
 import { forgetPreviewConsole, previewConsoleState } from './preview-console-store'
 import { PreviewPane } from './preview-pane'
+
+let queryClient: QueryClient
+
+function render(ui: ReactNode) {
+  return testingRender(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>)
+}
 
 function stubPdfObjectUrls() {
   const NativeUrl = URL
@@ -26,6 +34,7 @@ function stubPdfObjectUrls() {
 
 describe('PreviewPane console state', () => {
   beforeEach(() => {
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) =>
       window.setTimeout(() => callback(Date.now()), 0)
     )
@@ -34,6 +43,7 @@ describe('PreviewPane console state', () => {
 
   afterEach(() => {
     cleanup()
+    queryClient.clear()
     $connection.set(null)
     $selectedStoredSessionId.set(null)
     vi.unstubAllGlobals()
