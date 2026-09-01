@@ -364,6 +364,12 @@ def terminate_pid(
             return
 
         if result.returncode != 0:
+            # ``taskkill /T`` can report a vanished child as an error even
+            # after it has successfully terminated the requested root PID.
+            # Treat that race as success only when the guarded process object
+            # is now gone. A live or recycled PID still fails closed.
+            if _get_process_start_time(pid) is None:
+                return
             details = (result.stderr or result.stdout or "").strip()
             raise OSError(details or f"taskkill failed for PID {pid}")
         return

@@ -153,8 +153,13 @@ function Invoke-Normalization {
         }
         $exitCode = $LASTEXITCODE
         $raw = @(Get-Content -LiteralPath $outFile -ErrorAction SilentlyContinue)
-        $stderr = ($raw | Where-Object { $_ -like '`[hermes`]*' }) -join "`n"
-        $stdout = ($raw | Where-Object { $_ -notlike '`[hermes`]*' }) -join "`n"
+        # pwsh 7.6 can emit a host-startup diagnostic before install.ps1 runs
+        # when the deliberately invalid TEMP alias is inherited. The contract
+        # under test is the single JSON object emitted by -ShowResolvedPaths;
+        # select that object explicitly and retain every other line as context.
+        $jsonLines = @($raw | Where-Object { $_ -match '^\s*\{.*\}\s*$' })
+        $stdout = if ($jsonLines.Count) { $jsonLines[-1] } else { '' }
+        $stderr = ($raw | Where-Object { $_ -ne $stdout }) -join "`n"
     } finally {
         foreach ($key in $saved.Keys) {
             if ($null -eq $saved[$key]) {

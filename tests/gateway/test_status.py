@@ -428,6 +428,42 @@ class TestGetProcessStartTime:
 
 class TestTerminatePid:
     @pytest.mark.windows_only
+    def test_taskkill_child_race_succeeds_when_guarded_root_is_gone(
+        self, monkeypatch
+    ):
+        calls = iter([123, None])
+        monkeypatch.setattr(status, "_get_process_start_time", lambda _pid: next(calls))
+        monkeypatch.setattr(
+            status.subprocess,
+            "run",
+            lambda *_args, **_kwargs: SimpleNamespace(
+                returncode=128,
+                stdout="",
+                stderr="a child process vanished during tree termination",
+            ),
+        )
+
+        status.terminate_pid(123, force=True, expected_start_time=123)
+
+    @pytest.mark.windows_only
+    def test_taskkill_failure_still_raises_when_guarded_root_survives(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(status, "_get_process_start_time", lambda _pid: 123)
+        monkeypatch.setattr(
+            status.subprocess,
+            "run",
+            lambda *_args, **_kwargs: SimpleNamespace(
+                returncode=128,
+                stdout="",
+                stderr="the guarded root process survived",
+            ),
+        )
+
+        with pytest.raises(OSError, match="guarded root process survived"):
+            status.terminate_pid(123, force=True, expected_start_time=123)
+
+    @pytest.mark.windows_only
     def test_force_uses_taskkill_on_windows(self, monkeypatch):
         # Faking _IS_WINDOWS on POSIX could not reproduce the real
         # CREATE_NO_WINDOW creationflags value that windows_hide_flags()
