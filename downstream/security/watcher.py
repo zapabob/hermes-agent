@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import signal
 import time
@@ -10,7 +9,10 @@ from typing import Any, Protocol
 
 import psutil
 
+from hermes_constants import get_hermes_home
+
 from .service import SecurityService, is_reparse_point
+from .watch_state import claim_watch_owner, clear_watch_owner, runtime_lock
 
 
 class _WatchStore(Protocol):
@@ -32,13 +34,6 @@ class _ReconcileService(Protocol):
     def quick_paths(self) -> list[Path]: ...
 
     def scan_file(self, candidate: Path | str, quarantine: bool = True, use_cache: bool = True) -> object: ...
-
-
-def _write_state(service: SecurityService, enabled: bool) -> None:
-    path = service.store.root / "watch-state.json"
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps({"enabled": enabled, "pid": os.getpid()}, sort_keys=True), encoding="utf-8")
-    os.replace(temporary, path)
 
 
 def reconcile_once(
@@ -70,40 +65,47 @@ def reconcile_once(
     return current
 
 
-def run(interval: float) -> int:
-    service = SecurityService()
-    stopping = False
-    if os.name == "nt":
+def run(interval: float, request_nonce: str, owner_nonce: str) -> int:
+    root = get_hermes_home() / "security"
+    with runtime_lock(root) as acquired:
+        if not acquired:
+            return 0
+        service = SecurityService()
+        stopping = False
+        if os.name == "nt":
+            try:
+                psutil.Process().nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
+            except (OSError, psutil.Error):
+                pass
+
+        def request_stop(_signum, _frame) -> None:
+            nonlocal stopping
+            stopping = True
+
+        signal.signal(signal.SIGTERM, request_stop)
+        if hasattr(signal, "SIGBREAK"):
+            signal.signal(signal.SIGBREAK, request_stop)
+        if claim_watch_owner(root, request_nonce, owner_nonce) is None:
+            return 0
         try:
-            psutil.Process().nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
-        except (OSError, psutil.Error):
-            pass
-
-    def request_stop(_signum, _frame) -> None:
-        nonlocal stopping
-        stopping = True
-
-    signal.signal(signal.SIGTERM, request_stop)
-    if hasattr(signal, "SIGBREAK"):
-        signal.signal(signal.SIGBREAK, request_stop)
-    seen = reconcile_once(service, {}, scan_changes=False)
-    _write_state(service, True)
-    try:
-        while not stopping:
-            seen = reconcile_once(service, seen)
-            deadline = time.monotonic() + max(2.0, interval)
-            while not stopping and time.monotonic() < deadline:
-                time.sleep(min(0.5, deadline - time.monotonic()))
-    finally:
-        _write_state(service, False)
+            seen = reconcile_once(service, {}, scan_changes=False)
+            while not stopping:
+                seen = reconcile_once(service, seen)
+                deadline = time.monotonic() + max(2.0, interval)
+                while not stopping and time.monotonic() < deadline:
+                    time.sleep(min(0.5, deadline - time.monotonic()))
+        finally:
+            clear_watch_owner(root, request_nonce, owner_nonce)
     return 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--interval", type=float, default=30.0)
+    parser.add_argument("--request-nonce", required=True)
+    parser.add_argument("--owner-nonce", required=True)
     args = parser.parse_args()
-    return run(args.interval)
+    return run(args.interval, args.request_nonce, args.owner_nonce)
 
 
 if __name__ == "__main__":

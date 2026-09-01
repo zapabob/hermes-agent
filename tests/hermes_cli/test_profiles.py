@@ -292,6 +292,21 @@ class TestDeleteProfile:
     """Tests for delete_profile()."""
 
 
+    def test_security_watcher_must_stop_before_profile_removal(self, profile_env):
+        create_profile("coder", no_alias=True)
+
+        with patch("hermes_cli.profiles._cleanup_gateway_service"), \
+             patch("downstream.security.cli.disable_watch_for_profile", return_value={
+                 "ok": False,
+                 "error": "watcher still owns files",
+             }), \
+             patch("hermes_cli.profiles.shutil.rmtree") as rmtree:
+            with pytest.raises(RuntimeError, match="Could not stop Security Center watcher"):
+                delete_profile("coder", yes=True)
+
+        rmtree.assert_not_called()
+
+
     def test_rmtree_failure_raises(self, profile_env):
         profile_dir = create_profile("coder", no_alias=True)
         set_active_profile("coder")
@@ -1161,4 +1176,3 @@ class TestResolveProfileEnvSpelling:
         # No HERMES_HOME: the platform default root applies (existing contract).
         monkeypatch.delenv("HERMES_HOME", raising=False)
         assert Path(resolve_profile_env("default")) == _get_default_hermes_home()
-

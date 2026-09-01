@@ -1696,6 +1696,22 @@ def delete_profile(name: str, yes: bool = False) -> Path:
     if gw_running:
         _stop_gateway_process(profile_dir)
 
+    # 2a. Security Center's watcher is deliberately detached from Desktop
+    # and the gateway. Stop it by its verified profile-scoped identity before
+    # removing the directory; otherwise it can keep scanning and recreate
+    # state beneath a profile that the user has deleted.
+    try:
+        from downstream.security.cli import disable_watch_for_profile
+
+        watch_result = disable_watch_for_profile(profile_dir)
+        if watch_result.get("ok") is False:
+            raise RuntimeError(
+                "Could not stop Security Center watcher: "
+                f"{watch_result.get('error', 'unknown error')}"
+            )
+    except ImportError:
+        pass
+
     # 2b. Stop any other backends bound to this profile (Desktop-spawned
     # serve/dashboard processes the gateway.pid file never names). They hold
     # the profile's SQLite connection open and keep writing files, which makes

@@ -57,6 +57,24 @@ def test_security_status_rejects_unauthenticated_http_request(
     assert response.status_code == 401
 
 
+def test_backend_startup_runs_one_shot_security_watch_resume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from downstream.security import cli as security_cli
+
+    resume = SimpleNamespace(calls=0)
+
+    def _resume() -> list[dict[str, object]]:
+        resume.calls += 1
+        return [{"profile": "default", "ok": True, "enabled": False, "pid": None, "running": False}]
+
+    monkeypatch.setattr(security_cli, "resume_all_profile_watches", _resume)
+
+    web_server._resume_security_watch_on_startup()
+
+    assert resume.calls == 1
+
+
 def test_scan_with_quarantine_requires_explicit_confirmation() -> None:
     body = web_server.SecurityScanRequest(scope="quick", quarantine=True, confirmed=False)
     with pytest.raises(web_server.HTTPException) as caught:

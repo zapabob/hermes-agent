@@ -6,17 +6,21 @@ import json
 import os
 import shutil
 import sqlite3
+import sys
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 import pytest
 from cryptography.exceptions import InvalidTag
 
 from downstream.security.engines import ClamAVEngine, HashReputationEngine, StaticHeuristicsEngine, YaraEngine
-from downstream.security.cli import _watch_enable
+from downstream.security.cli import _watch_disable, _watch_enable, resume_watch_if_enabled
+from downstream.security import cli as security_cli
+from downstream.security import watch_state, watcher as security_watcher
 from downstream.security.execution_gate import _candidates, preflight_command
 from downstream.security.models import EngineState, Finding, ScanResult, Verdict
 from downstream.security.service import SecurityService
@@ -75,9 +79,9 @@ class WatchStoreStub:
 
 
 class WatchControlServiceStub:
-    def __init__(self) -> None:
+    def __init__(self, root: Path) -> None:
         self.config: dict[str, object] = {"watch_interval": 7}
-        self.store = WatchStoreStub()
+        self.store = WatchStoreStub(root)
         self._statuses = iter((
             {"running": False},
             {"enabled": True, "pid": 4242, "running": True},
@@ -301,15 +305,202 @@ def test_concurrent_scan_returns_each_file_once(tmp_path: Path) -> None:
     assert {result.sha256 for result in results} == {hashlib.sha256(path.read_bytes()).hexdigest() for path in files}
 
 
-def test_watch_enable_reports_ready_watcher_pid() -> None:
-    service = WatchControlServiceStub()
-    with patch("downstream.security.cli.subprocess.Popen", return_value=SimpleNamespace(pid=1111)) as popen, patch(
-        "downstream.security.cli.time.sleep"
-    ):
+def test_watch_enable_reports_ready_watcher_pid(tmp_path: Path) -> None:
+    service = WatchControlServiceStub(tmp_path / "security")
+    with patch("downstream.security.cli.subprocess.Popen", return_value=SimpleNamespace(pid=4242)) as popen, patch(
+        "downstream.security.cli.verified_watch_owner",
+        return_value=SimpleNamespace(pid=4242),
+    ), patch("downstream.security.cli.time.sleep"):
         result = _watch_enable(cast(SecurityService, service))
     assert result == {"ok": True, "enabled": True, "pid": 4242, "running": True}
-    assert popen.call_args.args[0][-2:] == ["--interval", "7.0"]
+    assert popen.call_args.args[0][3:5] == ["--interval", "7.0"]
+    assert popen.call_args.args[0][5] == "--request-nonce"
+    assert popen.call_args.args[0][7] == "--owner-nonce"
+    assert popen.call_args.kwargs["env"]["HERMES_HOME"] == str(tmp_path.resolve())
     service.store.event.assert_called_once_with("watch", "4242", None, "enabled", {})
+
+
+def test_watch_enable_timeout_cleans_up_child_and_preserves_request(tmp_path: Path) -> None:
+    service = WatchControlServiceStub(tmp_path / "security")
+    service._statuses = iter(({"enabled": True, "pid": None, "running": False},))
+    process = SimpleNamespace(pid=1111, poll=Mock(return_value=None), terminate=Mock(), wait=Mock(), kill=Mock())
+    clock = SimpleNamespace(monotonic=Mock(side_effect=(0.0, 6.0)), sleep=Mock())
+    with patch("downstream.security.cli.subprocess.Popen", return_value=process), patch(
+        "downstream.security.cli.time",
+        clock,
+    ):
+        result = _watch_enable(cast(SecurityService, service))
+
+    assert result["ok"] is False
+    assert result["enabled"] is True
+    process.terminate.assert_called_once_with()
+    process.wait.assert_called_once_with(timeout=3)
+    process.kill.assert_not_called()
+    persisted = json.loads((service.store.root / "watch-state.json").read_text(encoding="utf-8"))
+    assert persisted["enabled"] is True
+    assert persisted["pid"] is None
+
+
+def test_windows_watcher_spawn_retries_without_breakaway(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    child = SimpleNamespace(pid=4242)
+    popen = Mock(side_effect=(PermissionError("breakaway denied"), child))
+    monkeypatch.setattr(security_cli.sys, "platform", "win32")
+    monkeypatch.setattr(security_cli.subprocess, "Popen", popen)
+    monkeypatch.setattr(security_cli, "windows_detach_flags", lambda: 0x100)
+    monkeypatch.setattr(security_cli, "windows_detach_flags_without_breakaway", lambda: 0x200)
+    monkeypatch.setattr(security_cli, "windows_hide_flags", lambda: 0x10)
+
+    result = security_cli._spawn_watcher([sys.executable, "-m", "downstream.security.watcher"], tmp_path)
+
+    assert result is child
+    assert popen.call_count == 2
+    assert popen.call_args_list[0].kwargs["creationflags"] == 0x110
+    assert popen.call_args_list[1].kwargs["creationflags"] == 0x210
+
+
+def test_watch_disable_never_signals_unverified_pid(tmp_path: Path) -> None:
+    service = WatchControlServiceStub(tmp_path / "security")
+    process = Mock()
+    with patch(
+        "downstream.security.cli.prepare_watch_disable",
+        return_value=({"enabled": False, "pid": 4242}, None),
+    ), patch("downstream.security.cli.psutil.Process", return_value=process):
+        result = _watch_disable(cast(SecurityService, service))
+
+    assert result == {"ok": True, "enabled": False, "pid": None, "running": False}
+    process.terminate.assert_not_called()
+
+
+def test_resume_watch_is_noop_without_persisted_request(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import hermes_constants
+
+    monkeypatch.setattr(hermes_constants, "get_hermes_home", lambda: tmp_path)
+    monkeypatch.setattr(
+        "downstream.security.cli.SecurityService",
+        lambda: pytest.fail("disabled watcher must not materialize Security Center"),
+    )
+
+    result = resume_watch_if_enabled()
+
+    assert result == {"ok": True, "enabled": False, "pid": None, "running": False}
+    assert not (tmp_path / "security").exists()
+
+
+def test_resume_watch_restarts_persisted_request(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import hermes_constants
+
+    root = tmp_path / "security"
+    watch_state.set_watch_enabled(root, True)
+    service = object()
+    enabled = Mock(return_value={"ok": True, "enabled": True, "pid": 7, "running": True})
+    monkeypatch.setattr(hermes_constants, "get_hermes_home", lambda: tmp_path)
+    monkeypatch.setattr(security_cli, "SecurityService", lambda: service)
+    monkeypatch.setattr(security_cli, "_watch_enable_locked", enabled)
+
+    result = resume_watch_if_enabled()
+
+    assert result["running"] is True
+    enabled.assert_called_once_with(service)
+
+
+def test_resume_does_not_recreate_profile_deleted_before_control_lock(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "profiles" / "research"
+    root = home / "security"
+    watch_state.set_watch_enabled(root, True)
+
+    @contextmanager
+    def _delete_before_lock(_root: Path):
+        shutil.rmtree(home)
+        yield
+
+    monkeypatch.setattr(security_cli, "control_lock", _delete_before_lock)
+    monkeypatch.setattr(
+        security_cli,
+        "SecurityService",
+        lambda: pytest.fail("deleted profile must not materialize Security Center"),
+    )
+
+    result = resume_watch_if_enabled(home)
+
+    assert result == {"ok": True, "enabled": False, "pid": None, "running": False}
+    assert not home.exists()
+
+
+def test_startup_resume_covers_default_and_named_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from hermes_cli import profiles
+
+    homes = {
+        "default": tmp_path / "default",
+        "research": tmp_path / "profiles" / "research",
+    }
+    for home in homes.values():
+        security = home / "security"
+        security.mkdir(parents=True)
+        (security / "watch-state.json").write_text("{}", encoding="utf-8")
+    resume = Mock(return_value={"ok": True, "enabled": True, "pid": 7, "running": True})
+    monkeypatch.setattr(profiles, "list_profile_names", lambda: ["default", "research"])
+    monkeypatch.setattr(profiles, "get_profile_dir", lambda name: homes[name])
+    monkeypatch.setattr(security_cli, "resume_watch_if_enabled", resume)
+
+    results = security_cli.resume_all_profile_watches()
+
+    assert [result["profile"] for result in results] == ["default", "research"]
+    assert resume.call_args_list == [call(homes["default"]), call(homes["research"])]
+
+
+def test_watcher_claims_owner_before_initial_inventory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+
+    @contextmanager
+    def _runtime_lock(_root: Path):
+        yield True
+
+    class _Service:
+        store = WatchStoreStub(tmp_path / "security")
+
+    monkeypatch.setattr(security_watcher, "get_hermes_home", lambda: tmp_path)
+    monkeypatch.setattr(security_watcher, "runtime_lock", _runtime_lock)
+    monkeypatch.setattr(security_watcher, "SecurityService", _Service)
+    monkeypatch.setattr(
+        security_watcher,
+        "claim_watch_owner",
+        lambda _root, _request, _owner: calls.append("claim") or {"enabled": True},
+    )
+    monkeypatch.setattr(
+        security_watcher,
+        "reconcile_once",
+        lambda *_args, **_kwargs: calls.append("inventory") or (_ for _ in ()).throw(RuntimeError("stop")),
+    )
+    monkeypatch.setattr(
+        security_watcher,
+        "clear_watch_owner",
+        lambda _root, _request, _owner: calls.append("clear") or True,
+    )
+    monkeypatch.setattr(security_watcher.psutil, "Process", lambda: SimpleNamespace(nice=Mock()))
+    monkeypatch.setattr(security_watcher.signal, "signal", Mock())
+
+    with pytest.raises(RuntimeError, match="stop"):
+        security_watcher.run(30, "1" * 32, "2" * 32)
+
+    assert calls == ["claim", "inventory", "clear"]
 
 
 def test_watcher_reconciles_new_and_changed_files_once(tmp_path: Path) -> None:

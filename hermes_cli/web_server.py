@@ -388,6 +388,22 @@ def _eager_reconcile_own_session_db() -> None:
         )
 
 
+def _resume_security_watch_on_startup() -> None:
+    """Restore persisted Security Center watchers without delaying readiness."""
+    try:
+        from downstream.security.cli import resume_all_profile_watches
+
+        for result in resume_all_profile_watches():
+            if result.get("ok") is False:
+                _log.warning(
+                    "Security watcher startup resume failed for profile %s: %s",
+                    result.get("profile", "unknown"),
+                    result.get("error", "unknown error"),
+                )
+    except Exception:
+        _log.exception("Security watcher startup resume failed")
+
+
 @asynccontextmanager
 async def _lifespan(app: "FastAPI"):
     app.state.event_channels = {}  # dict[str, set]
@@ -414,6 +430,15 @@ async def _lifespan(app: "FastAPI"):
         target=_eager_reconcile_own_session_db,
         daemon=True,
         name="statedb-eager-reconcile",
+    ).start()
+
+    # Watcher preference is durable across Desktop/backend restarts. Recovery
+    # is a single boot-time attempt; the Go watchdog remains the only outer
+    # automatic restart authority for Hermes processes.
+    threading.Thread(
+        target=_resume_security_watch_on_startup,
+        daemon=True,
+        name="security-watch-resume",
     ).start()
 
     # Import hermes_cli.gateway eagerly *before* the lifespan yield so the

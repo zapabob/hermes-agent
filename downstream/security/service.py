@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
-import psutil
 import shutil
 import stat
 import subprocess
@@ -202,15 +200,6 @@ class SecurityService:
         return DefinitionUpdater(self.store, int(self.config.get("update_timeout", 300))).update_clamav()
 
     def watch_status(self) -> dict[str, object]:
-        state_path = self.store.root / "watch-state.json"
-        if not state_path.exists():
-            return {"enabled": False, "pid": None, "running": False}
-        try:
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return {"enabled": False, "pid": None, "running": False, "error": "invalid state file"}
-        pid = int(state.get("pid") or 0)
-        running = False
-        if pid > 0:
-            running = psutil.pid_exists(pid)
-        return {"enabled": bool(state.get("enabled")), "pid": pid or None, "running": running}
+        from .watch_state import read_watch_status
+
+        return read_watch_status(self.store.root)
