@@ -1575,9 +1575,9 @@ class TestProfileArg:
             "mybot",
             "gateway",
             "run",
-            "--replace",
             "--external-supervisor",
         ]
+        assert "--replace" not in program_args
 
     def test_launchd_plist_path_uses_real_user_home_not_profile_home(
         self, tmp_path, monkeypatch
