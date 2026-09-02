@@ -444,6 +444,13 @@ if [ ! -f "$SANDBOX_ROOT/root/certs/ca.pem" ]; then
     exit 1
   fi
 fi
+# Raw CONNECT tunnels present the real upstream certificate, while fixture
+# hosts present one signed by our throwaway CA. Give curl, uv, and Git one
+# atomic bundle that trusts both paths.
+ca_bundle_tmp="$SANDBOX_ROOT/root/certs/ca-bundle.pem.$$"
+cat "$SANDBOX_ROOT/root/certs/real-ca.pem" \
+  "$SANDBOX_ROOT/root/certs/ca.pem" > "$ca_bundle_tmp"
+mv "$ca_bundle_tmp" "$SANDBOX_ROOT/root/certs/ca-bundle.pem"
 GIT_UPLOAD_PACK="$(command -v git-upload-pack)"
 sed "s|@GIT_UPLOAD_PACK@|$GIT_UPLOAD_PACK|" "$SANDBOX_ASSETS/ssh-shim.sh" \
   > "$SANDBOX_ROOT/root/usr/bin/ssh"

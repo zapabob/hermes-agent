@@ -215,9 +215,9 @@ exec bwrap \
   --setenv HOME "$DEV_SANDBOX_HOME" \
   --setenv USER "$DEV_SANDBOX_USER" \
   --setenv LOGNAME "$DEV_SANDBOX_USER" \
-  --setenv CURL_CA_BUNDLE /work/certs/ca.pem \
-  --setenv SSL_CERT_FILE /work/certs/ca.pem \
-  --setenv GIT_SSL_CAINFO /work/certs/ca.pem \
+  --setenv CURL_CA_BUNDLE /work/certs/ca-bundle.pem \
+  --setenv SSL_CERT_FILE /work/certs/ca-bundle.pem \
+  --setenv GIT_SSL_CAINFO /work/certs/ca-bundle.pem \
   --setenv NODE_EXTRA_CA_CERTS /work/certs/ca.pem \
   --setenv OPENSSL_CONF /work/certs/openssl.cnf \
   --setenv HTTP_PROXY http://127.0.0.1:8080 \

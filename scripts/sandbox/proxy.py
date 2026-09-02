@@ -11,8 +11,9 @@ forwards to the real host:
   sandbox is isolated from the *host*, not from the internet: a real install
   still has to reach PyPI and npm.
 
-HTTPS is intercepted by minting a per-host certificate from the sandbox's own
-throwaway CA, which the payload trusts via CURL_CA_BUNDLE / SSL_CERT_FILE.
+HTTPS fixture hosts are intercepted with a per-host certificate from the
+sandbox's throwaway CA. Other hosts use an opaque CONNECT tunnel so package
+manager TLS remains end-to-end.
 
 Usage: proxy.py <fixture-root> <certs-dir> <real-ca-bundle>
 """

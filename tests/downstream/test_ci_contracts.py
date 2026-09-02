@@ -135,6 +135,9 @@ def test_sandbox_node_trusts_the_local_mitm_ca() -> None:
 
     assert "--setenv NODE_EXTRA_CA_CERTS /work/certs/ca.pem" in stage2
     assert "--setenv NODE_EXTRA_CA_CERTS /work/certs/real-ca.pem" not in stage2
+    assert "--setenv CURL_CA_BUNDLE /work/certs/ca-bundle.pem" in stage2
+    assert "--setenv SSL_CERT_FILE /work/certs/ca-bundle.pem" in stage2
+    assert "--setenv GIT_SSL_CAINFO /work/certs/ca-bundle.pem" in stage2
     assert "python3 /work/proxy.py /work/http /work/certs /work/certs/real-ca.pem" in stage2
 
 

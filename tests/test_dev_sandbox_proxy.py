@@ -90,6 +90,40 @@ def test_close_request_replaces_keep_alive_headers(tmp_path: Path) -> None:
     assert closed.endswith(b"\r\n\r\nbody")
 
 
+def test_only_fixture_hosts_require_tls_interception(tmp_path: Path) -> None:
+    proxy = _load_proxy(tmp_path)
+    (tmp_path / "hermes-agent.nousresearch.com").mkdir()
+
+    assert proxy.has_fixture_host("hermes-agent.nousresearch.com")
+    assert not proxy.has_fixture_host("registry.npmjs.org")
+    assert not proxy.has_fixture_host("../registry.npmjs.org")
+
+
+def test_non_fixture_connect_uses_opaque_tunnel(tmp_path: Path) -> None:
+    proxy = _load_proxy(tmp_path)
+    client = Mock()
+    upstream = Mock()
+    upstream_context = Mock()
+    upstream_context.__enter__ = Mock(return_value=upstream)
+    upstream_context.__exit__ = Mock(return_value=False)
+
+    with (
+        patch.object(
+            proxy.socket, "create_connection", return_value=upstream_context
+        ) as connect,
+        patch.object(proxy, "relay_tunnel") as relay_tunnel,
+    ):
+        proxy.handle_connect(client, "registry.npmjs.org:443")
+
+    connect.assert_called_once_with(
+        ("registry.npmjs.org", 443), timeout=proxy.UPSTREAM_TIMEOUT_SECONDS
+    )
+    client.sendall.assert_called_once_with(
+        b"HTTP/1.1 200 Connection Established\r\n\r\n"
+    )
+    relay_tunnel.assert_called_once_with(client, upstream)
+
+
 def test_https_handshake_eof_exhausts_bounded_backoff(tmp_path: Path) -> None:
     proxy = _load_proxy(tmp_path)
     raw_connections = [Mock() for _ in range(proxy.UPSTREAM_TLS_HANDSHAKE_ATTEMPTS)]
