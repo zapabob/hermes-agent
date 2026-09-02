@@ -489,7 +489,13 @@ if [ -t 0 ] && [ -t 1 ]; then
 fi
 NODE_DIR="${DEV_SANDBOX_NODE_DIR:-}"
 if [ -z "$NODE_DIR" ] && command -v node >/dev/null; then
-  NODE_DIR="$(dirname "$(dirname "$(command -v node)")")"
+  node_dir_candidate="$(dirname "$(dirname "$(command -v node)")")"
+  # Only Nix store paths are guaranteed to remain visible inside stage 2.
+  # FHS paths such as /usr/local are deliberately overlaid by the sandbox;
+  # exporting one makes node-gyp look for an inaccessible common.gypi.
+  case "$node_dir_candidate" in
+    /nix/store/*) NODE_DIR="$node_dir_candidate" ;;
+  esac
 fi
 WAYLAND_SOCKET=""
 if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -n "${WAYLAND_DISPLAY:-}" ] \

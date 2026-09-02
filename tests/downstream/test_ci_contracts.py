@@ -10,6 +10,7 @@ WORKFLOW = ROOT / ".github/workflows/fork-cicd.yml"
 SCHEDULED = ROOT / ".github/workflows/windows-full-qualification.yml"
 RELEASE = ROOT / ".github/workflows/windows-release.yml"
 SANDBOX_STAGE2 = ROOT / "scripts/sandbox/stage2-run.sh"
+DEV_SANDBOX = ROOT / "scripts/dev-sandbox.sh"
 CI = ROOT / ".github/workflows/ci.yaml"
 DETECT_ACTION = ROOT / ".github/actions/detect-changes/action.yml"
 
@@ -139,6 +140,13 @@ def test_sandbox_node_trusts_the_local_mitm_ca() -> None:
     assert "--setenv SSL_CERT_FILE /work/certs/ca-bundle.pem" in stage2
     assert "--setenv GIT_SSL_CAINFO /work/certs/ca-bundle.pem" in stage2
     assert "python3 /work/proxy.py /work/http /work/certs /work/certs/real-ca.pem" in stage2
+
+
+def test_sandbox_does_not_export_hidden_fhs_node_headers() -> None:
+    sandbox = DEV_SANDBOX.read_text(encoding="utf-8")
+
+    assert '/nix/store/*) NODE_DIR="$node_dir_candidate"' in sandbox
+    assert 'NODE_DIR="$(dirname "$(dirname "$(command -v node)")")"' not in sandbox
 
 
 def test_ci_detect_step_passes_only_declared_action_inputs() -> None:
