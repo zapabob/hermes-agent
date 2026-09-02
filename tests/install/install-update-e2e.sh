@@ -102,6 +102,11 @@ collect_sandbox_logs() {
   [ -d "$src" ] || return 0
   mkdir -p "$dest"
   cp -a "$src/." "$dest/" 2>/dev/null || true
+  if [ -d "$SANDBOX_ROOT/home/.npm/_logs" ]; then
+    mkdir -p "$dest/npm-logs"
+    cp -a "$SANDBOX_ROOT/home/.npm/_logs/." "$dest/npm-logs/" \
+      2>/dev/null || true
+  fi
   # Print it, not just archive it: a rejected TLS handshake here is the whole
   # explanation for a failure that otherwise reads as a bare `curl: (35)`, and
   # whoever is reading the job log should not have to download an artifact to
@@ -111,6 +116,14 @@ collect_sandbox_logs() {
     echo "--- sandbox proxy.log ---" >&2
     cat "$dest/proxy.log" >&2
     echo "--- end proxy.log ---" >&2
+  fi
+  local latest_npm_log=""
+  latest_npm_log="$(find "$dest/npm-logs" -type f -name '*-debug-*.log' \
+    -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)"
+  if [ -n "$latest_npm_log" ] && [ -s "$latest_npm_log" ]; then
+    echo "--- latest npm debug log ---" >&2
+    tail -n 200 "$latest_npm_log" >&2
+    echo "--- end npm debug log ---" >&2
   fi
 }
 
