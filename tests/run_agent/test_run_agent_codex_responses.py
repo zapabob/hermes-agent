@@ -1694,7 +1694,7 @@ def test_run_conversation_compresses_mid_turn_before_output_budget_exhaustion(mo
                 {
                     "role": "tool",
                     "tool_call_id": call.id,
-                    "content": "x" * 80_000,
+                    "content": "x" * 120_000,
                 }
             )
 
@@ -1757,7 +1757,7 @@ def test_mid_turn_compaction_does_not_double_persist_in_place_rows(monkeypatch, 
     def _fake_execute_tool_calls(assistant_message, messages, effective_task_id, api_call_count=0):
         for call in assistant_message.tool_calls:
             messages.append(
-                {"role": "tool", "tool_call_id": call.id, "content": "x" * 80_000}
+                {"role": "tool", "tool_call_id": call.id, "content": "x" * 120_000}
             )
 
     def _fake_compress_context(messages, system_message, *, approx_tokens=None, task_id="default", focus_topic=None):

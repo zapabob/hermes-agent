@@ -116,7 +116,7 @@ class TestEscalateWedgedGateway:
         monkeypatch.setattr(
             gateway_cli,
             "terminate_pid",
-            lambda pid, force=False: signals.append(("kill" if force else "term", pid)),
+            lambda pid, force=False, **_kwargs: signals.append(("kill" if force else "term", pid)),
         )
         monkeypatch.setattr(
             gateway_cli, "_wait_for_pid_exit", lambda pid, timeout: True
@@ -137,7 +137,7 @@ class TestEscalateWedgedGateway:
         monkeypatch.setattr(
             gateway_cli,
             "terminate_pid",
-            lambda pid, force=False: signals.append(("kill" if force else "term", pid)),
+            lambda pid, force=False, **_kwargs: signals.append(("kill" if force else "term", pid)),
         )
         monkeypatch.setattr(gateway_cli, "_wait_for_pid_exit", fake_wait)
 
@@ -147,7 +147,7 @@ class TestEscalateWedgedGateway:
     def test_total_wait_budget_is_bounded_well_under_drain(self, monkeypatch):
         """Worst case must be seconds, never the 180s drain budget."""
         waits = []
-        monkeypatch.setattr(gateway_cli, "terminate_pid", lambda pid, force=False: None)
+        monkeypatch.setattr(gateway_cli, "terminate_pid", lambda pid, force=False, **_kwargs: None)
         monkeypatch.setattr(
             gateway_cli,
             "_wait_for_pid_exit",
@@ -171,7 +171,7 @@ class TestEscalateWedgedGateway:
     def test_sigkill_permission_error_does_not_raise(self, monkeypatch):
         calls = []
 
-        def term(pid, force=False):
+        def term(pid, force=False, **_kwargs):
             calls.append(force)
             if force:
                 raise PermissionError
@@ -192,7 +192,7 @@ class TestLaunchdRestartWedgedIntegration:
         events = []
         monkeypatch.setattr(gateway_cli, "get_launchd_label", lambda: "ai.hermes.gateway")
         monkeypatch.setattr(gateway_cli, "_launchd_domain", lambda: "gui/501")
-        monkeypatch.setattr(gateway_cli, "_get_restart_drain_timeout", lambda: 180.0)
+        monkeypatch.setattr(gateway_cli, "_get_restart_exit_wait_budget", lambda: 180.0)
         monkeypatch.setattr("gateway.status.get_running_pid", lambda *a, **k: 4242)
         monkeypatch.setattr(
             gateway_cli, "_request_gateway_self_restart", lambda pid: False
@@ -214,8 +214,8 @@ class TestLaunchdRestartWedgedIntegration:
         )
         monkeypatch.setattr(
             gateway_cli,
-            "_wait_for_gateway_exit",
-            lambda timeout, force_after=None: events.append(("drain", timeout)) or True,
+            "_graceful_restart_via_sigusr1",
+            lambda pid, timeout: events.append(("drain", timeout)) or False,
         )
         monkeypatch.setattr(
             gateway_cli.subprocess,

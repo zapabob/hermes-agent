@@ -114,6 +114,7 @@ class TestFindStaleDashboardPids:
         assert pid in pids
 
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="ps-based scan path")
     def test_ps_timeout_returns_empty(self):
         import subprocess as sp
         with patch("subprocess.run", side_effect=sp.TimeoutExpired("ps", 10)):
@@ -582,7 +583,7 @@ class TestFilterDashboardRespawnCandidates:
         out = _filter_dashboard_respawn_candidates([
             (1, a, home),
             (2, b, home),
-        ])
+        ], own_home=home)
         assert out == [a]
 
     def test_profile_flag_and_profiles_home_share_cap(self):
@@ -605,7 +606,7 @@ class TestFilterDashboardRespawnCandidates:
         out = _filter_dashboard_respawn_candidates([
             (1, a, home),
             (2, b, home),
-        ])
+        ], own_home=home)
         assert out == [a]
 
     def test_distinct_dot_hermes_homes_do_not_share_cap(self):
@@ -616,8 +617,8 @@ class TestFilterDashboardRespawnCandidates:
         out = _filter_dashboard_respawn_candidates([
             (1, a, "/home/u/.hermes"),
             (2, b, "/work/project/.hermes"),
-        ])
-        assert out == [a, b]
+        ], own_home="/home/u/.hermes")
+        assert out == [a]
 
     def test_keeps_fixed_port_serve(self):
         from hermes_cli.dashboard_procs import _filter_dashboard_respawn_candidates

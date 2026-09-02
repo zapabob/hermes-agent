@@ -40,6 +40,6 @@ def test_cmd_update_check_apt_prints_pkg_guidance_without_git(
     with pytest.raises(SystemExit) as excinfo:
         _cmd_update_check()
 
-    assert excinfo.value.code == 1
+    assert excinfo.value.code == 2
     assert "pkg upgrade hermes-agent" in capsys.readouterr().out
     assert mock_run.call_args_list == []

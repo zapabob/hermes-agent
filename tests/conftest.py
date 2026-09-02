@@ -635,11 +635,18 @@ def _neutralize_macos_keychain_creds(request, monkeypatch):
 
     try:
         import agent.anthropic_adapter as _anthropic_adapter
+        import agent.anthropic_credentials as _anthropic_credentials
     except Exception:
         return None
 
     monkeypatch.setattr(
         _anthropic_adapter,
+        "_read_claude_code_credentials_from_keychain",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        _anthropic_credentials,
         "_read_claude_code_credentials_from_keychain",
         lambda *_args, **_kwargs: None,
         raising=False,

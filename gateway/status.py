@@ -619,7 +619,9 @@ def _command_line_belongs_to_profile(command: str, profile_home: Path) -> bool:
         profile_lc = profile_name.lower()
         return (
             f"--profile {profile_lc}" in command_lc
+            or f"--profile={profile_lc}" in command_lc
             or f"-p {profile_lc}" in command_lc
+            or f"-p={profile_lc}" in command_lc
             or f"hermes_home={home_lc}" in command_lc
         )
 
@@ -628,7 +630,12 @@ def _command_line_belongs_to_profile(command: str, profile_home: Path) -> bool:
     # a non-matching explicit HERMES_HOME= on the argv. HERMES_HOME is usually
     # passed via the environment (not visible on the command line), so its mere
     # absence is not disqualifying — only a conflicting explicit value is.
-    if "--profile " in command_lc or " -p " in command_lc:
+    if (
+        "--profile " in command_lc
+        or "--profile=" in command_lc
+        or " -p " in command_lc
+        or " -p=" in command_lc
+    ):
         return False
     if "hermes_home=" in command_lc and f"hermes_home={home_lc}" not in command_lc:
         return False
@@ -1179,6 +1186,7 @@ def write_runtime_status(
     exit_reason: Any = _UNSET,
     restart_requested: Any = _UNSET,
     active_agents: Any = _UNSET,
+    platforms: Any = _UNSET,
     platform: Any = _UNSET,
     platform_state: Any = _UNSET,
     error_code: Any = _UNSET,
@@ -1195,6 +1203,10 @@ def write_runtime_status(
     previous_payload = copy.deepcopy(payload)
     current_record = _build_pid_record()
     payload.setdefault("platforms", {})
+    if platforms is not _UNSET:
+        payload["platforms"] = (
+            copy.deepcopy(platforms) if isinstance(platforms, dict) else {}
+        )
     if clear_profile_platforms:
         # Secondary-profile adapter health is stored in the process-level
         # status file as ``<profile>:<platform>``.  A fresh gateway process

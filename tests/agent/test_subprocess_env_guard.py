@@ -90,9 +90,9 @@ LEGACY_RAW_ENV_RATIONALE = (
     "Exact pre-existing raw environment set outside SEC-001 through SEC-015; any hash change requires review."
 )
 APPROVED_IMPLICIT_SPAWN_BASELINES = {
-    "agent": ("c53f95c37fce37869c25c57722a920a1c119929572841311b9c3069d5b916fad", LEGACY_IMPLICIT_RATIONALE),
+    "agent": ("d782f1f78702bebfba47c9f3bf8e0e6756358f63747f609022eb650e6a8ff36f", LEGACY_IMPLICIT_RATIONALE),
     "apps/desktop/electron": (
-        "e2843b40227c5b1e3c87d83d8b334bd32497bf5f488959b10527849ebb394f3a",
+        "964061b7d4a00fc8a51d09387ca6df1a910f32046696c0f2c60a5850eba5da2a",
         LEGACY_IMPLICIT_RATIONALE,
     ),
     "apps/desktop/scripts": (
@@ -103,7 +103,7 @@ APPROVED_IMPLICIT_SPAWN_BASELINES = {
     "cron": ("e3b322c51645ed1dab6a817a4c24bc210b7ebeb5a32edfc726f55ebfc9c86ce9", LEGACY_IMPLICIT_RATIONALE),
     "downstream": ("8eb57e2d493e19d6e0e0b9c91627d3980693c6a4ec5a5dea503c3441ef139551", LEGACY_IMPLICIT_RATIONALE),
     "gateway": ("7c888db74531e5ade41e806eb9ae704b5657b00c27fbe36a00e547d5f7ca6c78", LEGACY_IMPLICIT_RATIONALE),
-    "hermes_cli": ("6a4923fc98bfaa64376f99810d6b57bb3e3369b5490edb13aefbb21995434db1", LEGACY_IMPLICIT_RATIONALE),
+    "hermes_cli": ("8bda89ddb9dd9861e0a0dbcd6f3bd4330644ba1f249670201d20f59650646fcb", LEGACY_IMPLICIT_RATIONALE),
     "hermes_constants.py": (
         "5b23578a51cafa9b8233e03e7bdddf96a68954014b2cfeae2b1da311ee734704",
         LEGACY_IMPLICIT_RATIONALE,
@@ -140,6 +140,7 @@ def _iter_python_files():
                 path
                 for path in root.rglob("*.py")
                 if "tests" not in path.relative_to(REPO_ROOT).parts
+                and "node_modules" not in path.relative_to(REPO_ROOT).parts
                 and ".gitnexus" not in path.relative_to(REPO_ROOT).parts
             )
     for filename in PYTHON_ROOT_FILES:

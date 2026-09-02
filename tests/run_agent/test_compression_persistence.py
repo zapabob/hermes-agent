@@ -303,7 +303,7 @@ class TestFlushAfterCompression:
             messages = [
                 {
                     "role": "user" if i % 2 == 0 else "assistant",
-                    "content": f"message {i} " + "x" * 200,
+                    "content": f"message {i} " + "x" * 1_000,
                     "_db_persisted": True,
                 }
                 for i in range(40)

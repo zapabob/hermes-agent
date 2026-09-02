@@ -6946,7 +6946,7 @@ _PLATFORMS = [
 ]
 
 
-def _all_platforms() -> list[dict]:
+def _all_platforms(*, include_hidden: bool = False) -> list[dict]:
     """Return the full list of platforms for setup menus.
 
     Combines the built-in ``_PLATFORMS`` with plugin platforms registered via
@@ -6980,7 +6980,7 @@ def _all_platforms() -> list[dict]:
     platforms = [dict(p) for p in _PLATFORMS]
 
     # Drop platforms that can't function on this host. See docstring.
-    if sys.platform == "win32":
+    if sys.platform == "win32" and not include_hidden:
         platforms = [p for p in platforms if p.get("key") != "matrix"]
 
     by_key = {p["key"]: p for p in platforms}
@@ -6996,7 +6996,7 @@ def _all_platforms() -> list[dict]:
         # Drop platforms that can't function on this host. Matrix is hidden on
         # Windows (python-olm has no Windows wheel) — applies whether matrix is
         # a built-in or, post-#41112, a registry-discovered plugin.
-        if sys.platform == "win32" and entry.name == "matrix":
+        if sys.platform == "win32" and not include_hidden and entry.name == "matrix":
             continue
         platforms.append(
             {

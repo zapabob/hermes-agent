@@ -8927,6 +8927,7 @@ class AIAgent:
         durable_turn_lease_interrupt_message = None
         token = None
         acct_token = None
+        affinity_token = None
         task_started = False
         task_finished = False
         relay_outcome = "failed"

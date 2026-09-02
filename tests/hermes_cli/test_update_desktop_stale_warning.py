@@ -26,6 +26,14 @@ class _Result:
         self.stdout = stdout
 
 
+@pytest.fixture(autouse=True)
+def _healthy_sqlite_runtime(monkeypatch):
+    """Desktop-summary tests isolate Desktop status from runtime remediation."""
+    monkeypatch.setattr(
+        update_cmd, "_post_update_sqlite_runtime_status", lambda: (True, None)
+    )
+
+
 @pytest.fixture()
 def desktop_env(tmp_path, monkeypatch):
     """A desktop dir that looks installed and a faked CLI main module."""
