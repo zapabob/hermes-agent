@@ -168,15 +168,29 @@ def relay(source, destination):
 def relay_tunnel(client, upstream):
     """Relay an opaque CONNECT tunnel without terminating upstream TLS."""
     peers = {client: upstream, upstream: client}
-    while True:
-        readable, _, _ = select.select(tuple(peers), (), (), UPSTREAM_TIMEOUT_SECONDS)
+    readable_sockets = set(peers)
+    while readable_sockets:
+        readable, _, _ = select.select(
+            tuple(readable_sockets), (), (), UPSTREAM_TIMEOUT_SECONDS
+        )
         if not readable:
             return
         for source in readable:
-            chunk = source.recv(MAX_REQUEST_BYTES)
+            try:
+                chunk = source.recv(MAX_REQUEST_BYTES)
+            except ConnectionResetError:
+                chunk = b''
             if not chunk:
-                return
-            peers[source].sendall(chunk)
+                readable_sockets.discard(source)
+                try:
+                    peers[source].shutdown(socket.SHUT_WR)
+                except OSError:
+                    pass
+                continue
+            try:
+                peers[source].sendall(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                readable_sockets.discard(source)
 
 
 def open_https_upstream(context, host, port):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import socket
 import ssl
 import sys
 import threading
@@ -122,6 +123,36 @@ def test_non_fixture_connect_uses_opaque_tunnel(tmp_path: Path) -> None:
         b"HTTP/1.1 200 Connection Established\r\n\r\n"
     )
     relay_tunnel.assert_called_once_with(client, upstream)
+
+
+def test_opaque_tunnel_preserves_response_after_client_half_close(
+    tmp_path: Path,
+) -> None:
+    proxy = _load_proxy(tmp_path)
+    client, proxy_client = socket.socketpair()
+    proxy_upstream, server = socket.socketpair()
+    client.settimeout(2)
+    server.settimeout(2)
+
+    relay = threading.Thread(
+        target=proxy.relay_tunnel, args=(proxy_client, proxy_upstream)
+    )
+    relay.start()
+    try:
+        client.sendall(b"request")
+        client.shutdown(socket.SHUT_WR)
+        assert server.recv(7) == b"request"
+
+        server.sendall(b"response")
+        server.shutdown(socket.SHUT_WR)
+        assert client.recv(8) == b"response"
+        relay.join(timeout=2)
+        assert not relay.is_alive()
+    finally:
+        client.close()
+        proxy_client.close()
+        proxy_upstream.close()
+        server.close()
 
 
 def test_https_handshake_eof_exhausts_bounded_backoff(tmp_path: Path) -> None:
