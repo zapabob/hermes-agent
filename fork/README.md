@@ -7,11 +7,20 @@ It does **not** replace upstream code. Official Hermes stays in the repo root
 lives at the edges: plugins, merge overlays, Windows ops scripts, and local
 operator automation.
 
+## Identity — Generic Agent Harness
+
+This repository is a **generic AI agent harness** and **Windows universal AI workstation base**.
+`NousResearch/hermes-agent` is upstream only — fetched until its development stalls or stops.
+There is **zero runtime dependency** on Nous infrastructure. See
+[`harness/GENERIC_HARNESS.md`](harness/GENERIC_HARNESS.md) and
+[`_docs/2026-09-03_generic-harness-independence.md`](../_docs/2026-09-03_generic-harness-independence.md).
+
 ## Directory map
 
 | Path | Purpose |
 |------|---------|
 | [`harness/`](harness/README.md) | Upstream merge policy, overlays, and sync entry points (`scripts/merge_tools/`) |
+| [`harness/GENERIC_HARNESS.md`](harness/GENERIC_HARNESS.md) | Generic harness definition & growth roadmap |
 | [`extensions/`](extensions/README.md) | Fork-owned plugins, core tool deltas, and optional skills |
 | [`operations/`](operations/README.md) | Windows stack scripts, cron helpers, Tailscale/ngrok, daily automation |
 | [`local-workspace/`](local-workspace/README.md) | Root scratch policy + `notes/` for tracked operator drafts |

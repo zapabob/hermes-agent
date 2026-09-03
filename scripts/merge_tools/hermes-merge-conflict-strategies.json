@@ -344,6 +344,11 @@
       "note": "Fork keyless Parallel MCP default (search.parallel.ai/mcp without API key)."
     },
     {
+      "pattern": "plugins/hermes-antigravity/**",
+      "action": "preserve_custom",
+      "note": "Fork-only Antigravity CLI (agy) isolated harness bridge — agy --print via plugin subprocess, zero core coupling."
+    },
+    {
       "pattern": "tools/web_tools.py",
       "action": "official_with_overlay",
       "note": "Take upstream web plugin dispatch; overlay keyless Parallel backend selection.",

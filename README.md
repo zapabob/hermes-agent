@@ -61,6 +61,7 @@ An unofficial, Windows-native downstream of Hermes Agent for Windows 11 AI works
 
 This single-maintainer fork is independent of, and not endorsed by, Nous Research.
 The original Hermes Agent is developed by Nous Research and licensed under MIT.
+Developed as a **generic agent harness** and **Windows universal AI workstation base** — upstream is `NousResearch/hermes-agent` until its development stalls.
 
 [![Windows Workstation Tier-1 CI](https://github.com/zapabob/hermes-agent-windows/actions/workflows/fork-cicd.yml/badge.svg)](https://github.com/zapabob/hermes-agent-windows/actions/workflows/fork-cicd.yml)
 

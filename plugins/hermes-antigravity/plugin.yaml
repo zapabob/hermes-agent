@@ -1,0 +1,11 @@
+name: hermes-antigravity
+version: 0.1.0
+description: "Antigravity CLI (agy) isolated harness bridge — agy --print via plugin-isolated subprocess, no core coupling."
+author: "zapabob"
+kind: standalone
+platforms: [windows, linux, macos]
+config:
+  agy_bin:
+    type: string
+    default: ""
+    description: "Optional explicit path to agy binary (AGY_BIN env also honored)."
