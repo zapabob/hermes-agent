@@ -21,9 +21,6 @@ jobs:
   deploy:
     if: github.repository == 'zapabob/hermes-agent-windows' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    environment:
-      name: ${{ 'github-pages' }}
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
