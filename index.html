@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title data-i18n="meta.title">Hermes Agent Windows Workstation | Re-centring the OS around Autonomous Intelligence</title>
+  <meta name="description" data-i18n="meta.description" content="Moving beyond adding AI to an IDE. A high-performance Windows AI workstation engineered for persistent, 24/7 autonomous agents.">
+  
+  <!-- Open Graph / Social Meta -->
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Hermes Agent Windows Workstation">
+  <meta property="og:description" content="Moving beyond adding AI to an IDE. An OS environment reconstructed around autonomous AI agents on Windows.">
+  <meta property="og:image" content="assets/screenshot-home.png">
+  <meta name="twitter:card" content="summary_large_image">
+  
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🖥️</text></svg>">
+</head>
+<body>
+
+  <!-- Top Navigation -->
+  <nav class="navbar">
+    <div class="container">
+      <div class="brand-wrapper">
+        <div class="brand-icon">H</div>
+        <div>
+          <span class="brand-title" data-i18n="nav.brand">Hermes Workstation</span>
+          <span class="brand-badge" data-i18n="nav.edition">Windows Edition</span>
+        </div>
+      </div>
+
+      <ul class="nav-links">
+        <li><a href="#paradigm" class="nav-link" data-i18n="nav.paradigm">Paradigm Shift</a></li>
+        <li><a href="#showcase" class="nav-link" data-i18n="showcase.sectionTitle">Showcase</a></li>
+        <li><a href="#pillars" class="nav-link" data-i18n="nav.features">Architecture</a></li>
+        <li><a href="#security" class="nav-link" data-i18n="nav.security">Security Centre</a></li>
+        <li><a href="#sync" class="nav-link" data-i18n="sync.sectionTitle">Upstream Sync</a></li>
+        <li><a href="#metrics" class="nav-link" data-i18n="nav.metrics">Metrics</a></li>
+      </ul>
+
+      <div class="nav-actions">
+        <!-- Language Switcher -->
+        <div class="lang-selector-wrap" aria-label="Language Selector">
+          <button class="lang-btn active" data-lang="en-GB" title="English (King's English)">
+            <span>🇬🇧</span> EN
+          </button>
+          <button class="lang-btn" data-lang="ja" title="日本語">
+            <span>🇯🇵</span> JP
+          </button>
+          <button class="lang-btn" data-lang="zh-CN" title="简体中文">
+            <span>🇨🇳</span> CN
+          </button>
+        </div>
+
+        <a href="https://github.com/zapabob/hermes-agent-windows" target="_blank" rel="noopener noreferrer" class="btn-github">
+          <svg height="18" width="18" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+          </svg>
+          <span data-i18n="nav.github">GitHub</span>
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero Section -->
+  <header class="hero-section">
+    <div class="container">
+      <div class="hero-pill">
+        <span class="pulse-dot"></span>
+        <span data-i18n="hero.badge">Open Source AI Workstation for Windows</span>
+      </div>
+
+      <h1 class="hero-title">
+        <span data-i18n="hero.headline">Ceasing to merely attach AI to an IDE.</span><br>
+        <span class="gradient-text" data-i18n="hero.subheadline">Re-centring the entire Windows OS around autonomous agents.</span>
+      </h1>
+
+      <p class="hero-lead" data-i18n="hero.lead">
+        Traditional IDEs place the human at the centre of a manual loop. For an autonomous agent that operates 24/7, the entire OS environment—Git operations, web research, local LLM inference, cognitive memory, and ClamAV/YARA security—must be consolidated into a unified workstation.
+      </p>
+
+      <div class="hero-cta-group">
+        <a href="https://github.com/zapabob/hermes-agent-windows" target="_blank" rel="noopener noreferrer" class="btn-primary">
+          <svg height="20" width="20" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+          </svg>
+          <span data-i18n="hero.primaryCta">Explore on GitHub</span>
+        </a>
+        <a href="https://zenn.dev/zapabob/articles/hermes-agent-windows-workstation" target="_blank" rel="noopener noreferrer" class="btn-secondary">
+          <svg height="18" width="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
+          </svg>
+          <span data-i18n="hero.secondaryCta">Read Zenn Article</span>
+        </a>
+      </div>
+
+      <!-- Clone Command Quick Bar -->
+      <div class="clone-command-bar">
+        <span class="clone-prompt">&gt;</span>
+        <span class="clone-text" id="clone-text">git clone https://github.com/zapabob/hermes-agent-windows.git</span>
+        <button class="btn-copy" id="btn-copy-clone">
+          <svg height="15" width="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+          </svg>
+          <span data-i18n="nav.quickstart">Copy</span>
+        </button>
+      </div>
+
+      <!-- Highlights Grid -->
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-val" data-i18n="hero.statClones">9,808+</div>
+          <div class="stat-label" data-i18n="hero.statClonesLabel">Git Clones (14 Days)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val" data-i18n="hero.statCloners">237+</div>
+          <div class="stat-label" data-i18n="hero.statClonersLabel">Unique Developers</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val" data-i18n="hero.statComposed">723+</div>
+          <div class="stat-label" data-i18n="hero.statComposedLabel">Upstream Recomposed Commits</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val" data-i18n="hero.statUptime">24/7</div>
+          <div class="stat-label" data-i18n="hero.statUptimeLabel">Go Watchdog Resilience</div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Paradigm Shift Section -->
+  <section id="paradigm">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-tag" data-i18n="paradigm.sectionTitle">Paradigm Shift</span>
+        <h2 class="section-title" data-i18n="paradigm.sectionSubtitle">From 'IDE with an AI Plugin' to an 'Agent-Centric Workstation'</h2>
+      </div>
+
+      <div class="paradigm-quote-box" data-i18n="paradigm.quote">
+        "Why must an autonomous AI be confined to a miniature chat drawer inside an editor designed for humans? If the agent is doing the heavy lifting, the entire workstation must serve its operational lifecycle."
+      </div>
+
+      <div class="paradigm-comparison">
+        <div class="loop-card traditional">
+          <span class="loop-badge" data-i18n="paradigm.traditionalTitle">The Conventional Developer Loop (Human-Centric)</span>
+          <h3 class="loop-title">Code → Build → Test → Debug</h3>
+          <p class="loop-desc" data-i18n="paradigm.traditionalDesc">Optimised solely for human fingers typing into a text buffer.</p>
+          <div class="loop-diagram-code">
+[Human Editor] ──────&gt; [Terminal / Compiler]
+       │                         │
+       ▼                         ▼
+[Error Message] ◄───── [Manual Window Switch]
+          </div>
+        </div>
+
+        <div class="loop-card agent">
+          <span class="loop-badge" data-i18n="paradigm.agentTitle">The Autonomous Agent Operational Loop (Workstation-Centric)</span>
+          <h3 class="loop-title">Observe → Research → Reason → Code → Test → Review → Operate → Automate → Recover</h3>
+          <p class="loop-desc" data-i18n="paradigm.agentDesc">Coding is merely one step. The agent must research, reason, audit, automate, and recover autonomously.</p>
+          <div class="loop-diagram-code">
+              ┌───────────────────────────┐
+              │ Hermes Agent Windows Core │
+              └─────────────┬─────────────┘
+      ┌──────────────┬──────┴───────┬──────────────┐
+      ▼              ▼              ▼              ▼
+[Git Ops Tree]  [Chromium]  [Cognitive Memory] [Security Centre]
+      │              │              │              │
+      └──────────────┴──────┬───────┴──────────────┘
+                            ▼
+              [Go Watchdog 24/7 Resilience]
+          </div>
+        </div>
+      </div>
+
+      <div class="loop-note" data-i18n="paradigm.loopCompareNote">
+        Fragmenting this across disconnected terminal windows and browser tabs destroys context. Hermes Workstation unifies the complete surface on a singular canvas.
+      </div>
+    </div>
+  </section>
+
+  <!-- Real Showcase Section -->
+  <section id="showcase">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-tag" data-i18n="showcase.sectionTitle">Workstation in Action</span>
+        <h2 class="section-title" data-i18n="showcase.sectionSubtitle">Real Screenshots from the Operational Windows Desktop</h2>
+      </div>
+
+      <div class="showcase-tabs">
+        <button class="tab-btn active" data-tab="home">
+          <svg height="18" width="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+            <line x1="3" y1="9" x2="21" y2="9"></line>
+            <line x1="9" y1="21" x2="9" y2="9"></line>
+          </svg>
+          <span data-i18n="showcase.tabHome">Agent Desktop & Integrated Browser</span>
+        </button>
+        <button class="tab-btn" data-tab="security">
+          <svg height="18" width="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+          </svg>
+          <span data-i18n="showcase.tabSecurity">Security Centre & Quarantine Manager</span>
+        </button>
+      </div>
+
+      <div class="showcase-display">
+        <div class="showcase-window-header">
+          <div class="window-dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <span class="window-title">hermes-agent-windows // electron.desktop-main.exe</span>
+          <span class="zoom-hint">
+            <svg height="14" width="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+              <line x1="11" y1="8" x2="11" y2="14"></line>
+              <line x1="8" y1="11" x2="14" y2="11"></line>
+            </svg>
+            <span data-i18n="showcase.clickToZoom">Click image to inspect high-resolution details</span>
+          </span>
+        </div>
+
+        <!-- Tab 1: Home View -->
+        <div class="showcase-content-pane active" id="pane-home">
+          <div class="img-zoom-wrapper" title="Click to zoom">
+            <img src="assets/screenshot-home.png" alt="Hermes Agent Windows Desktop Showcase View" id="img-showcase-home">
+          </div>
+          <p class="showcase-caption" data-i18n="showcase.homeCaption">
+            The Hermes Agent Home Desktop: Unified chat core flanked by live social/web research panes, session switcher, and real-time Git repository workspace.
+          </p>
+        </div>
+
+        <!-- Tab 2: Security View -->
+        <div class="showcase-content-pane" id="pane-security">
+          <div class="img-zoom-wrapper" title="Click to zoom">
+            <img src="assets/screenshot-security.png" alt="Security Center Showcase View" id="img-showcase-security">
+          </div>
+          <p class="showcase-caption" data-i18n="showcase.securityCaption">
+            The Built-in Security Centre: Active file integrity monitoring, ClamAV/YARA scan engine, and automated quarantine to safeguard autonomous execution.
+          </p>
+        </div>
+      </div>
+
+      <!-- Panes Structure Legend -->
+      <div class="panes-legend">
+        <h4 class="legend-title">
+          <svg height="18" width="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="7" height="7"></rect>
+            <rect x="14" y="3" width="7" height="7"></rect>
+            <rect x="14" y="14" width="7" height="7"></rect>
+            <rect x="3" y="14" width="7" height="7"></rect>
+          </svg>
+          <span data-i18n="showcase.legendTitle">Integrated Panes</span>
+        </h4>
+        <div class="legend-grid">
+          <div class="legend-item">
+            <span class="legend-item-dot"></span>
+            <span data-i18n="showcase.legendLeft">Left: Session hierarchy, Telegram, Discord, Cron scheduler, & Kanban</span>
+          </div>
+          <div class="legend-item">
+            <span class="legend-item-dot"></span>
+            <span data-i18n="showcase.legendCentre">Centre: High-contrast Agent reasoning canvas & Local LLM orchestrator</span>
+          </div>
+          <div class="legend-item">
+            <span class="legend-item-dot"></span>
+            <span data-i18n="showcase.legendRightTop">Top-Right: Built-in Chromium browser pane for live web verification</span>
+          </div>
+          <div class="legend-item">
+            <span class="legend-item-dot"></span>
+            <span data-i18n="showcase.legendRightBottom">Bottom-Right: Interactive Git operations tree & human review diffs</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5 Pillars Architecture Section -->
+  <section id="pillars">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-tag" data-i18n="pillars.sectionTitle">Five Structural Breakthroughs</span>
+        <h2 class="section-title" data-i18n="pillars.sectionSubtitle">What Radically Sets Hermes Workstation Apart from Conventional Setups</h2>
+      </div>
+
+      <div class="pillars-grid">
+        <!-- Pillar 1 -->
+        <div class="pillar-card">
+          <div class="pillar-icon-box">
+            <svg height="24" width="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="18" cy="18" r="3"></circle>
+              <circle cx="6" cy="6" r="3"></circle>
+              <path d="M6 21V9a9 9 0 0 0 9 9"></path>
+            </svg>
+          </div>
+          <h3 class="pillar-title" data-i18n="pillars.p1Title">1. Co-equal Git Operations for Human & Agent</h3>
+          <p class="pillar-desc" data-i18n="pillars.p1Desc">
+            A first-class Git repository tree is permanently docked on the right. Both human and agent execute commits, review branch diffs, operate worktrees, and supervise workspace health concurrently—eliminating window-hopping fatigue.
+          </p>
+        </div>
+
+        <!-- Pillar 2 -->
+        <div class="pillar-card">
+          <div class="pillar-icon-box">
+            <svg height="24" width="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="2" y1="12" x2="22" y2="12"></line>
+              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+            </svg>
+          </div>
+          <h3 class="pillar-title" data-i18n="pillars.p2Title">2. The Web Browser as a Native Workspace Pane</h3>
+          <p class="pillar-desc" data-i18n="pillars.p2Desc">
+            Rather than relying on disjointed external applications, Chromium is deeply integrated into the desktop canvas. The agent's autonomous navigation synchronises seamlessly with human visual oversight.
+          </p>
+        </div>
+
+        <!-- Pillar 3 -->
+        <div class="pillar-card">
+          <div class="pillar-icon-box">
+            <svg height="24" width="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+            </svg>
+          </div>
+          <h3 class="pillar-title" data-i18n="pillars.p3Title">3. An Integrated Security Centre (ClamAV & YARA)</h3>
+          <p class="pillar-desc" data-i18n="pillars.p3Desc">
+            Giving an agent unrestricted local disk writing, shell invocation, and external MCP tools demands real-time threat telemetry. A built-in security console scans files, inspects malware hashes, and isolates suspicious artefacts.
+          </p>
+        </div>
+
+        <!-- Pillar 4 -->
+        <div class="pillar-card">
+          <div class="pillar-icon-box">
+            <svg height="24" width="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
+            </svg>
+          </div>
+          <h3 class="pillar-title" data-i18n="pillars.p4Title">4. External Go Watchdog: Surviving 24/7</h3>
+          <p class="pillar-desc" data-i18n="pillars.p4Desc">
+            Prevents memory leaks and silent process deaths. Implements a strict 'Single Authority for Restarts' via an external Go daemon, avoiding cascading supervisor failures and guaranteeing genuine 365-day uptime.
+          </p>
+        </div>
+
+        <!-- Pillar 5 -->
+        <div class="pillar-card">
+          <div class="pillar-icon-box">
+            <svg height="24" width="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+          </div>
+          <h3 class="pillar-title" data-i18n="pillars.p5Title">5. Ebbinghaus Cognitive Memory with Semantic Graphs</h3>
+          <p class="pillar-desc" data-i18n="pillars.p5Desc">
+            Dumping endless raw chat logs into model prompts degrades reasoning. Hermes implements true cognitive long-term memory: hybrid vector search, semantic knowledge graphs, and mathematical forgetting-curve decay.
+          </p>
+        </div>
+
+        <!-- Pillar 6 -->
+        <div class="pillar-card">
+          <div class="pillar-icon-box">
+            <svg height="24" width="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+            </svg>
+          </div>
+          <h3 class="pillar-title" data-i18n="pillars.p6Title">6. Embodiment: Voice, Unity & VRChat</h3>
+          <p class="pillar-desc" data-i18n="pillars.p6Desc">
+            Not merely a terminal output: integrates VOICEVOX local TTS, OSC control protocols, and virtual avatar pipelines for AITuber operations and physical presence in 3D worlds.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Security Center Enterprise Defences -->
+  <section id="security">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-tag" data-i18n="security.sectionTitle">Enterprise-Grade Defence for Agent Agency</span>
+        <h2 class="section-title" data-i18n="security.sectionSubtitle">Why Does an AI Workstation Require an Anti-Virus Console?</h2>
+      </div>
+
+      <div class="security-box">
+        <p class="security-intro" data-i18n="security.intro">
+          Demoware can afford to disregard security. But when you entrust an agent with raw shell privileges, file-system write authority, and autonomous network tools for 24 hours a day, observability and quarantine become non-negotiable.
+        </p>
+
+        <table class="security-table">
+          <thead>
+            <tr>
+              <th data-i18n="security.layerHeader">Protection Layer</th>
+              <th data-i18n="security.engineHeader">Technology & Engines</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td data-i18n="security.row1Layer">Malware & Exploit Detection</td>
+              <td><span class="engine-tag" data-i18n="security.row1Engine">ClamAV 1.5.4 / YARA Rules / Windows Defender</span></td>
+            </tr>
+            <tr>
+              <td data-i18n="security.row2Layer">File Integrity & Reputation</td>
+              <td><span class="engine-tag" data-i18n="security.row2Engine">Cryptographic Hash Reputation & Heuristics</span></td>
+            </tr>
+            <tr>
+              <td data-i18n="security.row3Layer">Isolation & Defusal</td>
+              <td><span class="engine-tag" data-i18n="security.row3Engine">Automated Quarantine Manager & Process Bounds</span></td>
+            </tr>
+            <tr>
+              <td data-i18n="security.row4Layer">Audit & Forensic Trail</td>
+              <td><span class="engine-tag" data-i18n="security.row4Engine">Continuous Tool Execution & Terminal History Logs</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Upstream Sync Strategy -->
+  <section id="sync">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-tag" data-i18n="sync.sectionTitle">Under the Bonnet: Upstream Synchronization</span>
+        <h2 class="section-title" data-i18n="sync.sectionSubtitle">How We Keep Pace with Nous Research's Rapid Evolution</h2>
+      </div>
+
+      <p class="hero-lead" style="text-align: center;" data-i18n="sync.lead">
+        A blind 'git merge upstream/main' destroys downstream Windows optimisations in seconds. We operate a disciplined Semantic Integration Pipeline that categorises every upstream commit:
+      </p>
+
+      <div class="sync-grid">
+        <div class="sync-card adopt">
+          <span class="sync-category-tag">ADOPT</span>
+          <h4 class="sync-title" data-i18n="sync.adoptTitle">ADOPT</h4>
+          <p class="sync-desc" data-i18n="sync.adoptDesc">Directly accepted upstream enhancements.</p>
+        </div>
+        <div class="sync-card compose">
+          <span class="sync-category-tag">COMPOSE (70%+)</span>
+          <h4 class="sync-title" data-i18n="sync.composeTitle">COMPOSE (70%+)</h4>
+          <p class="sync-desc" data-i18n="sync.composeDesc">Re-engineered to align with Windows permissions, ConPTY bridge, and multi-threaded architecture.</p>
+        </div>
+        <div class="sync-card defer">
+          <span class="sync-category-tag">DEFER</span>
+          <h4 class="sync-title" data-i18n="sync.deferTitle">DEFER</h4>
+          <p class="sync-desc" data-i18n="sync.deferDesc">Held back where upstream patterns break cross-platform safety.</p>
+        </div>
+        <div class="sync-card keep">
+          <span class="sync-category-tag">KEEP_DOWNSTREAM</span>
+          <h4 class="sync-title" data-i18n="sync.keepTitle">KEEP_DOWNSTREAM</h4>
+          <p class="sync-desc" data-i18n="sync.keepDesc">Preserved custom Windows supervisor and security layers.</p>
+        </div>
+      </div>
+
+      <div class="sync-summary-banner" data-i18n="sync.statsLead">
+        In our latest synchronisation campaign across 1,049 upstream commits and 414 collision files, over 723 commits were harmoniously recomposed.
+      </div>
+    </div>
+  </section>
+
+  <!-- Metrics & 9800 Clones Story -->
+  <section id="metrics">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-tag" data-i18n="metrics.sectionTitle">The Mystery of 9,800+ Clones & 6 Stars</span>
+        <h2 class="section-title" data-i18n="hero.statClonesLabel">Live Telemetry & Developer Adoption</h2>
+      </div>
+
+      <div class="metrics-story-box">
+        <div class="story-left">
+          <p class="story-text" data-i18n="metrics.lead">
+            Prior to any formal release binary or public installer, repository telemetry revealed an extraordinary phenomenon:
+          </p>
+          <br>
+          <p class="story-text" data-i18n="metrics.story">
+            Developers globally were quietly downloading and running the raw code, yet we had failed to communicate our vision to the broader world. This workstation is our manifesto for the future of developer operating environments.
+          </p>
+        </div>
+
+        <div class="metrics-highlight-col">
+          <div class="highlight-stat-item">
+            <span class="highlight-stat-label" data-i18n="metrics.stat1Label">Total Git Clones in 14 Days</span>
+            <span class="highlight-stat-num" data-i18n="metrics.stat1Val">9,808</span>
+          </div>
+          <div class="highlight-stat-item">
+            <span class="highlight-stat-label" data-i18n="metrics.stat2Label">Unique Developers Cloning the Code</span>
+            <span class="highlight-stat-num" data-i18n="metrics.stat2Val">237</span>
+          </div>
+          <div class="highlight-stat-item">
+            <span class="highlight-stat-label" data-i18n="metrics.stat3Label">GitHub Stars at the Time of Writing</span>
+            <span class="highlight-stat-num" style="color: var(--accent-amber);" data-i18n="metrics.stat3Val">6</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Call to Action -->
+  <section class="cta-section">
+    <div class="container">
+      <div class="cta-box">
+        <h2 class="cta-title" data-i18n="cta.title">Join the Experiment in Agent-Centred Computing</h2>
+        <p class="cta-desc" data-i18n="cta.desc">
+          Licensed under the permissive MIT Open Source License. Explore the code, file an issue, submit a pull request, or bestow a star on GitHub.
+        </p>
+
+        <div class="cta-buttons">
+          <a href="https://github.com/zapabob/hermes-agent-windows" target="_blank" rel="noopener noreferrer" class="btn-primary">
+            <svg height="20" width="20" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25z"/>
+            </svg>
+            <span data-i18n="cta.starBtn">Star on GitHub</span>
+          </a>
+          <a href="https://zenn.dev/zapabob/articles/hermes-agent-windows-workstation" target="_blank" rel="noopener noreferrer" class="btn-secondary">
+            <span data-i18n="cta.readZennBtn">Read Full Zenn Article</span>
+          </a>
+          <a href="https://github.com/zapabob/hermes-agent-windows/blob/main/AGENTS.md" target="_blank" rel="noopener noreferrer" class="btn-secondary">
+            <span data-i18n="cta.docsBtn">Architecture Guide (AGENTS.md)</span>
+          </a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div data-i18n="footer.copyright">
+        © 2026 zapabob / Hermes Agent Windows Downstream. Released under the MIT Licence.
+      </div>
+      <div data-i18n="footer.builtWith">
+        Engineered with Vanilla Web Standards for zero-dependency GitHub Pages performance.
+      </div>
+      <div>
+        <a href="#" data-i18n="footer.top">Back to top ↑</a>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Lightbox Modal -->
+  <div class="lightbox-modal" id="lightbox-modal">
+    <div class="lightbox-content">
+      <button class="lightbox-close" aria-label="Close modal">&times;</button>
+      <img src="" alt="Fullscreen screenshot" class="lightbox-img" id="lightbox-img">
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div class="toast-notice" id="toast-notice">
+    <svg height="18" width="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <polyline points="20 6 9 17 4 12"></polyline>
+    </svg>
+    <span data-i18n="hero.copied">Command Copied to Clipboard!</span>
+  </div>
+
+  <!-- Script Loaders -->
+  <script src="translations.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
