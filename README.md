@@ -1,5 +1,6 @@
 # Hermes Agent Windows Workstation Edition
-
+A Windows-native AI workstation, built on Hermes Agent.
+Agent runtime · IDE workspace · Local AI · Memory · Browser · Security · Voice · VR/Unity
 <p align="center"><strong>Language · 言語 · 语言</strong></p>
 
 <details open>
