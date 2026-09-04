@@ -21,7 +21,7 @@ from pathlib import Path
 HERMES_CMD = r"C:\Users\downl\Documents\New project\hermes-agent\.venv\Scripts\hermes.exe"
 CERT_BUNDLE = r"C:\Users\downl\certs\combined-ca-bundle.pem"
 PROVIDER = "nvidia"
-MODEL = "z-ai/glm-5.2"
+MODEL = "nvidia/nemotron-3-super-120b-a12b"
 A2A_RESULTS_DIR = Path.home() / ".hermes" / "a2a_results"
 
 FAILURE_MARKERS = (
@@ -38,6 +38,10 @@ FAILURE_MARKERS = (
     "HTTP 401",
     "HTTP 403",
     "HTTP 404",
+    "HTTP 429",
+    "Service temporarily overloaded",
+    "API call failed after 3 retries",
+    "Primary auth failed",
 )
 
 PROFILES = {
@@ -213,11 +217,12 @@ async def run_with_retry(profile: str, task: str, timeout: int, retries: int) ->
     return result
 
 
-def persist_results(results: list, now: datetime) -> Path:
+def persist_results(results: list, now: datetime, smoke: bool) -> Path:
     A2A_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     ts = now.strftime("%Y%m%d_%H%M%S")
     out_path = A2A_RESULTS_DIR / f"{ts}.json"
     ok_count = sum(1 for item in results if item["ok"])
+    run_mode = "heartbeat" if smoke else "real-work"
     payload = {
         "timestamp": now.isoformat(),
         "profile": "default",
@@ -226,7 +231,7 @@ def persist_results(results: list, now: datetime) -> Path:
         "result": {
             "ok": ok_count == len(results) and bool(results),
             "task": f"master-heartbeat-{ts}",
-            "output": f"{ok_count}/{len(results)} real-work succeeded",
+            "output": f"{ok_count}/{len(results)} {run_mode} succeeded",
         },
         "sub_results": results,
     }
@@ -235,13 +240,14 @@ def persist_results(results: list, now: datetime) -> Path:
     return out_path
 
 
-def print_report(results: list, now: datetime, out_path: Path) -> None:
+def print_report(results: list, now: datetime, out_path: Path, smoke: bool) -> None:
     ok_count = sum(1 for item in results if item["ok"])
     fail_count = len(results) - ok_count
     print(f"=== Master Heartbeat {now.strftime('%Y-%m-%d %H:%M')} JST ===")
     print(f"provider={PROVIDER} model={MODEL}")
     print(f"hermes={HERMES_CMD}")
-    print(f"実作業: {ok_count}/{len(results)} succeeded, {fail_count} failed")
+    label = "生存確認" if smoke else "実作業"
+    print(f"{label}: {ok_count}/{len(results)} succeeded, {fail_count} failed")
     print()
     for item in results:
         status = "OK" if item["ok"] else "FAIL"
@@ -295,13 +301,21 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="comma-separated profile subset (default: all)",
     )
-    parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--retries", type=int, default=0)
-    parser.add_argument("--concurrency", type=int, default=2)
+    parser.add_argument("--concurrency", type=int, default=1)
     parser.add_argument(
         "--smoke",
+        dest="smoke",
         action="store_true",
+        default=True,
         help="send a one-line PONG probe instead of role tasks",
+    )
+    parser.add_argument(
+        "--real-work",
+        dest="smoke",
+        action="store_false",
+        help="run one role task per profile instead of the default heartbeat probe",
     )
     return parser.parse_args()
 
@@ -320,9 +334,9 @@ async def main() -> int:
         smoke=args.smoke,
         concurrency=args.concurrency,
     )
-    out_path = persist_results(results, now)
-    print_report(results, now, out_path)
-    return 0
+    out_path = persist_results(results, now, smoke=args.smoke)
+    print_report(results, now, out_path, smoke=args.smoke)
+    return 0 if results and all(item["ok"] for item in results) else 1
 
 
 if __name__ == "__main__":
