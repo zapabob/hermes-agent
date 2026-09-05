@@ -12391,6 +12391,13 @@ async function startHermes() {
       return setup.connection
     }
 
+    if (setup.kind === 'prewarmed-local') {
+      // A prewarmed local backend already exposes a renderer-facing
+      // connection. Do not attempt to treat it as a spawn descriptor.
+      setWslBridgeProfileState(primaryProfile, true)
+      return setup.connection
+    }
+
     // Local WSL backend — paths are bridgeable.
     setWslBridgeProfileState(primaryProfile, true)
 
