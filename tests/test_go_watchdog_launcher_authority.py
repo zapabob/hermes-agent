@@ -9,6 +9,8 @@ import shutil
 import subprocess
 import sys
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LAUNCHER = REPO_ROOT / "scripts" / "windows" / "Start-HermesGoWatchdog.ps1"
@@ -16,6 +18,28 @@ LAUNCHER = REPO_ROOT / "scripts" / "windows" / "Start-HermesGoWatchdog.ps1"
 
 def _launcher() -> str:
     return LAUNCHER.read_text(encoding="utf-8")
+
+
+def _is_elevated() -> bool:
+    powershell = shutil.which("powershell.exe")
+    assert powershell is not None, "Windows PowerShell is required"
+    probe = subprocess.run(
+        [
+            powershell,
+            "-NoProfile",
+            "-Command",
+            "$i=[Security.Principal.WindowsIdentity]::GetCurrent();"
+            "$p=New-Object Security.Principal.WindowsPrincipal($i);"
+            "$p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=10,
+        check=False,
+    )
+    return probe.returncode == 0 and probe.stdout.strip().lower() == "true"
 
 
 def test_launcher_source_is_windows_powershell_compatible_ascii() -> None:
@@ -70,6 +94,34 @@ def test_launcher_never_stops_watchdogs_by_image_name() -> None:
     assert "Stop-Process -Id $state.Pid" in launcher
 
 
+def test_launcher_requires_an_elevated_operator_before_any_side_effect() -> None:
+    launcher = _launcher()
+
+    assert "function Test-IsElevatedOperator" in launcher
+    assert "if (-not (Test-IsElevatedOperator))" in launcher
+    assert "Operator-only Go watchdog launcher requires an elevated PowerShell session." in launcher
+    authority_check = launcher.index("if (-not (Test-IsElevatedOperator))")
+    stop_dispatch = launcher.index("if ($Stop) {")
+    assert authority_check < stop_dispatch
+
+
+def test_non_elevated_agent_context_cannot_stop_or_remove_lock(tmp_path: Path) -> None:
+    if _is_elevated():
+        pytest.skip("negative authorization path requires a non-elevated runner")
+    data_dir = tmp_path / "HermesWatchdog"
+    data_dir.mkdir()
+    lock_path = data_dir / "watchdog.lock"
+    lock_path.write_text('{"pid":2147483647}', encoding="utf-8")
+
+    result = _run_stop(tmp_path)
+
+    assert result.returncode == 1
+    assert lock_path.exists()
+    assert "Operator-only Go watchdog launcher requires an elevated PowerShell session." in (
+        result.stdout + result.stderr
+    )
+
+
 def test_explicit_stop_runs_before_binary_availability_checks() -> None:
     launcher = _launcher()
 
@@ -101,6 +153,8 @@ def test_foreign_live_lock_is_preserved() -> None:
 
 
 def test_explicit_stop_preserves_a_foreign_live_process_and_lock(tmp_path: Path) -> None:
+    if not _is_elevated():
+        pytest.skip("operator identity test requires an elevated Windows runner")
     data_dir = tmp_path / "HermesWatchdog"
     data_dir.mkdir()
     lock_path = data_dir / "watchdog.lock"
@@ -125,6 +179,8 @@ def test_explicit_stop_preserves_a_foreign_live_process_and_lock(tmp_path: Path)
 
 
 def test_explicit_stop_removes_only_a_stale_lock(tmp_path: Path) -> None:
+    if not _is_elevated():
+        pytest.skip("operator identity test requires an elevated Windows runner")
     data_dir = tmp_path / "HermesWatchdog"
     data_dir.mkdir()
     lock_path = data_dir / "watchdog.lock"

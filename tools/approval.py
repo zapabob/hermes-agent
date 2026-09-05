@@ -549,6 +549,38 @@ _HARDLINE_SYSTEM_DIRS = (
 _RM_FLAG_PREFIX = _CMDPOS + r'rm\s+(-[^\s]*\s+)*'
 
 HARDLINE_PATTERNS = [
+    # The Go watchdog is an independent recovery authority. Hermes may inspect
+    # its read-only health/state surfaces, but commands that invoke its
+    # operator launcher must never pass through the agent terminal, even under
+    # yolo or approvals.mode=off. The first pattern
+    # covers powershell -File; the second covers direct PowerShell script
+    # invocation, including the call operator and quoted paths with spaces.
+    (
+        _CMDPOS
+        + r'(?:powershell|pwsh)(?:\.exe)?\b[^\n]*?start-hermesgowatchdog\.ps1\b',
+        "operator-only Go watchdog launcher",
+    ),
+    (
+        _CMDPOS
+        + r'(?:&\s*)?(?:["\'][^"\']*start-hermesgowatchdog\.ps1["\']|'
+        + r'[^\s;&|]*start-hermesgowatchdog\.ps1)(?:\s|$)',
+        "operator-only Go watchdog launcher",
+    ),
+    (
+        _CMDPOS
+        + r'taskkill(?:\.exe)?\b[^\n]*?/im\s+["\']?hermes-watchdog(?:\.exe)?\b',
+        "operator-only Go watchdog process termination",
+    ),
+    (
+        _CMDPOS
+        + r'(?:stop-process|kill|pkill)\b[^\n]*?hermes-watchdog(?:\.exe)?\b',
+        "operator-only Go watchdog process termination",
+    ),
+    (
+        _CMDPOS
+        + r'(?:remove-item|rm|del|erase)\b[^\n]*?watchdog\.lock\b',
+        "operator-only Go watchdog lock removal",
+    ),
     # rm recursive targeting the root filesystem or protected roots.
     # `${HOME}` brace form and quoted paths (`rm -rf "/"`, `rm -rf "$HOME"`)
     # are handled via _hardline_rm_path so the floor cannot be bypassed with
