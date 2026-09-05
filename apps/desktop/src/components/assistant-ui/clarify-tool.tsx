@@ -1083,6 +1083,7 @@ function ClarifyToolBatchPending({ onAnswered, request }: { onAnswered: () => vo
 
     try {
       const gateway = request.scope ? gatewayForScope(request.scope) : null
+
       if (gateway) {
         // Owner-routed like the locks above — a skip sent to the wrong backend
         // is a silent no-op that leaves the agent waiting out its timeout.

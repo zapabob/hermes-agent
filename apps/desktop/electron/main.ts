@@ -1401,6 +1401,7 @@ const profileDeletionGate = new ProfileDeletionGate()
 // exist while a non-primary profile is actively being chatted through.
 const POOL_MAX_BACKENDS = Math.max(1, Number(process.env.HERMES_DESKTOP_POOL_MAX) || 3)
 const POOL_IDLE_MS = Math.max(60_000, Number(process.env.HERMES_DESKTOP_POOL_IDLE_MS) || 10 * 60_000)
+
 // A backend touched within this window has a live renderer socket (the keepalive
 // pings every 60s for every open profile). LRU eviction must spare these — a
 // concurrent multi-profile session keeps several backends "fresh" at once, and
@@ -1426,6 +1427,7 @@ const POOL_KEEPALIVE_FRESH_MS = Math.max(
   120_000,
   Number(process.env.HERMES_DESKTOP_POOL_KEEPALIVE_FRESH_MS) || 4 * 60_000
 )
+
 let poolIdleReaper = null
 let backendOrphanReapPromise = null
 // Auto-reload budget for renderer crashes, shared by EVERY window (primary,
@@ -9842,7 +9844,6 @@ function clearManagedSshRecovery(connectionId, correlationId) {
   }
 }
 
-
 const sshBootstrapCoordinator = createBootstrapCoordinator()
 
 let sshQuitTeardownDone = false
@@ -10068,7 +10069,14 @@ async function effectiveSshConfigFingerprint(sshConfig) {
   return crypto.createHash('sha256').update(output).digest('hex')
 }
 
-async function bootstrapSshConnection(profile, sshConfig, reuseToken, source, resolvedEffectiveFingerprint?, metadata: any = {}) {
+async function bootstrapSshConnection(
+  profile,
+  sshConfig,
+  reuseToken,
+  source,
+  resolvedEffectiveFingerprint?,
+  metadata: any = {}
+) {
   const scope = sshScopeKey(profile)
   const effectiveConfigFingerprint = resolvedEffectiveFingerprint || (await effectiveSshConfigFingerprint(sshConfig))
   const resolvedConfig = { ...sshConfig, effectiveConfigFingerprint }
@@ -12395,6 +12403,7 @@ async function startHermes() {
       // A prewarmed local backend already exposes a renderer-facing
       // connection. Do not attempt to treat it as a spawn descriptor.
       setWslBridgeProfileState(primaryProfile, true)
+
       return setup.connection
     }
 

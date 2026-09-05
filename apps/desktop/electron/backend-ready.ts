@@ -54,7 +54,11 @@ function resolvePortAnnounceTimeoutMs(env = process.env) {
  * on every terminal path — resolve, reject, or timeout — so repeated
  * backend spawns don't leak listener slots on the child.
  */
-function waitForDashboardPort(child, timeoutMs = resolvePortAnnounceTimeoutMs(), describeOutputTail = () => ''): Promise<{ port: number; token?: string }> {
+function waitForDashboardPort(
+  child,
+  timeoutMs = resolvePortAnnounceTimeoutMs(),
+  describeOutputTail = () => ''
+): Promise<{ port: number; token?: string }> {
   return new Promise((resolve, reject) => {
     let buf = ''
     let done = false

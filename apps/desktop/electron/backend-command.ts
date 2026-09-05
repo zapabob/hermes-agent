@@ -33,6 +33,7 @@ export function serveBackendArgs(profile?: string, opts?: { wsOnly?: boolean }) 
   const wsOnly = opts?.wsOnly === true // default false — see docstring
 
   const tail = wsOnly ? ['--ws-only'] : []
+
   return [...head, 'serve', '--host', '127.0.0.1', '--port', '0', ...tail]
 }
 
@@ -51,6 +52,7 @@ export function dashboardFallbackArgs(args) {
 
   // `--ws-only` is serve-only; strip it when falling back to `dashboard`.
   const rest = args.slice(i + 1).filter(a => a !== '--ws-only')
+
   return [...args.slice(0, i), 'dashboard', '--no-open', ...rest]
 }
 

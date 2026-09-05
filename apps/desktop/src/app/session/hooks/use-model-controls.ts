@@ -76,10 +76,7 @@ export function useModelControls({
         return { ...prev, provider, model, providers }
       }
 
-      queryClient.setQueryData<ModelOptionsResponse>(
-        modelOptionsQueryKey(profile, sessionId, ownerConnectionId),
-        patch
-      )
+      queryClient.setQueryData<ModelOptionsResponse>(modelOptionsQueryKey(profile, sessionId, ownerConnectionId), patch)
 
       if (includeGlobal) {
         queryClient.setQueryData<ModelOptionsResponse>(modelOptionsQueryKey(profile, null, ownerConnectionId), patch)
@@ -289,9 +286,13 @@ export function useModelControls({
           // resubmitting the same request. The epoch check prevents a stale
           // warning from clobbering a later picker choice.
           let notificationId = ''
+
           const confirm = () => {
             dismissNotification(notificationId)
-            if (!selectionIsCurrent()) return
+
+            if (!selectionIsCurrent()) {
+              return
+            }
 
             void requestGateway<ModelSwitchGatewayResponse>('config.set', {
               ...params,
@@ -301,10 +302,13 @@ export function useModelControls({
                 if (confirmed?.confirm_required) {
                   throw new Error(confirmed.confirm_message || confirmed.warning || copy.modelSwitchFailed)
                 }
+
                 commitAcknowledged(confirmed)
               })
               .catch(error => {
-                if (selectionIsCurrent()) notifyError(error, copy.modelSwitchFailed)
+                if (selectionIsCurrent()) {
+                  notifyError(error, copy.modelSwitchFailed)
+                }
               })
           }
 
@@ -314,6 +318,7 @@ export function useModelControls({
             message: result.confirm_message || result.warning || copy.modelSwitchFailed,
             title: t.common.confirm
           })
+
           return false
         }
 
