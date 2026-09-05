@@ -768,8 +768,7 @@ class TestNonStringContent:
 
         assert summary.startswith(f"{SUMMARY_PREFIX}\n{HISTORICAL_TASK_HEADING}\n")
         assert "do something" in summary
-        assert "plain summary text" in summary
-        assert _LEAN_USER_MESSAGES_HEADING in summary
+        assert summary.endswith("plain summary text")
 
 
 

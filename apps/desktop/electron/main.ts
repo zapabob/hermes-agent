@@ -47,7 +47,12 @@ import {
 import { dashboardFallbackArgs, sourceDeclaresServe } from './backend-command'
 import { createBackendConnectionState } from './backend-connection-state'
 import { BackendDialClaims } from './backend-dial-claim'
-import { buildDesktopBackendEnv, hermesManagedNodePathEntries, normalizeHermesHomeRoot } from './backend-env'
+import {
+  buildDesktopBackendEnv,
+  buildDesktopUpdaterEnv,
+  hermesManagedNodePathEntries,
+  normalizeHermesHomeRoot
+} from './backend-env'
 import {
   isReauthRequiredError,
   makeNousCloudBackendDownError,
@@ -3879,12 +3884,13 @@ async function applyUpdates(opts: { stopSafeBlockers?: boolean } = {}) {
 
       child = spawnUpdaterProcess(wrapped.command, wrapped.args, {
         cwd: HERMES_HOME,
-        env: {
-          ...process.env,
-          HERMES_HOME,
-          HERMES_UPDATE_STARTED_AT: String(updateStartedAt),
-          PATH: pathWithHermesManagedNode(venvBin)
-        },
+        env: buildDesktopUpdaterEnv({
+          extra: {
+            HERMES_HOME,
+            HERMES_UPDATE_STARTED_AT: String(updateStartedAt),
+            PATH: pathWithHermesManagedNode(venvBin)
+          }
+        }),
         detached: true,
         stdio: 'ignore'
       })
@@ -3906,11 +3912,12 @@ async function applyUpdates(opts: { stopSafeBlockers?: boolean } = {}) {
     } else {
       child = spawnUpdaterProcess(updater, updaterArgs, {
         cwd: HERMES_HOME,
-        env: {
-          ...process.env,
-          HERMES_HOME,
-          PATH: pathWithHermesManagedNode(venvBin)
-        },
+        env: buildDesktopUpdaterEnv({
+          extra: {
+            HERMES_HOME,
+            PATH: pathWithHermesManagedNode(venvBin)
+          }
+        }),
         detached: true,
         stdio: 'ignore'
       })
@@ -4041,11 +4048,12 @@ async function handOffWindowsBootstrapRecovery(reason) {
 
   const child = spawnUpdaterProcess(updater, updaterArgs, {
     cwd: HERMES_HOME,
-    env: {
-      ...process.env,
-      HERMES_HOME,
-      PATH: pathWithHermesManagedNode(venvBin)
-    },
+    env: buildDesktopUpdaterEnv({
+      extra: {
+        HERMES_HOME,
+        PATH: pathWithHermesManagedNode(venvBin)
+      }
+    }),
     detached: true,
     stdio: 'ignore'
   })
@@ -4270,12 +4278,13 @@ async function applyUpdatesPosixHandoff(opts: any) {
 
   const child = spawnUpdaterProcess(handoff.command, args, {
     cwd: HERMES_HOME,
-    env: {
-      ...process.env,
-      HERMES_HOME,
-      HERMES_UPDATE_STARTED_AT: String(updateStartedAt),
-      PATH: pathWithHermesManagedNode(path.join(updateRoot, 'venv', 'bin'))
-    },
+    env: buildDesktopUpdaterEnv({
+      extra: {
+        HERMES_HOME,
+        HERMES_UPDATE_STARTED_AT: String(updateStartedAt),
+        PATH: pathWithHermesManagedNode(path.join(updateRoot, 'venv', 'bin'))
+      }
+    }),
     detached: true,
     stdio: 'ignore'
   })
