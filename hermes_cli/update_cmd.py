@@ -1840,11 +1840,9 @@ def _update_via_zip(args, *, had_desktop_app_before_update: bool = False) -> boo
     pre_update_version = _read_project_version()
 
     # The ZIP fallback exists for Windows git-file-I/O breakage. It pulls a
-    # static archive from GitHub, which is fine for the default "main"
-    # channel but would silently ignore --branch and update from main even
-    # if the user asked for something else — exactly the silent-divergence
-    # bug --branch was added to prevent. Refuse to proceed in that case
-    # rather than lie.
+    # static archive from the repository that owns this checkout. Managed
+    # downstream distributions must never silently download the official
+    # upstream archive, because that would discard their overlay.
     branch = _m()._resolve_update_branch(args)
     if branch != "main":
         print(
@@ -1859,9 +1857,16 @@ def _update_via_zip(args, *, had_desktop_app_before_update: bool = False) -> boo
         )
         _m().sys.exit(1)
     _abort_zip_update_if_dirty_tree()
-    zip_url = (
-        f"https://github.com/NousResearch/hermes-agent/archive/refs/heads/{branch}.zip"
-    )
+    git_cmd = ["git"]
+    if sys.platform == "win32":
+        git_cmd = ["git", "-c", "windows.appendAtomically=false"]
+    origin_url = _m()._get_origin_url(git_cmd, _m().PROJECT_ROOT)
+    if _is_managed_distribution_origin(origin_url):
+        zip_url = _distribution_archive_url(branch)
+    else:
+        zip_url = (
+            f"https://github.com/NousResearch/hermes-agent/archive/refs/heads/{branch}.zip"
+        )
 
     print("→ Downloading latest version...")
     tmp_dir = tempfile.mkdtemp(prefix="hermes-update-")
@@ -2608,6 +2613,37 @@ OFFICIAL_REPO_URL = "https://github.com/NousResearch/hermes-agent.git"
 
 SKIP_UPSTREAM_PROMPT_FILE = ".skip_upstream_prompt"
 
+
+def _normalize_repository_url(url: Optional[str]) -> str:
+    """Normalize git repository URLs for distribution identity checks."""
+    normalized = (url or "").strip().rstrip("/").lower()
+    if normalized.endswith(".git"):
+        normalized = normalized[:-4]
+    return normalized
+
+
+def _managed_distribution_repository_urls() -> set[str]:
+    """Return repository URLs owned by the installed downstream distribution."""
+    try:
+        from downstream.distribution import load_distribution
+
+        repository = load_distribution().repository
+        return {
+            _normalize_repository_url(repository.web),
+            _normalize_repository_url(repository.https),
+            _normalize_repository_url(repository.ssh),
+        }
+    except (OSError, ValueError, TypeError, ImportError):
+        # A malformed or absent distribution manifest must not make update
+        # checks unusable; it simply falls back to normal fork handling.
+        return set()
+
+
+def _is_managed_distribution_origin(origin_url: Optional[str]) -> bool:
+    """Whether *origin_url* is the repository declared by this distribution."""
+    normalized = _normalize_repository_url(origin_url)
+    return bool(normalized and normalized in _managed_distribution_repository_urls())
+
 def _get_origin_url(git_cmd: list[str], cwd: Path) -> Optional[str]:
     """Get the URL of the origin remote, or None if not set."""
     try:
@@ -2627,17 +2663,21 @@ def _is_fork(origin_url: Optional[str]) -> bool:
     """Check if the origin remote points to a fork (not the official repo)."""
     if not origin_url:
         return False
-    # Normalize URL for comparison (strip trailing .git if present)
-    normalized = origin_url.rstrip("/")
-    if normalized.endswith(".git"):
-        normalized = normalized[:-4]
-    for official in OFFICIAL_REPO_URLS:
-        official_normalized = official.rstrip("/")
-        if official_normalized.endswith(".git"):
-            official_normalized = official_normalized[:-4]
-        if normalized == official_normalized:
-            return False
+    normalized = _normalize_repository_url(origin_url)
+    official_urls = {_normalize_repository_url(url) for url in OFFICIAL_REPO_URLS}
+    if normalized in official_urls or normalized in _managed_distribution_repository_urls():
+        return False
     return True
+
+
+def _distribution_archive_url(branch: str) -> str:
+    """Resolve the update archive from downstream distribution metadata."""
+    try:
+        from downstream.distribution import update_archive_url
+
+        return update_archive_url(branch)
+    except (OSError, ValueError, TypeError, ImportError) as exc:
+        raise RuntimeError("downstream distribution metadata unavailable") from exc
 
 def _has_upstream_remote(git_cmd: list[str], cwd: Path) -> bool:
     """Check if an 'upstream' remote already exists."""
@@ -4014,7 +4054,10 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
     )
     depth_args = ["--depth", "1"] if is_shallow else []
 
-    if branch == "main":
+    origin_url = _m()._get_origin_url(git_cmd, _m().PROJECT_ROOT)
+    managed_distribution = _is_managed_distribution_origin(origin_url)
+
+    if branch == "main" and not managed_distribution:
         # Probe locally (~6 ms) whether an 'upstream' remote exists at all
         # before spending a network fetch on it. Non-fork installs have no
         # 'upstream' remote, and the old flow burned a failed network attempt
