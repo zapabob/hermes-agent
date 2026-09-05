@@ -370,7 +370,7 @@ import {
 } from './update-count'
 import { waitForUpdateClearance } from './update-gate'
 import { readLiveUpdateMarker, updateHandoffConflict, writeUpdateMarker } from './update-marker'
-import { isOfficialSshRemote, OFFICIAL_REPO_HTTPS_URL } from './update-remote'
+import { isSshRemote, resolvePassiveUpdateRemote } from './update-remote'
 import {
   collectRelaunchArgs,
   observeUpdaterHandoff,
@@ -2882,8 +2882,19 @@ async function resolveHealedBranch(updateRoot, branch) {
   }
 
   const originUrl = await getOriginUrl(updateRoot)
-  const remote = isOfficialSshRemote(originUrl) ? OFFICIAL_REPO_HTTPS_URL : 'origin'
-  const probe = await runGit(['ls-remote', '--exit-code', '--heads', remote, branch], { cwd: updateRoot })
+  const remote = resolvePassiveUpdateRemote(originUrl)
+
+  if (!remote) {
+    rememberLog(`[updates] passive branch probe skipped for SSH origin ${originUrl || '<unknown>'}`)
+
+    return branch
+  }
+
+  // An empty credential.helper resets inherited helpers. Together with
+  // GIT_TERMINAL_PROMPT=0 in runGit(), this keeps the probe non-interactive.
+  const probe = await runGit(['-c', 'credential.helper=', 'ls-remote', '--exit-code', '--heads', remote, branch], {
+    cwd: updateRoot
+  })
 
   if (probe.code !== 2) {
     return branch
@@ -2916,13 +2927,25 @@ async function checkUpdates() {
 
   branch = await resolveHealedBranch(updateRoot, branch)
   const originUrl = await getOriginUrl(updateRoot)
+  const passiveRemote = resolvePassiveUpdateRemote(originUrl)
 
-  if (isOfficialSshRemote(originUrl)) {
+  if (isSshRemote(originUrl)) {
+    if (!passiveRemote) {
+      return {
+        supported: true,
+        branch,
+        error: 'passive-ssh-check-disabled',
+        message: 'Automatic update checks do not authenticate to SSH remotes. Run an explicit update when ready.',
+        hermesRoot: updateRoot,
+        fetchedAt: Date.now()
+      }
+    }
+
     const git = args => runGit(args, { cwd: updateRoot }).then(r => r.stdout.trim())
 
     const [currentSha, target, dirtyStr, currentBranch] = await Promise.all([
       git(['rev-parse', 'HEAD']),
-      runGit(['ls-remote', OFFICIAL_REPO_HTTPS_URL, `refs/heads/${branch}`], { cwd: updateRoot }),
+      runGit(['-c', 'credential.helper=', 'ls-remote', passiveRemote, `refs/heads/${branch}`], { cwd: updateRoot }),
       git(['status', '--porcelain']),
       git(['rev-parse', '--abbrev-ref', 'HEAD'])
     ])
@@ -2940,7 +2963,7 @@ async function checkUpdates() {
       }
     }
 
-    // Passive SSH-official checks only know tip SHAs (ls-remote) — never
+    // Passive SSH checks only know tip SHAs (ls-remote) — never
     // fabricate a "1 commit behind". Recover the exact count via the GitHub
     // compare API when possible; otherwise behind stays null ("update
     // available, count unknown") and updateAvailable carries the signal.
@@ -2951,7 +2974,7 @@ async function checkUpdates() {
 
     const sshBehind = tipsEqual
       ? 0
-      : await fetchCompareBehindCount({ currentSha, originUrl: OFFICIAL_REPO_HTTPS_URL, targetSha })
+      : await fetchCompareBehindCount({ currentSha, originUrl: passiveRemote, targetSha })
 
     const upToDate = tipsEqual || sshBehind === 0
 
