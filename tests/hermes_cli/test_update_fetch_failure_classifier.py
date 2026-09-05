@@ -7,7 +7,24 @@ classifier must call out rate limiting / outages explicitly, and the raw
 stderr line must always be printed alongside the diagnosis.
 """
 
+import re
+
 from hermes_cli import update_cmd
+
+
+def _network_git_calls_without_prompt_guard(source: str) -> list[str]:
+    """Return updater network-Git calls missing the no-prompt guard."""
+    calls = []
+    for match in re.finditer(r"subprocess\.run\(", source):
+        depth, offset = 1, match.end()
+        while depth:
+            depth += {"(": 1, ")": -1}.get(source[offset], 0)
+            offset += 1
+        call = source[match.start() : offset]
+        if re.search(r'git_cmd \+ \["(fetch|pull|push)"', call):
+            calls.append(call)
+
+    return [call for call in calls if "_no_prompt_git_kwargs()" not in call]
 
 
 RATE_LIMIT_STDERR = (
@@ -51,6 +68,14 @@ class TestClassifyFetchFailure:
         )
         assert msg.startswith("✗ Network error")
 
+    def test_username_prompt_401_reports_github_not_user_credentials(self):
+        msg = update_cmd._classify_fetch_failure(
+            "fatal: could not read Username for 'https://github.com':"
+            " terminal prompts disabled"
+        )
+        assert "GitHub" in msg and "outage" in msg
+        assert "check your git credentials" not in msg
+
     def test_auth_failure(self):
         msg = update_cmd._classify_fetch_failure(
             "fatal: Authentication failed for 'https://github.com/x.git/'"
@@ -75,3 +100,35 @@ class TestPrintFetchFailure:
         update_cmd._print_fetch_failure("")
         out = capsys.readouterr().out.strip().splitlines()
         assert out == ["✗ Failed to fetch updates from origin."]
+
+
+def test_update_network_git_calls_never_prompt_for_credentials():
+    """Every updater fetch, pull, and push must fail closed on prompts."""
+    import inspect
+    import os
+    import subprocess
+
+    kwargs = update_cmd._no_prompt_git_kwargs()
+    assert kwargs["stdin"] is subprocess.DEVNULL
+    assert kwargs["env"]["GIT_TERMINAL_PROMPT"] == "0"
+    assert kwargs["env"]["GCM_INTERACTIVE"] == "Never"
+    assert "GIT_CONFIG_COUNT" not in kwargs["env"] or kwargs["env"]["GIT_CONFIG_COUNT"] == os.environ.get(
+        "GIT_CONFIG_COUNT"
+    )
+
+    source = inspect.getsource(update_cmd)
+    missing = _network_git_calls_without_prompt_guard(source)
+    assert not missing, missing
+
+
+def test_network_git_guard_tripwire_detects_removed_kwargs():
+    """Sabotage proof: removing the guard from a fetch must fail the audit."""
+    unguarded_source = """
+result = subprocess.run(
+    git_cmd + ["fetch", "origin", branch],
+    capture_output=True,
+)
+"""
+
+    missing = _network_git_calls_without_prompt_guard(unguarded_source)
+    assert len(missing) == 1

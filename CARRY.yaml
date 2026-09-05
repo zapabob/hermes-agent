@@ -31,3 +31,11 @@ carry:
     invariants: [no credential logging, official client construction remains authoritative]
     tests: [tests/agent/test_codex_cloudflare_headers.py]
     integration_policy: COMPOSE
+  - id: updater-noninteractive-network-git
+    upstream_paths: [hermes_cli/update_cmd.py]
+    current_upstream_owner: hermes_cli.update_cmd._git_run(network=True)
+    downstream_reason: reuse the centralized subprocess prompt guard until the official updater decomposition is adopted
+    invariants: [network Git never inherits stdin, configured credential helpers remain available]
+    tests: [tests/hermes_cli/test_update_fetch_failure_classifier.py, tests/hermes_cli/test_noninteractive_git.py]
+    integration_policy: COMPOSE
+    removal_condition: adopt the official updater decomposition with the shared noninteractive Git helper intact
