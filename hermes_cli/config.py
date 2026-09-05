@@ -265,6 +265,13 @@ def _reject_denylisted_env_var(key: str) -> None:
             "~/.hermes/.env directly."
         )
 
+
+def validate_env_var_name_for_write(key: str) -> None:
+    """Validate an environment variable name before persistence."""
+    if not _ENV_VAR_NAME_RE.match(key):
+        raise ValueError(f"Invalid environment variable name: {key!r}")
+    _reject_denylisted_env_var(key)
+
 _LAST_EXPANDED_CONFIG_BY_PATH: Dict[str, Any] = {}
 # (path, mtime_ns, size) -> cached expanded config dict.
 # load_config() returns a deepcopy of the cached value when the file
@@ -4422,9 +4429,7 @@ def save_env_value(key: str, value: str):
             file=sys.stderr,
         )
         return
-    if not _ENV_VAR_NAME_RE.match(key):
-        raise ValueError(f"Invalid environment variable name: {key!r}")
-    _reject_denylisted_env_var(key)
+    validate_env_var_name_for_write(key)
     value = value if isinstance(value, str) else str(value)
     # Preserve one-key-per-line structure and reject embedded C terminators.
     value = value.replace("\x00", "").replace("\n", "").replace("\r", "")
@@ -4539,8 +4544,7 @@ def remove_env_value(key: str) -> bool:
             file=sys.stderr,
         )
         return False
-    if not _ENV_VAR_NAME_RE.match(key):
-        raise ValueError(f"Invalid environment variable name: {key!r}")
+    validate_env_var_name_for_write(key)
     env_path = get_env_path()
     if not env_path.exists():
         os.environ.pop(key, None)
