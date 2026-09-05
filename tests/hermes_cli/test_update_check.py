@@ -70,6 +70,14 @@ def test_upstream_main_sha_disables_git_prompts(monkeypatch):
     monkeypatch.setattr(banner.subprocess, "run", run)
 
     assert banner._upstream_main_sha() is None
+    args = run.call_args.args[0]
+    assert args == [
+        "git",
+        "ls-remote",
+        "https://github.com/NousResearch/hermes-agent.git",
+        "refs/heads/main",
+    ]
+    assert all("ssh" not in arg.lower() for arg in args)
     kwargs = run.call_args.kwargs
     assert kwargs["stdin"] is banner.subprocess.DEVNULL
     assert kwargs["env"]["GIT_TERMINAL_PROMPT"] == "0"
@@ -269,6 +277,5 @@ def test_check_for_updates_does_not_cache_none(tmp_path, monkeypatch):
 
     # The cache file must NOT have been written with a None result
     assert not cache_file.exists(), "None result must not be cached"
-
 
 

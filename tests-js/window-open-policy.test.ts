@@ -19,6 +19,8 @@ describe('window-open policy', () => {
     const urls = [
       'https://attacker.test/steal?token=SECRET#frag',
       'http://attacker.test:8080/x',
+      'https://x.com/hermes/status/123',
+      'https://www.youtube.com/watch?v=explicit-click-only',
       'file:///etc/passwd',
       'javascript:alert(1)',
       'custom-proto://payload',
@@ -32,6 +34,8 @@ describe('window-open policy', () => {
     assert.equal(seen.length, urls.length)
     assert.equal(seen[0], 'https://attacker.test')
     assert.equal(seen[1], 'http://attacker.test:8080')
+    assert.equal(seen[2], 'https://x.com')
+    assert.equal(seen[3], 'https://www.youtube.com')
     assert.equal(describeDeniedUrl(''), '<unparseable>')
     assert.ok(seen.every(origin => !origin.includes('SECRET') && !origin.includes('/steal')))
   })
