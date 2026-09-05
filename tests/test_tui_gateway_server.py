@@ -5015,6 +5015,7 @@ def test_ws_orphan_reap_releases_resume_lock_before_slow_teardown(monkeypatch):
     monkeypatch.setattr(server, "_WS_ORPHAN_REAP_GRACE_S", 0.01)
     monkeypatch.setattr(server.threading, "Timer", _Timer)
     monkeypatch.setattr(server, "_teardown_popped_session", _slow_teardown)
+    monkeypatch.setattr(server, "_session_has_active_delegations", lambda *_args: False)
     server._sessions["slow-orphan"] = _session(
         transport=server._detached_ws_transport,
         running=False,
@@ -13347,19 +13348,10 @@ def test_respond_unpacks_sid_tuple_correctly():
 def test_config_set_model_defers_while_running(monkeypatch):
     """/model via config.set queues the pick during an in-flight turn instead
     of rejecting or racing the worker thread."""
-    seen = {"called": False, "kwargs": {}}
+    def _fail_if_live_switch_runs(*_args, **_kwargs):
+        raise AssertionError("busy config.set must not mutate the live agent")
 
-    def _fake_apply(sid, session, raw, **kwargs):
-        seen["called"] = True
-        seen["kwargs"] = kwargs
-        return {
-            "value": "anthropic/claude-sonnet-4.6",
-            "provider": "anthropic",
-            "warning": "",
-            "confirm_required": False,
-        }
-
-    monkeypatch.setattr(server, "_apply_model_switch", _fake_apply)
+    monkeypatch.setattr(server, "_apply_model_switch", _fail_if_live_switch_runs)
 
     server._sessions["sid"] = _session(running=True)
     server._sessions["sid"]["model_options_catalogue"] = frozenset(
@@ -13382,9 +13374,6 @@ def test_config_set_model_defers_while_running(monkeypatch):
         result = resp["result"]
         assert result["deferred"] is True
         assert result["value"] == "anthropic/claude-sonnet-4.6"
-        assert seen["called"]
-        assert seen["kwargs"]["prepare_only"] is True
-        assert seen["kwargs"]["catalogue_validated"] is True
         pending = server._sessions["sid"].get("pending_model_switch")
         assert pending and pending["raw"] == (
             "anthropic/claude-sonnet-4.6 --provider anthropic"
@@ -13396,18 +13385,15 @@ def test_config_set_model_defers_while_running(monkeypatch):
 
 def test_config_set_model_surfaces_guard_before_deferring_running_switch(monkeypatch):
     """A guarded picker choice must be confirmed before it is painted pending."""
-    calls = []
+    def _fail_if_live_switch_runs(*_args, **_kwargs):
+        raise AssertionError("busy config.set must not mutate the live agent")
 
-    def _fake_apply(_sid, _session, _raw, **kwargs):
-        calls.append(kwargs)
-        return {
-            "value": "openai/gpt-5.5-pro",
-            "warning": "Confirm this expensive model.",
-            "confirm_required": True,
-            "confirm_message": "Confirm this expensive model.",
-        }
-
-    monkeypatch.setattr(server, "_apply_model_switch", _fake_apply)
+    monkeypatch.setattr(server, "_apply_model_switch", _fail_if_live_switch_runs)
+    monkeypatch.setattr(
+        server,
+        "_pending_switch_selection_warning",
+        lambda _model, _provider: "Confirm this expensive model.",
+    )
     server._sessions["sid"] = _session(running=True)
     try:
         resp = server.handle_request(
@@ -13426,7 +13412,6 @@ def test_config_set_model_surfaces_guard_before_deferring_running_switch(monkeyp
         assert resp["result"]["deferred"] is False
         assert resp["result"]["confirm_message"] == "Confirm this expensive model."
         assert "pending_model_switch" not in server._sessions["sid"]
-        assert calls[0]["prepare_only"] is True
     finally:
         server._sessions.pop("sid", None)
 
