@@ -36,10 +36,14 @@ def _agy_candidates() -> list[str | None]:
     ]
 
 
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
 def _is_executable_candidate(candidate: str) -> bool:
     if not os.path.isfile(candidate):
         return False
-    if os.name == "nt":
+    if _is_windows():
         return Path(candidate).suffix.lower() in {".exe", ".com"}
     return os.access(candidate, os.X_OK)
 

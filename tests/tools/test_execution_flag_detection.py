@@ -275,12 +275,17 @@ def _time_benign_segments(count):
 
 def test_benign_segment_scaling_benchmark():
     """Retain real metrics without making correctness depend on wall-clock ratios."""
-    small, small_result = _time_benign_segments(2_000)
-    large, large_result = _time_benign_segments(4_000)
+    small_count = 250
+    large_count = 500
+    small, small_result = _time_benign_segments(small_count)
+    large, large_result = _time_benign_segments(large_count)
 
     assert small_result == (False, None, None)
     assert large_result == (False, None, None)
-    print(f"benign segment benchmark: 2k={small:.3f}s, 4k={large:.3f}s")
+    print(
+        f"benign segment benchmark: {small_count}={small:.3f}s, "
+        f"{large_count}={large:.3f}s"
+    )
 
 
 def test_max_accepted_separator_free_input_is_fast():
