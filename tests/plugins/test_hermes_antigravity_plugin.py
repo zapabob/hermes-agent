@@ -124,7 +124,7 @@ def test_windows_candidate_rejects_shell_wrappers(
     exe = tmp_path / "agy.exe"
     cmd.write_text("@echo off\n", encoding="utf-8")
     exe.write_bytes(b"MZ")
-    monkeypatch.setattr(core.os, "name", "nt")
+    monkeypatch.setattr(core, "_is_windows", lambda: True)
 
     assert core._is_executable_candidate(str(cmd)) is False
     assert core._is_executable_candidate(str(exe)) is True
