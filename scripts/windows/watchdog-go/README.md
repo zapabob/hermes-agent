@@ -30,6 +30,9 @@ $env:HERMES_WATCHDOG_TS_AUTHKEY = "<ts-authkey>"   # 任意: tsnet 有効化
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows\Start-HermesGoWatchdog.ps1
 ```
 
+launcher は管理者として実行した PowerShell だけを受け付けます。これにより、通常権限の
+Hermes Agent と watchdog プロセスの間に Windows のプロセス権限境界を設けます。
+
 ### フラグ（Start スクリプト経由）
 
 | フラグ | 既定 | 説明 |
@@ -107,4 +110,5 @@ watchdog は有効な fence が存在する間、Desktop、backend、embedding �
 
 `restart-hermes-stack.ps1 -StartGoWatchdog` で**明示指定時のみ**起動（既定 OFF）。  
 既存 `dist/hermes-watchdog.exe` があれば rebuild しない。欠落時のみ `BuildIfMissing`（SkipTest・180s タイムアウト）。失敗時はスタック全体を止めず watchdog 起動をスキップ。  
-Hermes Agent からの変更操作は到達不可です。状態と PID、直近結果だけを読み取れます。
+Hermes Agent から launcher の直接実行と変更操作は到達不可です。状態と PID、直近結果
+だけを読み取れます。

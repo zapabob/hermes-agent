@@ -21,6 +21,24 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+function Test-IsElevatedOperator {
+    try {
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+        return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch {
+        return $false
+    }
+}
+
+# The launcher is intentionally operator-only. Starting it elevated also gives
+# the independent watchdog an OS boundary from a normal Hermes Agent process.
+# Maintenance automation uses a separate fenced lifecycle path.
+if (-not (Test-IsElevatedOperator)) {
+    throw "Operator-only Go watchdog launcher requires an elevated PowerShell session."
+}
+
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRootCandidate = if ($HermesRoot) { $HermesRoot } else { Join-Path $ScriptDir "..\.." }
 $RepoRoot = (Resolve-Path -LiteralPath $RepoRootCandidate -ErrorAction Stop).Path
