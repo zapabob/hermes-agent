@@ -23,6 +23,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows\Build-Hermes
 
 ## 起動
 
+通常のワークステーション起動では、管理者が登録した
+`HermesGoWatchdogBootAutoStart` Scheduled Task がブート時に
+`Start-HermesGoWatchdog.ps1` を非表示 PowerShell で実行します。手動操作では、
+管理者 PowerShell から同じ launcher を実行します。どちらも最終的に
+Windows GUI subsystem の `hermes-watchdog.exe` を画面なしで起動し、別の
+Watchdog 起動機構は設けません。
+
 ```powershell
 # 環境変数（例）
 $env:HERMES_WATCHDOG_TS_AUTHKEY = "<ts-authkey>"   # 任意: tsnet 有効化
@@ -75,6 +82,7 @@ HTTP は読み取り専用です。pause、resume、cycle、stop、restart、for
 3. Desktop 生存 + backend 不在 → **Electron 再起動の前に** managed serve を起動/復旧
 4. 連続失敗が `-FailThreshold` 以上 → Desktop 強制再起動
 5. 予約 ops ポート (9120/8787/9920/…) は backend 判定・reap 対象外（従来どおり）
+6. A2A Hub (`:9123`) と A2A Round-Robin (`:9124`) は別系統のバックグラウンドサービスであり、watchdog の直接監視・reap 対象外
 
 ### Desktop ショートカット
 

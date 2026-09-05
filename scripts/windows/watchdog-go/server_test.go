@@ -70,8 +70,10 @@ func TestIsDesktopBackendCommandLine(t *testing.T) {
 }
 
 func TestIsReservedOpsPort(t *testing.T) {
-	if !isReservedOpsPort(9120) || !isReservedOpsPort(8787) {
-		t.Fatal("expected 9120/8787 reserved")
+	for _, port := range []int{8787, 9120, 9123, 9124} {
+		if !isReservedOpsPort(port) {
+			t.Fatalf("expected stack-owned port %d to be excluded from watchdog management", port)
+		}
 	}
 	if isReservedOpsPort(54321) {
 		t.Fatal("ephemeral port must not be reserved")
