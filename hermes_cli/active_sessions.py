@@ -12,9 +12,10 @@ import logging
 import os
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from hermes_constants import get_hermes_home
 
@@ -114,16 +115,17 @@ def active_session_limit_message(
     )
 
 
-def _state_dir() -> Path:
-    return Path(get_hermes_home()) / "runtime"
+def _state_dir(registry_home: str | Path | None = None) -> Path:
+    home = Path(registry_home) if registry_home is not None else Path(get_hermes_home())
+    return home / "runtime"
 
 
-def _state_path() -> Path:
-    return _state_dir() / "active_sessions.json"
+def _state_path(registry_home: str | Path | None = None) -> Path:
+    return _state_dir(registry_home) / "active_sessions.json"
 
 
-def _lock_path() -> Path:
-    return _state_dir() / "active_sessions.lock"
+def _lock_path(registry_home: str | Path | None = None) -> Path:
+    return _state_dir(registry_home) / "active_sessions.lock"
 
 
 class _FileLock:
@@ -179,13 +181,15 @@ class _FileLock:
             self._fh = None
 
 
-def _read_entries(path: Path) -> list[dict[str, Any]]:
+def _read_entries(path: Path, *, strict: bool = False) -> list[dict[str, Any]]:
     try:
         with open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
     except FileNotFoundError:
         return []
-    except Exception:
+    except Exception as exc:
+        if strict:
+            raise RuntimeError(f"active session registry is unreadable: {path}") from exc
         logger.warning("Ignoring corrupt active session registry at %s", path)
         return []
     entries = data.get("entries") if isinstance(data, dict) else data
@@ -269,6 +273,7 @@ class ActiveSessionLease:
     # phantom leases (#85431).
     state_path: Optional[Path] = None
     lock_path: Optional[Path] = None
+    track_liveness: bool = False
 
     def release(self) -> None:
         if self.released or not self.enabled:
@@ -282,6 +287,8 @@ def try_acquire_active_session(
     surface: str,
     config: Any,
     metadata: Optional[dict[str, Any]] = None,
+    registry_home: str | Path | None = None,
+    track_liveness: bool = False,
 ) -> tuple[Optional[ActiveSessionLease], Optional[str]]:
     """Acquire an active-session slot.
 
@@ -290,7 +297,7 @@ def try_acquire_active_session(
     """
     max_sessions = resolve_max_concurrent_sessions(config)
     lease_id = uuid.uuid4().hex
-    if max_sessions is None:
+    if max_sessions is None and not track_liveness:
         return ActiveSessionLease(
             lease_id=lease_id,
             session_id=session_id,
@@ -312,16 +319,19 @@ def try_acquire_active_session(
         entry["metadata"] = {
             str(k): v for k, v in metadata.items() if isinstance(k, str)
         }
+    if track_liveness:
+        entry["track_liveness"] = True
 
-    state_path = _state_path()
-    with _FileLock(_lock_path()):
-        raw_entries = _read_entries(state_path)
+    state_path = _state_path(registry_home)
+    lock_path = _lock_path(registry_home)
+    with _FileLock(lock_path):
+        raw_entries = _read_entries(state_path, strict=track_liveness)
         entries = _prune_dead(raw_entries)
         pruned = len(raw_entries) - len(entries)
         if pruned:
             logger.info("Pruned %d stale active session lease(s)", pruned)
         active_count = len(entries)
-        if active_count >= max_sessions:
+        if max_sessions is not None and active_count >= max_sessions:
             _write_entries(state_path, entries)
             logger.info(
                 "Active session limit reached: active=%d max=%d surface=%s",
@@ -340,7 +350,8 @@ def try_acquire_active_session(
         session_id=str(session_id),
         surface=str(surface),
         state_path=state_path,
-        lock_path=_lock_path(),
+        lock_path=lock_path,
+        track_liveness=track_liveness,
     ), None
 
 
@@ -349,17 +360,17 @@ def release_active_session(lease: ActiveSessionLease) -> None:
     # running under a profile HERMES_HOME override (#85431).
     state_path = lease.state_path or _state_path()
     lock_path = lease.lock_path or _lock_path()
-    try:
-        with _FileLock(lock_path):
-            entries = _prune_dead(_read_entries(state_path))
-            kept = [
-                entry
-                for entry in entries
-                if str(entry.get("lease_id") or "") != lease.lease_id
-            ]
-            if len(kept) != len(entries):
-                _write_entries(state_path, kept)
-    finally:
+    with _FileLock(lock_path):
+        entries = _prune_dead(
+            _read_entries(state_path, strict=lease.track_liveness)
+        )
+        kept = [
+            entry
+            for entry in entries
+            if str(entry.get("lease_id") or "") != lease.lease_id
+        ]
+        if len(kept) != len(entries):
+            _write_entries(state_path, kept)
         lease.released = True
 
 
@@ -431,10 +442,52 @@ def release_orphaned_leases(live_lease_ids: set[str]) -> int:
     return dropped
 
 
-def active_session_registry_snapshot() -> list[dict[str, Any]]:
+def active_session_registry_snapshot(
+    registry_home: str | Path | None = None,
+) -> list[dict[str, Any]]:
     """Return the pruned active-session registry for diagnostics/tests."""
-    state_path = _state_path()
-    with _FileLock(_lock_path()):
+    state_path = _state_path(registry_home)
+    with _FileLock(_lock_path(registry_home)):
         entries = _prune_dead(_read_entries(state_path))
         _write_entries(state_path, entries)
         return entries
+
+
+@contextmanager
+def active_session_liveness_guard(
+    session_id: str,
+    *,
+    registry_home: str | Path | None = None,
+) -> Iterator[bool]:
+    """Hold the registry lock while checking for a live sibling owner."""
+    state_path = _state_path(registry_home)
+    with _FileLock(_lock_path(registry_home)):
+        entries = _prune_dead(_read_entries(state_path, strict=True))
+        _write_entries(state_path, entries)
+        yield any(
+            str(entry.get("session_id") or "") == str(session_id or "")
+            for entry in entries
+        )
+
+
+@contextmanager
+def release_active_session_liveness_guard(
+    lease: ActiveSessionLease,
+    session_id: str,
+) -> Iterator[bool]:
+    """Release one lease and hold its registry lock through durable cleanup."""
+    state_path = lease.state_path or _state_path()
+    lock_path = lease.lock_path or _lock_path()
+    with _FileLock(lock_path):
+        entries = _prune_dead(_read_entries(state_path, strict=True))
+        kept = [
+            entry
+            for entry in entries
+            if str(entry.get("lease_id") or "") != lease.lease_id
+        ]
+        _write_entries(state_path, kept)
+        lease.released = True
+        yield any(
+            str(entry.get("session_id") or "") == str(session_id or "")
+            for entry in kept
+        )

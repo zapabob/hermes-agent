@@ -13665,58 +13665,48 @@ def _(rid, params: dict) -> dict:
                 if session.get("running"):
                     parsed = parse_model_switch_args(value)
                     catalogue_validated = _picker_catalogue_validates(session, parsed)
-                    # Resolve and run selection guards without mutating the live
-                    # agent. This closes the old gap where a guarded model was
-                    # painted as queued, then silently dropped at turn start
-                    # because Desktop had never been shown confirm_required.
-                    prepared = _apply_model_switch(
-                        params.get("session_id", ""),
-                        session,
-                        value,
-                        catalogue_validated=catalogue_validated,
-                        confirm_expensive_model=bool(
-                            params.get("confirm_expensive_model", False)
-                        ),
-                        parsed_flags=parsed,
-                        prepare_only=True,
-                    )
-                    if prepared.get("confirm_required"):
-                        return _ok(
-                            rid,
-                            {
-                                "key": key,
-                                "value": prepared["value"],
-                                "provider": prepared.get("provider", ""),
-                                "warning": prepared.get("warning", ""),
-                                "confirm_required": True,
-                                "confirm_message": prepared.get("confirm_message", ""),
-                                "scope": prepared.get("scope", "session"),
-                                "deferred": False,
-                            },
+                    pending_model = parsed.model_input
+                    pending_provider = (parsed.explicit_provider or "").strip()
+                    confirmed = bool(params.get("confirm_expensive_model", False))
+                    if not confirmed:
+                        pending_warning = _pending_switch_selection_warning(
+                            pending_model, pending_provider
                         )
+                        if pending_warning is not None:
+                            return _ok(
+                                rid,
+                                {
+                                    "key": key,
+                                    "value": pending_model,
+                                    "provider": pending_provider,
+                                    "warning": pending_warning,
+                                    "confirm_required": True,
+                                    "confirm_message": pending_warning,
+                                    "scope": "session",
+                                    "deferred": False,
+                                },
+                            )
                     session["pending_model_switch"] = {
                         "raw": value,
                         "catalogue_validated": catalogue_validated,
-                        "confirm_expensive_model": bool(
-                            params.get("confirm_expensive_model", False)
-                        ),
+                        "confirm_expensive_model": confirmed,
                         # The resolved model/provider the next turn will run on.
                         # _session_info reports these while the switch is pending
                         # so the end-of-turn settle keeps showing the user's pick
                         # instead of blipping back to the still-live old model.
-                        "display_model": prepared["value"],
-                        "display_provider": prepared.get("provider", ""),
+                        "display_model": pending_model,
+                        "display_provider": pending_provider,
                     }
                     return _ok(
                         rid,
                         {
                             "key": key,
-                            "value": prepared["value"],
-                            "provider": prepared.get("provider", ""),
-                            "warning": prepared.get("warning", ""),
+                            "value": pending_model,
+                            "provider": pending_provider,
+                            "warning": "",
                             "confirm_required": False,
                             "confirm_message": "",
-                            "scope": prepared.get("scope", "session"),
+                            "scope": "session",
                             "deferred": True,
                         },
                     )
