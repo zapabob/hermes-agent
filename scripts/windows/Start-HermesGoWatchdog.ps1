@@ -185,7 +185,7 @@ function Stop-GoWatchdog {
 }
 
 function Stop-PsDesktopBackendWatchdog {
-    # PS and Go watchdogs use different lock files — running both causes dual
+    # PS and Go watchdogs use different lock files; running both causes dual
     # Hermes.exe relaunch loops. Prefer Go; stop the legacy PS mutual watchdog.
     $psLock = Join-Path $HermesHome "logs\desktop-backend-watchdog.lock"
     $LegacyWatchdogScript = (Resolve-Path -LiteralPath (Join-Path $ScriptDir "Start-HermesDesktopBackendWatchdog.ps1") -ErrorAction Stop).Path
@@ -213,15 +213,15 @@ if (-not (Test-Path -LiteralPath $Exe)) {
             Invoke-GoWatchdogBuildBounded -BuildScript $buildScript -TimeoutSec $BuildTimeoutSec -SkipTest:(-not $RunBuildTests)
         } catch {
             Write-Warning $_.Exception.Message
-            Write-Warning "Skipping Go watchdog start — run Build-HermesGoWatchdog.ps1 manually when ready."
+            Write-Warning "Skipping Go watchdog start; run Build-HermesGoWatchdog.ps1 manually when ready."
             exit 0
         }
         if (-not (Test-Path -LiteralPath $Exe)) {
-            Write-Warning "Build finished but missing $Exe — skipping Go watchdog start."
+            Write-Warning "Build finished but missing $Exe; skipping Go watchdog start."
             exit 0
         }
     } else {
-        throw "Missing $Exe — run Build-HermesGoWatchdog.ps1 first or pass -BuildIfMissing"
+        throw "Missing $Exe; run Build-HermesGoWatchdog.ps1 first or pass -BuildIfMissing"
     }
 }
 
@@ -420,5 +420,5 @@ Start-Sleep -Seconds 2
 if (Test-GoWatchdogAlive) {
     Write-Host "Go watchdog launched (logs: $(Join-Path $HermesHome 'logs\hermes-go-watchdog.log'))"
 } else {
-    Write-Warning "Go watchdog may still be starting — check $(Join-Path $HermesHome 'logs\hermes-go-watchdog.log')"
+    Write-Warning "Go watchdog may still be starting; check $(Join-Path $HermesHome 'logs\hermes-go-watchdog.log')"
 }
