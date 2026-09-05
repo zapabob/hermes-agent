@@ -38,7 +38,7 @@ from typing import Optional
 
 from hermes_cli._subprocess_compat import noninteractive_git_env
 from hermes_cli.config import get_hermes_home
-from hermes_constants import venv_python_path
+from hermes_constants import get_default_hermes_root, venv_python_path
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +55,17 @@ def _begin_watchdog_update_maintenance() -> None:
         return
     from hermes_cli import watchdog_maintenance
 
+    project_root = _m().PROJECT_ROOT
+    if not isinstance(project_root, (str, os.PathLike)):
+        # A few update-path contract tests replace PROJECT_ROOT with a
+        # non-path sentinel so any accidental filesystem access is loud.
+        # Production roots are always str/PathLike; keep the fence ordered
+        # before process quiescence while allowing those isolated tests to
+        # exercise later guards without inventing a filesystem location.
+        logger.debug("Watchdog maintenance skipped for non-path project root")
+        return
     _ACTIVE_WATCHDOG_MAINTENANCE = watchdog_maintenance.acquire(
-        _m().PROJECT_ROOT,
+        project_root,
         reason="Hermes update owns planned process lifecycle",
     )
     if not _WATCHDOG_MAINTENANCE_ATEXIT_REGISTERED:
@@ -667,6 +676,78 @@ def _editable_install_is_current(git_cmd, cwd, pre_pull_sha: str | None) -> bool
     if result.returncode != 0:
         return False
     return not result.stdout.strip()
+
+
+def _git_is_trampoline(git_cmd: list) -> bool:
+    """Whether Git for Windows resolves to its broken fork-bomb trampoline."""
+    try:
+        result = subprocess.run(
+            git_cmd + ["--version"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+        )
+    except Exception:
+        return False
+    output = ((result.stdout or "") + (result.stderr or "")).lower()
+    return "fork bomb" in output
+
+
+def _portable_git_candidates() -> list:
+    """PortableGit candidates, preferring the shared Hermes root."""
+    candidates = []
+    try:
+        for root in (get_default_hermes_root(), Path(get_hermes_home())):
+            candidates.append(
+                root / "git" / "mingw64" / "libexec" / "git-core" / "git.exe"
+            )
+    except Exception:
+        pass
+    return candidates
+
+
+def _locate_real_git() -> Optional[Path]:
+    """Find a working Git-for-Windows git-core binary, if one exists."""
+    candidates = [
+        Path(r"C:\Program Files\Git\mingw64\libexec\git-core\git.exe"),
+        Path(r"C:\Program Files (x86)\Git\mingw64\libexec\git-core\git.exe"),
+    ] + _portable_git_candidates()
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        try:
+            result = subprocess.run(
+                [str(candidate), "--version"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=15,
+            )
+        except Exception:
+            continue
+        output = ((result.stdout or "") + (result.stderr or "")).lower()
+        if "fork bomb" not in output:
+            return candidate
+    return None
+
+
+def _ensure_non_trampoline_git(git_cmd: list) -> list:
+    """Use git-core directly when the Git-for-Windows trampoline is broken."""
+    if sys.platform != "win32" or not _git_is_trampoline(git_cmd):
+        return git_cmd
+    real_git = _locate_real_git()
+    if real_git is None:
+        print(
+            "⚠ Detected a broken git trampoline and could not locate a real "
+            "git binary — the update will fall back to the ZIP path."
+        )
+        return git_cmd
+    print(f"⚠ Detected a broken git trampoline; switching to real git at {real_git}")
+    return [str(real_git)] + list(git_cmd[1:])
+
 
 def _validate_critical_files_syntax(root) -> tuple[bool, str | None, str | None]:
     """Compile each file in ``_UPDATE_CRITICAL_FILES`` to catch SyntaxErrors.
@@ -1794,8 +1875,51 @@ def _update_complete_message(pre_version: str | None) -> str:
     if post_version:
         return f"✓ Update complete! (v{post_version})"
     return "✓ Update complete!"
- 
- 
+
+
+def _post_update_sqlite_runtime_status():
+    """Return whether the interpreter used after update has safe SQLite."""
+    from hermes_constants import project_venv_dir
+    from hermes_cli.sqlite_runtime import probe_sqlite_runtime
+
+    venv_dir = project_venv_dir(_m().PROJECT_ROOT)
+    python = (
+        venv_python_path(venv_dir, windows=_m()._is_windows())
+        if venv_dir is not None
+        else Path(sys.executable)
+    )
+    info = probe_sqlite_runtime(python)
+    return info is not None and not info.wal_reset_vulnerable, info
+
+
+def _print_verified_update_completion(message: str) -> bool:
+    """Print a success completion only after probing the next Hermes runtime."""
+    if not message.startswith("✓"):
+        _print_update_completion(message)
+        return False
+    sqlite_runtime_ok, sqlite_info = _post_update_sqlite_runtime_status()
+    if sqlite_info is None:
+        # An unavailable probe must not fail an otherwise-successful update;
+        # only a positively vulnerable runtime withholds the success claim.
+        logger.debug("Post-update SQLite runtime probe unavailable; not blocking")
+        _print_update_completion(message)
+        return True
+    if sqlite_runtime_ok:
+        _print_update_completion(message)
+        return True
+    print()
+    detail = (
+        f"SQLite {sqlite_info.sqlite_version_string} still has the "
+        "WAL-reset corruption bug"
+    )
+    print(f"⚠ Update partially complete — {detail}.")
+    print(
+        "  Rebuild the Hermes venv with a uv-managed Python, restart Hermes, "
+        "then verify with `hermes doctor`."
+    )
+    return False
+
+
 def _clear_stale_sqlite_sidecars(db_path: Path) -> None:
     """Delete the WAL / shared-memory / rollback-journal files next to *db_path*.
 
@@ -1822,11 +1946,15 @@ def _print_update_summary(
     node_failures: list,
     desktop_build_ok: bool,
     pre_update_version: str | None,
-) -> None:
+) -> bool:
     """Final update banner. A failed Desktop rebuild is non-fatal for the
     Python side, but must not print ``✓ Update complete!`` (#88251)."""
+    sqlite_runtime_ok, sqlite_info = _post_update_sqlite_runtime_status()
+    if sqlite_info is None:
+        # Only a positive vulnerable result demotes the update to partial.
+        sqlite_runtime_ok = True
     print()
-    if node_failures or not desktop_build_ok:
+    if node_failures or not desktop_build_ok or not sqlite_runtime_ok:
         parts = []
         if node_failures:
             parts.append(
@@ -1836,14 +1964,27 @@ def _print_update_summary(
             parts.append(
                 "the desktop app was not rebuilt and is still on the previous build"
             )
+        if not sqlite_runtime_ok and sqlite_info is not None:
+            parts.append(
+                f"SQLite {sqlite_info.sqlite_version_string} still has the "
+                "WAL-reset corruption bug"
+            )
         print("⚠ Update partially complete — " + "; ".join(parts) + ".")
         if node_failures:
             print("  Code and Python deps are updated, but the dashboard/TUI may")
             print("  be in a mixed state until the Node deps are rebuilt.")
         if not desktop_build_ok:
             print("  Run `hermes desktop` to retry the desktop rebuild.")
+        if not sqlite_runtime_ok:
+            print(
+                "  The Python runtime remediation did not complete. Run `hermes "
+                "update` again; if SQLite is unchanged, rebuild the Hermes venv "
+                "with a uv-managed Python, restart Hermes, then verify with "
+                "`hermes doctor`."
+            )
     else:
         _print_update_completion(_update_complete_message(pre_update_version))
+    return desktop_build_ok and sqlite_runtime_ok
 
 
 def _write_gateway_update_exit_code(ok: bool) -> None:
@@ -2300,7 +2441,7 @@ def _update_via_zip(args, *, had_desktop_app_before_update: bool = False) -> boo
             "Post-update state.db integrity check (zip path) failed: %s", exc
         )
 
-    _print_update_summary(
+    update_complete = _print_update_summary(
         node_failures=node_failures,
         desktop_build_ok=desktop_build_ok,
         pre_update_version=pre_update_version,
@@ -2320,11 +2461,11 @@ def _update_via_zip(args, *, had_desktop_app_before_update: bool = False) -> boo
         from hermes_cli.update_receipt import finalize_update_receipt
 
         finalize_update_receipt(
-            "success" if (desktop_build_ok and not node_failures) else "partial"
+            "success" if update_complete and not node_failures else "partial"
         )
     except Exception as _receipt_exc:
         logger.debug("Update receipt finalize (zip path) failed: %s", _receipt_exc)
-    return desktop_build_ok
+    return update_complete
 
 def _stash_local_changes_if_needed(git_cmd: list[str], cwd: Path) -> Optional[str]:
     status = subprocess.run(
@@ -2822,7 +2963,13 @@ def _sync_fork_with_upstream(git_cmd: list[str], cwd: Path) -> bool:
     except Exception:
         return False
 
-def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
+def _sync_with_upstream_if_needed(
+    git_cmd: list[str],
+    cwd: Path,
+    *,
+    assume_yes: bool = False,
+    input_fn=None,
+) -> bool:
     """Check if fork is behind upstream and sync if safe.
 
     This implements the fork upstream sync logic:
@@ -2830,26 +2977,51 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
     - Compare origin/main with upstream/main
     - If origin/main is strictly behind upstream/main, pull from upstream
     - Try to sync fork back to origin if possible
+
+    Returns True only after origin/main was actually compared with the
+    official upstream. This prevents a passive or declined setup prompt from
+    being reported as full upstream verification.
     """
     has_upstream = _has_upstream_remote(git_cmd, cwd)
 
     if not has_upstream:
         # Check if user previously declined
         if _should_skip_upstream_prompt():
-            return
+            return False
 
-        # Ask user if they want to add upstream
         print()
         print("ℹ Your fork is not tracking the official Hermes repository.")
         print("  This means you may miss updates from NousResearch/hermes-agent.")
         print()
-        try:
-            response = (
-                input("Add official repo as 'upstream' remote? [Y/n]: ").strip().lower()
+
+        if assume_yes or (
+            input_fn is None and not (sys.stdin.isatty() and sys.stdout.isatty())
+        ):
+            # Non-interactive update checks are passive: do not mutate remotes
+            # and do not invoke an account credential prompt.
+            print("  Skipping upstream setup (non-interactive run).")
+            print(
+                "  Add it later with: git remote add upstream "
+                "https://github.com/NousResearch/hermes-agent.git"
             )
-        except (EOFError, KeyboardInterrupt, UnicodeDecodeError):
-            print()
-            response = "n"
+            return False
+
+        if input_fn is not None:
+            response = (
+                input_fn("Add official repo as 'upstream' remote? [y/N]", "n")
+                .strip()
+                .lower()
+            )
+        else:
+            try:
+                response = (
+                    input("Add official repo as 'upstream' remote? [Y/n]: ")
+                    .strip()
+                    .lower()
+                )
+            except (EOFError, KeyboardInterrupt, UnicodeDecodeError):
+                print()
+                response = "n"
 
         if response in {"", "y", "yes"}:
             print("→ Adding upstream remote...")
@@ -2860,13 +3032,13 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
                 has_upstream = True
             else:
                 print("  ✗ Failed to add upstream remote. Skipping upstream sync.")
-                return
+                return False
         else:
             print(
                 "  Skipped. Run 'git remote add upstream https://github.com/NousResearch/hermes-agent.git' to add later."
             )
             _mark_skip_upstream_prompt()
-            return
+            return False
 
     # Fetch upstream main only. This sync compares upstream/main with
     # origin/main, so there's no reason to pull every upstream ref — and a bare
@@ -2883,7 +3055,7 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
         )
     except subprocess.CalledProcessError:
         print("  ✗ Failed to fetch upstream. Skipping upstream sync.")
-        return
+        return False
 
     # Compare origin/main with upstream/main
     origin_ahead = _count_commits_between(git_cmd, cwd, "upstream/main", "origin/main")
@@ -2893,7 +3065,7 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
 
     if origin_ahead < 0 or upstream_ahead < 0:
         print("  ✗ Could not compare branches. Skipping upstream sync.")
-        return
+        return False
 
     # If origin/main has commits not on upstream, don't trample
     if origin_ahead > 0:
@@ -2902,12 +3074,12 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
         print("  Skipping upstream sync to preserve your changes.")
         print("  If you want to merge upstream changes, run:")
         print("    git pull upstream main")
-        return
+        return True
 
     # If upstream is not ahead, fork is up to date
     if upstream_ahead == 0:
         print("  ✓ Fork is up to date with upstream")
-        return
+        return True
 
     # origin/main is strictly behind upstream/main (can fast-forward)
     print()
@@ -2925,7 +3097,7 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
         print(
             "  ✗ Failed to pull from upstream. You may need to resolve conflicts manually."
         )
-        return
+        return False
 
     print("  ✓ Updated from upstream")
 
@@ -2938,6 +3110,7 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
             "  ℹ Got updates from upstream but couldn't push to fork (no write access?)"
         )
         print("    Your local repo is updated, but your fork on GitHub may be behind.")
+    return True
 
 def _invalidate_update_cache():
     """Delete the update-check cache for ALL profiles so no banner
@@ -3823,7 +3996,8 @@ def _repair_node_deps_on_current_checkout(
     assume_yes: bool = False,
     gateway_mode: bool = False,
     pre_update_snapshot_id: str | None = None,
-) -> None:
+    completion_message: str = "✓ Already up to date!",
+) -> bool:
     """Repair Node deps on the ``commit_count == 0`` path (#77211).
 
     A current checkout does not imply healthy Node deps: a previous npm
@@ -3843,7 +4017,7 @@ def _repair_node_deps_on_current_checkout(
         print_completion(
             "⚠ Checkout is current, but Node.js dependencies could not be repaired."
         )
-        return
+        return False
     # Pair the refresh with the web build like every other
     # _update_node_dependencies call site; it staleness-checks internally,
     # so this is a no-op when nothing changed.
@@ -3853,7 +4027,7 @@ def _repair_node_deps_on_current_checkout(
         gateway_mode=gateway_mode,
         pre_update_snapshot_id=pre_update_snapshot_id,
     )
-    print_completion("✓ Already up to date!")
+    return bool(print_completion(completion_message))
 
 
 def _update_node_dependencies() -> list[str]:
@@ -4846,7 +5020,10 @@ def _detect_venv_python_processes(
 
     matches: list[tuple[int, str, str]] = []
     try:
-        proc_iter = psutil.process_iter(["pid", "exe", "name", "cmdline", "cwd"])
+        # Fetch cmdline/cwd only for plausible Python/uv/Hermes candidates.
+        # Querying both for every process can exceed the Desktop preflight
+        # watchdog on a busy Windows workstation.
+        proc_iter = psutil.process_iter(["pid", "exe", "name"])
     except Exception:
         return []
     for proc in proc_iter:
@@ -4862,13 +5039,24 @@ def _detect_venv_python_processes(
             exe_norm = str(Path(exe).resolve()).lower()
         except (OSError, ValueError):
             exe_norm = str(exe).lower()
-        cmdline_raw = " ".join(info.get("cmdline") or [])
-        cmdline_low = cmdline_raw.lower()
-        cwd_low = str(info.get("cwd") or "").lower().rstrip(os.sep) + os.sep
 
         # Primary match: the executable itself lives under this venv
         # (venv\Scripts\python(w).exe — the desktop backend / gateway case).
         is_holder = exe_norm.startswith(venv_prefix)
+        name = str(info.get("name") or Path(exe).name)
+        name_low = name.lower()
+
+        if not is_holder and not (
+            name_low.startswith(("python", "pypy"))
+            or name_low in {"uv.exe", "uvx.exe", "hermes.exe"}
+        ):
+            continue
+
+        try:
+            cmdline_raw = " ".join(proc.cmdline() or [])
+        except Exception:
+            cmdline_raw = ""
+        cmdline_low = cmdline_raw.lower()
         # Fallback: uv/base-interpreter trampolines run a python whose exe is
         # OUTSIDE the venv but which still imports from it and holds its .pyd
         # files. Catch those by what they're running: a cmdline that references
@@ -4877,11 +5065,14 @@ def _detect_venv_python_processes(
         if not is_holder and venv_prefix in cmdline_low:
             is_holder = True
         if not is_holder and "hermes_cli.main" in cmdline_low:
+            try:
+                cwd_low = str(proc.cwd() or "").lower().rstrip(os.sep) + os.sep
+            except Exception:
+                cwd_low = os.sep
             if root_prefix in cmdline_low or cwd_low.startswith(root_prefix):
                 is_holder = True
         if not is_holder:
             continue
-        name = info.get("name") or Path(exe).name
         # Return the FULL cmdline: callers match against it (the Desktop
         # preflight's pausable-gateway exemption parses for `gateway run`).
         # Truncating here cut long managed-runtime interpreter paths before
@@ -5431,7 +5622,7 @@ def _relaunch_stopped_serves(token: dict) -> None:
 
 def _orphaned_desktop_backend_pids(
     matches: list[tuple[int, str, str]],
-) -> list[int] | None:
+) -> list[tuple[int, int]] | None:
     """PIDs from *matches* when every remaining holder is an ORPHANED backend.
 
     The venv-holder guard refuses on the Desktop app's ``serve`` backend by
@@ -5479,7 +5670,7 @@ def _orphaned_desktop_backend_pids(
         )
 
     # Pass 1: find orphaned backend ROOTS among the holders.
-    roots: list[int] = []
+    roots: list[tuple[int, int]] = []
     remaining: list[tuple[int, str]] = []  # (pid, argv_low) still to justify
     for pid, _name, cmdline in matches:
         argv = cmdline
@@ -5497,6 +5688,16 @@ def _orphaned_desktop_backend_pids(
             continue
         try:
             proc = psutil.Process(int(pid))
+            # Fingerprint the candidate before any kill decision. Centisecond
+            # quantization matches gateway.status on Windows and prevents a
+            # recycled PID from inheriting this classification.
+            process_start_time = int(round(proc.create_time() * 100))
+        except psutil.NoSuchProcess:
+            continue
+        except Exception:
+            return None
+
+        try:
             ppid = proc.ppid()
             parent = psutil.Process(ppid) if ppid else None
             if parent is not None and parent.is_running():
@@ -5515,12 +5716,12 @@ def _orphaned_desktop_backend_pids(
             pass  # parent gone → orphan
         except Exception:
             return None
-        roots.append(int(pid))
+        roots.append((int(pid), process_start_time))
 
     # Pass 2: every non-backend holder must be a descendant of an accepted
     # orphan root — then it dies with the root's tree reap. Anything else
     # (operator REPL, stray script) keeps the refusal.
-    root_set = set(roots)
+    root_set = {pid for pid, _start_time in roots}
     for pid, _low in remaining:
         if not root_set:
             return None
@@ -5650,7 +5851,9 @@ def _handoff_reapable_backend_pids(
     return roots or None
 
 
-def _stop_process_trees(pids: list[int]) -> None:
+def _stop_process_trees(
+    pids: list[int] | list[tuple[int, int]],
+) -> None:
     """Force-stop each PID with its full child tree (Windows).
 
     ``taskkill /T /F`` mirrors the Desktop's ``forceKillProcessTree`` and
@@ -5658,12 +5861,38 @@ def _stop_process_trees(pids: list[int]) -> None:
     ``.hermes-runtime`` interpreter child alive and holding the install open
     (#70026). Best effort; never raises.
     """
-    for pid in pids:
+    from gateway.status import get_process_start_time
+    from hermes_cli._subprocess_compat import pid_is_hermes, windows_hide_flags
+
+    for entry in pids:
+        if isinstance(entry, tuple):
+            pid, expected_start_time = entry
+        else:
+            pid = int(entry)
+            expected_start_time = get_process_start_time(pid)
         try:
+            if expected_start_time is None:
+                logger.debug(
+                    "Skipping taskkill of PID %s: process identity unavailable",
+                    pid,
+                )
+                continue
+            if not pid_is_hermes(
+                pid,
+                expected_start_time=expected_start_time,
+            ):
+                logger.debug(
+                    "Skipping taskkill of non-Hermes or changed PID %s",
+                    pid,
+                )
+                continue
             subprocess.run(
-                ["taskkill", "/PID", str(int(pid)), "/T", "/F"],
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
                 check=False,
-                capture_output=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                creationflags=windows_hide_flags(),
             )
         except Exception as exc:
             logger.debug("Could not stop process tree %s: %s", pid, exc)
@@ -7352,6 +7581,94 @@ def _rebuild_desktop_after_update(
     return True
 
 
+def _path_uid(path) -> Optional[int]:
+    """Owner uid of ``path`` via ``os.stat``; ``None`` when unreadable."""
+    try:
+        return os.stat(path, follow_symlinks=False).st_uid
+    except OSError:
+        return None
+
+
+def _venv_foreign_owned_paths(venv_root, limit: int = 5) -> list:
+    """Bounded POSIX scan for venv entries not owned by the current user.
+
+    A dependency update must refuse before mutation when a previous sudo-run
+    left foreign-owned files behind. The scan intentionally samples only the
+    venv root, executable directory, first site-packages directory, and direct
+    dist-info children, with a hard stat budget.
+    """
+    try:
+        if not hasattr(os, "geteuid"):
+            return []
+        euid = os.geteuid()
+        if euid == 0:
+            return []
+
+        venv_root = Path(venv_root)
+        budget = 2000
+        foreign: list = []
+
+        def _check(path) -> bool:
+            nonlocal budget
+            if budget <= 0 or len(foreign) >= limit:
+                return False
+            budget -= 1
+            uid = _path_uid(path)
+            if uid is not None and uid != euid:
+                foreign.append((str(path), uid))
+            return budget > 0 and len(foreign) < limit
+
+        def _scan_dir(directory, recurse_dist_info: bool = False) -> None:
+            try:
+                entries = list(os.scandir(directory))
+            except OSError:
+                return
+            for entry in entries:
+                if not _check(entry.path):
+                    return
+                if recurse_dist_info and entry.name.endswith(".dist-info"):
+                    try:
+                        children = list(os.scandir(entry.path))
+                    except OSError:
+                        continue
+                    for child in children:
+                        if not _check(child.path):
+                            return
+
+        if not _check(venv_root):
+            return foreign[:limit]
+        _scan_dir(venv_root / "bin")
+
+        site_packages = next(
+            iter(sorted(venv_root.glob("lib/python*/site-packages"))), None
+        )
+        if site_packages is not None:
+            _scan_dir(site_packages, recurse_dist_info=True)
+
+        return foreign[:limit]
+    except Exception:
+        # Advisory preflight: an unreadable layout yields no verdict and must
+        # never become a new update crash path.
+        return []
+
+
+def _refuse_update_if_venv_foreign_owned(project_root) -> None:
+    """Refuse before dependency mutation when POSIX venv ownership is mixed."""
+    foreign = _venv_foreign_owned_paths(Path(project_root) / "venv")
+    if not foreign:
+        return
+    print("\n✗ Update stopped: this install's venv contains files owned by another user.")
+    print("  Updating now would fail midway (Permission denied) and leave Hermes broken.")
+    print("  This usually happens after running hermes or pip with sudo. Offending paths:")
+    for path, uid in foreign:
+        print(f"    - {path} (owner uid {uid})")
+    print("\n  Fix ownership, then re-run the update:")
+    print(f"    sudo chown -R $(id -un): {project_root}")
+    print("    hermes update")
+    print("\n  Nothing in the venv was modified.")
+    sys.exit(1)
+
+
 def _cmd_update_impl(args, gateway_mode: bool):
     """Body of ``cmd_update`` — kept separate so the wrapper can always
     restore stdio even on ``sys.exit``."""
@@ -7722,6 +8039,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
     git_cmd = ["git"]
     if sys.platform == "win32":
         git_cmd = ["git", "-c", "windows.appendAtomically=false"]
+    git_cmd = _ensure_non_trampoline_git(git_cmd)
 
     # Discard npm lockfile churn before any stash/branch logic. npm rewrites
     # tracked package-lock.json files non-deterministically at install/build
@@ -7999,9 +8317,15 @@ def _cmd_update_impl(args, gateway_mode: bool):
         # commit_count == 0 branch, which returns immediately after: an update
         # that pulled hundreds of upstream commits printed "Already up to
         # date!" and verified nothing).
+        upstream_checked = True
         if commit_count == 0 and is_fork and branch == "main":
             pre_sync_sha = _capture_head_sha(git_cmd, _m().PROJECT_ROOT)
-            _m()._sync_with_upstream_if_needed(git_cmd, _m().PROJECT_ROOT)
+            upstream_checked = _m()._sync_with_upstream_if_needed(
+                git_cmd,
+                _m().PROJECT_ROOT,
+                assume_yes=assume_yes,
+                input_fn=gw_input_fn,
+            )
             post_sync_sha = _capture_head_sha(git_cmd, _m().PROJECT_ROOT)
             if pre_sync_sha and post_sync_sha and pre_sync_sha != post_sync_sha:
                 synced_count = _count_commits_between(
@@ -8080,6 +8404,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
             # "Already up to date!" and exits without doing the one job it
             # was spawned for.
             handed_off_sync = os.environ.get(_m()._UPDATE_REEXEC_ENV) == "1"
+            current_checkout_complete = True
             if handed_off_sync:
                 print("→ Finishing the dependency install handed off by hermes.exe...")
             elif not healthy:
@@ -8150,16 +8475,24 @@ def _cmd_update_impl(args, gateway_mode: bool):
                         gateway_mode=gateway_mode,
                         pre_update_snapshot_id=pre_update_snapshot_id,
                     )
-                    _print_update_completion("✓ Update complete!")
+                    current_checkout_complete = _print_verified_update_completion(
+                        "✓ Update complete!"
+                    )
                 else:
+                    current_checkout_complete = False
                     print(f"⚠ Venv still unhealthy after repair: {detail_after}")
                     print("  Close all Hermes windows/gateways and re-run: hermes update")
             else:
-                _repair_node_deps_on_current_checkout(
-                    _print_update_completion,
+                current_checkout_complete = _repair_node_deps_on_current_checkout(
+                    _print_verified_update_completion,
                     assume_yes=assume_yes,
                     gateway_mode=gateway_mode,
                     pre_update_snapshot_id=pre_update_snapshot_id,
+                    completion_message=(
+                        "✓ Already up to date!"
+                        if upstream_checked
+                        else "✓ Up to date with your fork (official repo not checked)."
+                    ),
                 )
             if runtime_repaired is not None and not _m()._is_windows():
                 print()
@@ -8175,8 +8508,22 @@ def _cmd_update_impl(args, gateway_mode: bool):
             # Git is current, but a prior pull may still owe the fleet a
             # restart (#95294). Catch up even on the "Already up to date"
             # path — that early return is what left the gateway on stale
-            # code for two days.
+            # code for two days. Run this before the runtime-verification exit
+            # gate so a partial SQLite outcome cannot strand a stale fleet.
             _apply_pending_fleet_restart_catchup()
+            if not current_checkout_complete:
+                if gateway_mode:
+                    _write_gateway_update_exit_code(False)
+                try:
+                    from hermes_cli.update_receipt import finalize_update_receipt
+
+                    finalize_update_receipt("partial")
+                except Exception as _receipt_exc:
+                    logger.debug(
+                        "Update receipt finalize (current checkout) failed: %s",
+                        _receipt_exc,
+                    )
+                sys.exit(1)
             return
 
         if commit_count > 0:
@@ -8437,11 +8784,21 @@ def _cmd_update_impl(args, gateway_mode: bool):
 
         # Fork upstream sync logic (only for main branch on forks)
         if is_fork and branch == "main":
-            _m()._sync_with_upstream_if_needed(git_cmd, _m().PROJECT_ROOT)
+            _m()._sync_with_upstream_if_needed(
+                git_cmd,
+                _m().PROJECT_ROOT,
+                assume_yes=assume_yes,
+                input_fn=gw_input_fn,
+            )
 
         # Reinstall Python dependencies. Prefer .[all], but if one optional extra
         # breaks on this machine, keep base deps and reinstall the remaining extras
         # individually so update does not silently strip working capabilities.
+        #
+        # Refuse before the first venv mutation when sudo residue left files
+        # owned by another POSIX user. A mid-install permission failure can
+        # otherwise delete the launcher before the replacement is installed.
+        _refuse_update_if_venv_foreign_owned(_m().PROJECT_ROOT)
         #
         # Self-lock deferral (relocated preflight — #86735): if THIS process
         # holds a native extension the sync must rewrite, defer NOW — after
@@ -8830,7 +9187,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
             pre_update_snapshot_id=pre_update_snapshot_id,
         )
 
-        _print_update_summary(
+        update_complete = _print_update_summary(
             node_failures=node_failures,
             desktop_build_ok=desktop_build_ok,
             pre_update_version=pre_update_version,
@@ -8961,11 +9318,11 @@ def _cmd_update_impl(args, gateway_mode: bool):
         #
         # Writing the marker here — after git pull + pip install succeed but
         # before we attempt the restart — ensures the new gateway sees it
-        # regardless of how we die. Gated on desktop_build_ok (#88251): a
-        # Desktop rebuild failure must not be reported as "0" — the gateway's
-        # /update watcher (gateway/run.py) polls this file.
+        # regardless of how we die. Gated on the complete post-update runtime
+        # check and Desktop rebuild (#88251), so neither failure is reported
+        # as "0" to the gateway watcher (gateway/run.py).
         if gateway_mode:
-            _write_gateway_update_exit_code(desktop_build_ok)
+            _write_gateway_update_exit_code(update_complete)
 
         gateway_fleet_restart_incomplete = False
         gateway_restart_phase_errors: list[str] = []
@@ -10023,9 +10380,10 @@ def _cmd_update_impl(args, gateway_mode: bool):
             elif not _fleet_snapshot and _fleet_rows_expected:
                 # Fleet probe returned zero rows even though at least one
                 # gateway runtime was (or may have been) live pre-update —
-                # POSIX restart bookkeeping, the pre-restart PID snapshot,
-                # the pre-update plan inventory, or the Windows pause/resume
-                # token all count as that signal.  Every failure path inside
+                # POSIX restart bookkeeping, the pre-restart PID snapshot, or
+                # the pre-update plan inventory count as that signal. The
+                # Windows resume token is excluded because its entries cannot
+                # all produce fleet rows. Every failure path inside
                 # collect_fleet_versions() is swallowed via logger.debug(),
                 # so an empty list is indistinguishable from a healthy fleet
                 # in the current output.  Treat it as verification failure
