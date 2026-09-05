@@ -39,3 +39,11 @@ carry:
     tests: [tests/hermes_cli/test_update_fetch_failure_classifier.py, tests/hermes_cli/test_noninteractive_git.py]
     integration_policy: COMPOSE
     removal_condition: adopt the official updater decomposition with the shared noninteractive Git helper intact
+  - id: desktop-link-title-popup-fail-closed
+    upstream_paths: [apps/desktop/electron/link-title-window.ts]
+    current_upstream_owner: apps/desktop/electron.createLinkTitleWindow
+    downstream_reason: require popup denial before loading arbitrary pages even when another webContents API fails
+    invariants: [unguarded title windows are destroyed, audio mute remains best effort]
+    tests: [apps/desktop/electron/link-title-window.test.ts]
+    integration_policy: COMPOSE
+    removal_condition: upstream independently fails closed when setWindowOpenHandler cannot be installed

@@ -3,6 +3,8 @@
 // in an offscreen window and read its title. That window loads arbitrary
 // user-linked pages, so it must never emit sound or trigger real downloads.
 
+import { createWindowOpenHandler } from './window-open-policy'
+
 export function linkTitleWindowOptions(partitionSession) {
   return {
     show: false,
@@ -31,6 +33,21 @@ export function linkTitleWindowOptions(partitionSession) {
 // audio every time a session containing such links is re-rendered. See #49505.
 export function createLinkTitleWindow(BrowserWindow, partitionSession) {
   const window = new BrowserWindow(linkTitleWindowOptions(partitionSession))
+
+  try {
+    window.webContents.setWindowOpenHandler(createWindowOpenHandler())
+  } catch {
+    // This window loads arbitrary user-linked pages. If popup denial cannot be
+    // installed, destroy it before returning control to the caller so loadURL
+    // is never reached with an unguarded webContents.
+    try {
+      window.destroy()
+    } catch {
+      // Preserve the fail-closed exception even if teardown is already racing.
+    }
+
+    throw new Error('link-title popup denial unavailable')
+  }
 
   try {
     window.webContents.setAudioMuted(true)
