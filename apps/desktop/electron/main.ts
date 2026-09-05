@@ -390,6 +390,7 @@ import {
 } from './venv-blocker-scan'
 import { fetchMarketplaceThemes, searchMarketplaceThemes } from './vscode-marketplace'
 import { createWakeIndicatorWindowController } from './wake-indicator-window'
+import { resolveWatchdogPrewarmedBackend } from './watchdog-backend'
 import { enumerateWindowsFrontToBack, enumerationFailed, readWindowBelow } from './window-below'
 import { registrySshScopeForWindowRoute, WindowConnectionRouteRegistry } from './window-connection-route'
 import { installWindowRendererLifecycle } from './window-renderer-lifecycle'
@@ -12398,6 +12399,45 @@ async function startHermes() {
         await advanceBootProgress('backend.runtime', 'Resolving Hermes runtime', 28)
 
         return resolveHermesBackend(backendArgs)
+      },
+      resolvePrewarmedLocal: async () => {
+        const prewarmed = await resolveWatchdogPrewarmedBackend({
+          hermesRoot: process.env.HERMES_DESKTOP_HERMES_ROOT
+            ? path.resolve(process.env.HERMES_DESKTOP_HERMES_ROOT)
+            : null,
+          platform: process.platform,
+          timeoutMs: 5_000
+        })
+
+        if (!prewarmed) {
+          return null
+        }
+
+        await advanceBootProgress(
+          'backend.watchdog',
+          `Using watchdog prewarmed backend at ${prewarmed.baseUrl}`,
+          50
+        )
+        rememberLog(`Watchdog prewarmed backend ready at ${prewarmed.baseUrl}`)
+        await waitForHermes(prewarmed.baseUrl, prewarmed.token)
+        updateBootProgress({
+          phase: 'backend.ready',
+          message: 'Watchdog-managed Hermes backend is ready',
+          progress: 94,
+          running: true,
+          error: null
+        })
+
+        return {
+          baseUrl: prewarmed.baseUrl,
+          mode: 'local' as const,
+          source: 'watchdog' as const,
+          authMode: 'token' as const,
+          token: prewarmed.token,
+          wsUrl: buildGatewayWsUrl(prewarmed.baseUrl, prewarmed.token),
+          logs: hermesLog.slice(-80),
+          ...getWindowState()
+        }
       },
       resolveRemote: () => {
         // Classify immediately before each throwing resolve. This callback runs
