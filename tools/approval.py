@@ -548,23 +548,55 @@ _HARDLINE_SYSTEM_DIRS = (
 # catching `rm -rf "/"`.
 _RM_FLAG_PREFIX = _CMDPOS + r'rm\s+(-[^\s]*\s+)*'
 
+_WATCHDOG_OPERATOR_SCRIPT = (
+    r'(?:start-hermesgowatchdog|invoke-hermesgowatchdoglifecycle|'
+    r'restart-hermes-stack|(?:start|restart)-hermesfullstack|'
+    r'register-hermesfullautostart|repair-hermes-autostart|'
+    r'restart-hermes-autostart-admin)\.ps1'
+)
+
 HARDLINE_PATTERNS = [
     # The Go watchdog is an independent recovery authority. Hermes may inspect
     # its read-only health/state surfaces, but commands that invoke its
     # operator launcher must never pass through the agent terminal, even under
-    # yolo or approvals.mode=off. The first pattern
-    # covers powershell -File; the second covers direct PowerShell script
-    # invocation, including the call operator and quoted paths with spaces.
+    # yolo or approvals.mode=off. Operator stack/autostart wrappers can reach
+    # the same launcher or its elevated Scheduled Task indirectly, so the
+    # first pattern covers every powershell -File route and the second covers
+    # direct script invocation (including call operator + quoted paths).
     (
         _CMDPOS
-        + r'(?:powershell|pwsh)(?:\.exe)?\b[^\n]*?start-hermesgowatchdog\.ps1\b',
-        "operator-only Go watchdog launcher",
+        + r'(?:powershell|pwsh)(?:\.exe)?\b.*?'
+        + _WATCHDOG_OPERATOR_SCRIPT
+        + r'\b',
+        "operator-only Go watchdog launcher or wrapper",
     ),
     (
         _CMDPOS
-        + r'(?:&\s*)?(?:["\'][^"\']*start-hermesgowatchdog\.ps1["\']|'
-        + r'[^\s;&|]*start-hermesgowatchdog\.ps1)(?:\s|$)',
-        "operator-only Go watchdog launcher",
+        + r'(?:&\s*)?(?:["\'][^"\']*'
+        + _WATCHDOG_OPERATOR_SCRIPT
+        + r'["\']|[^\s;&|]*'
+        + _WATCHDOG_OPERATOR_SCRIPT
+        + r')'
+        + r'(?:\s|$)',
+        "operator-only Go watchdog launcher or wrapper",
+    ),
+    (
+        _CMDPOS
+        + r'(?:start|stop|enable|disable|register|unregister|set)-scheduledtask\b'
+        + r'.*?\bhermesgowatchdogbootautostart\b',
+        "operator-only Go watchdog scheduled task mutation",
+    ),
+    (
+        _CMDPOS
+        + r'schtasks(?:\.exe)?\b.*?/(?:run|end|create|delete|change)\b'
+        + r'.*?\bhermesgowatchdogbootautostart\b',
+        "operator-only Go watchdog scheduled task mutation",
+    ),
+    (
+        _CMDPOS
+        + r'(?:&\s*)?(?:["\'][^"\']*hermes-watchdog\.exe["\']|'
+        + r'[^\s;&|]*hermes-watchdog\.exe)(?:\s|$)',
+        "operator-only Go watchdog executable",
     ),
     (
         _CMDPOS
