@@ -7598,9 +7598,10 @@ def _venv_foreign_owned_paths(venv_root, limit: int = 5) -> list:
     dist-info children, with a hard stat budget.
     """
     try:
-        if not hasattr(os, "geteuid"):
+        get_euid = getattr(os, "geteuid", None)
+        if get_euid is None:
             return []
-        euid = os.geteuid()
+        euid = get_euid()
         if euid == 0:
             return []
 
