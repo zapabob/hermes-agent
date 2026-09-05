@@ -14,6 +14,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LAUNCHER = REPO_ROOT / "scripts" / "windows" / "Start-HermesGoWatchdog.ps1"
+HAS_WINDOWS_POWERSHELL = os.name == "nt" and shutil.which("powershell.exe") is not None
 
 
 def _launcher() -> str:
@@ -105,6 +106,7 @@ def test_launcher_requires_an_elevated_operator_before_any_side_effect() -> None
     assert authority_check < stop_dispatch
 
 
+@pytest.mark.skipif(not HAS_WINDOWS_POWERSHELL, reason="Windows PowerShell is required")
 def test_non_elevated_agent_context_cannot_stop_or_remove_lock(tmp_path: Path) -> None:
     if _is_elevated():
         pytest.skip("negative authorization path requires a non-elevated runner")
@@ -152,6 +154,7 @@ def test_foreign_live_lock_is_preserved() -> None:
     assert "if (-not (Stop-GoWatchdog))" in launcher
 
 
+@pytest.mark.skipif(not HAS_WINDOWS_POWERSHELL, reason="Windows PowerShell is required")
 def test_explicit_stop_preserves_a_foreign_live_process_and_lock(tmp_path: Path) -> None:
     if not _is_elevated():
         pytest.skip("operator identity test requires an elevated Windows runner")
@@ -178,6 +181,7 @@ def test_explicit_stop_preserves_a_foreign_live_process_and_lock(tmp_path: Path)
     assert "refusing to stop or remove its lock" in (result.stdout + result.stderr)
 
 
+@pytest.mark.skipif(not HAS_WINDOWS_POWERSHELL, reason="Windows PowerShell is required")
 def test_explicit_stop_removes_only_a_stale_lock(tmp_path: Path) -> None:
     if not _is_elevated():
         pytest.skip("operator identity test requires an elevated Windows runner")
