@@ -17,12 +17,12 @@
   "schema_version": 1,
   "snapshot_sha": "b51c055a12220f8c7c18660e8599365012e19532",
   "summary": {
-    "all_fork_specific_loc": 2679379,
+    "all_fork_specific_loc": 2679740,
     "carry_surface_files": 5020,
-    "cwc": 80099669,
+    "cwc": 80192986,
     "fork_owned_loc": 1146528,
-    "upstream_owned_fork_loc": 1532851,
-    "utr": 0.572092
+    "upstream_owned_fork_loc": 1533212,
+    "utr": 0.57215
   },
   "top_carry_risks": [
     {
@@ -53,10 +53,10 @@
       "upstream_frequency": 77
     },
     {
-      "added": 16805,
-      "cwc": 3722496,
+      "added": 16795,
+      "cwc": 3720576,
       "deleted": 2583,
-      "patch_size": 19388,
+      "patch_size": 19378,
       "path": "tui_gateway/server.py",
       "semantic_coupling": 2,
       "upstream_frequency": 96
@@ -71,10 +71,10 @@
       "upstream_frequency": 112
     },
     {
-      "added": 10029,
-      "cwc": 2827440,
-      "deleted": 1059,
-      "patch_size": 11088,
+      "added": 10377,
+      "cwc": 2913630,
+      "deleted": 1049,
+      "patch_size": 11426,
       "path": "hermes_cli/update_cmd.py",
       "semantic_coupling": 3,
       "upstream_frequency": 85
