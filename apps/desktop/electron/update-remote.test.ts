@@ -80,8 +80,16 @@ test('OFFICIAL_REPO_HTTPS_URL canonicalizes to OFFICIAL_REPO_CANONICAL', () => {
 test.each([
   ['official scp-style SSH', 'git@github.com:NousResearch/hermes-agent.git', OFFICIAL_REPO_HTTPS_URL],
   ['official ssh URL', 'ssh://git@github.com/NousResearch/hermes-agent.git', OFFICIAL_REPO_HTTPS_URL],
-  ['fork scp-style SSH', 'git@github.com:zapabob/hermes-agent-windows.git', 'https://github.com/zapabob/hermes-agent-windows.git'],
-  ['fork ssh URL', 'ssh://git@github.com/zapabob/hermes-agent-windows.git', 'https://github.com/zapabob/hermes-agent-windows.git'],
+  [
+    'fork scp-style SSH',
+    'git@github.com:zapabob/hermes-agent-windows.git',
+    'https://github.com/zapabob/hermes-agent-windows.git'
+  ],
+  [
+    'fork ssh URL',
+    'ssh://git@github.com/zapabob/hermes-agent-windows.git',
+    'https://github.com/zapabob/hermes-agent-windows.git'
+  ],
   ['official HTTPS', OFFICIAL_REPO_HTTPS_URL, 'origin'],
   ['fork HTTPS', 'https://github.com/zapabob/hermes-agent-windows.git', 'origin'],
   ['non-GitHub SSH', 'git@gitlab.com:example/hermes-agent.git', null],

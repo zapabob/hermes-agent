@@ -90,10 +90,7 @@ test('createLinkTitleWindow destroys the window if popup denial cannot be instal
     }
   }
 
-  assert.throws(
-    () => createLinkTitleWindow(ThrowingBrowserWindow, { id: 'link-titles' }),
-    /popup denial unavailable/
-  )
+  assert.throws(() => createLinkTitleWindow(ThrowingBrowserWindow, { id: 'link-titles' }), /popup denial unavailable/)
   assert.equal(destroyed, true)
 })
 
