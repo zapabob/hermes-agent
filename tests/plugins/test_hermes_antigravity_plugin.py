@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 import sys
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 
@@ -119,12 +120,24 @@ def test_candidate_paths_do_not_embed_a_developer_profile() -> None:
 def test_windows_candidate_rejects_shell_wrappers(
     monkeypatch, tmp_path: Path
 ) -> None:
+    host_os_name = os.name
     core = load_core()
     cmd = tmp_path / "agy.cmd"
     exe = tmp_path / "agy.exe"
     cmd.write_text("@echo off\n", encoding="utf-8")
     exe.write_bytes(b"MZ")
-    monkeypatch.setattr(core, "_is_windows", lambda: True)
+    real_os = core.os
+    monkeypatch.setattr(
+        core,
+        "os",
+        SimpleNamespace(
+            name="nt",
+            path=real_os.path,
+            access=real_os.access,
+            X_OK=real_os.X_OK,
+        ),
+    )
+    assert os.name == host_os_name
 
     assert core._is_executable_candidate(str(cmd)) is False
     assert core._is_executable_candidate(str(exe)) is True
