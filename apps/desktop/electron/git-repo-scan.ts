@@ -76,6 +76,7 @@ export function normalizeRepoScanPath(rawPath: string, options: RepoScanPathOpti
   // the synthetic POSIX home directory.
   if (path.isAbsolute(expanded) && !pathApi.isAbsolute(expanded)) {
     const nativeValue = path.normalize(expanded)
+
     return {
       key: process.platform === 'win32' ? nativeValue.toLocaleLowerCase('en-US') : nativeValue,
       value: nativeValue
