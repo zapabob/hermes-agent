@@ -70,6 +70,18 @@ export function normalizeRepoScanPath(rawPath: string, options: RepoScanPathOpti
   const value = pathApi.normalize(absolute)
   const key = platform === 'win32' ? value.toLocaleLowerCase('en-US') : value
 
+  // Tests may force a foreign platform while still creating paths on the
+  // host filesystem (for example, Darwin policy on a Windows runner). Keep
+  // those native absolute paths addressable instead of resolving them under
+  // the synthetic POSIX home directory.
+  if (path.isAbsolute(expanded) && !pathApi.isAbsolute(expanded)) {
+    const nativeValue = path.normalize(expanded)
+    return {
+      key: process.platform === 'win32' ? nativeValue.toLocaleLowerCase('en-US') : nativeValue,
+      value: nativeValue
+    }
+  }
+
   return { key, value }
 }
 

@@ -16119,7 +16119,13 @@ ipcMain.handle('hermes:notify', (_event, payload) => {
 
     // Approvals keep the existing session-scoped channel.
     if (payload?.sessionId && !payload?.notifyId && !payload?.activate) {
-      mainWindow.webContents.send('hermes:notification-action', { sessionId: payload.sessionId, actionId: action.id })
+      mainWindow.webContents.send('hermes:notification-action', {
+        connectionId: payload?.connectionId,
+        profile: payload?.profile,
+        requestId: payload?.requestId,
+        sessionId: payload.sessionId,
+        actionId: action.id
+      })
 
       return
     }

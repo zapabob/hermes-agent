@@ -1595,12 +1595,11 @@ test('drift heal respects a deliberate primary pick on a registered route', () =
   assert.equal(drifted.registry.primary, LOCAL_CONNECTION_ID)
 })
 
-test('drift heal ignores local, ssh, and unparseable v1 routes', () => {
+test('drift heal ignores local and unparseable v1 routes', () => {
   const registry = emptyRegistry()
 
   for (const v1 of [
     { mode: 'local', remote: {} },
-    { mode: 'ssh', remote: { host: 'box' } },
     { mode: 'remote', remote: { url: 'not a url' } },
     { mode: 'remote', remote: {} },
     null
@@ -1610,6 +1609,25 @@ test('drift heal ignores local, ssh, and unparseable v1 routes', () => {
     assert.equal(drifted.changed, false, `expected no heal for ${JSON.stringify(v1)}`)
     assert.equal(drifted.registry, registry)
   }
+})
+
+test('drift heal registers a valid v1 ssh route', () => {
+  const registry = emptyRegistry()
+  const drifted = reconcileRegistryDrift(registry, { mode: 'ssh', remote: { host: 'box' } })
+
+  assert.equal(drifted.changed, true)
+  const ssh = drifted.registry.connections.find(connection => connection.kind === 'ssh')
+  assert.ok(ssh)
+  assert.equal(ssh.host, 'box')
+  assert.equal(drifted.registry.primary, ssh.id)
+})
+
+test('drift heal ignores an unparseable v1 ssh route', () => {
+  const registry = emptyRegistry()
+  const drifted = reconcileRegistryDrift(registry, { mode: 'ssh', remote: {} })
+
+  assert.equal(drifted.changed, false)
+  assert.equal(drifted.registry, registry)
 })
 
 test('drift heal adds the missing remote without disturbing other registered sources', () => {
