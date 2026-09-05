@@ -4,12 +4,12 @@ Frozen upstream: b51c055a12220f8c7c18660e8599365012e19532
 
 | Metric | Value |
 | --- | ---: |
-| All fork-specific LOC | 2679379 |
-| Upstream-owned fork LOC | 1532851 |
+| All fork-specific LOC | 2679740 |
+| Upstream-owned fork LOC | 1533212 |
 | Fork-owned LOC | 1146528 |
-| UTR | 0.572092 |
+| UTR | 0.572150 |
 | Carry Surface | 5020 files |
-| CWC | 80099669 |
+| CWC | 80192986 |
 
 LOC is added plus deleted lines relative to the frozen upstream tree.
 Generated metric reports are excluded to avoid self-referential totals.
@@ -23,9 +23,9 @@ and 1 for tests, docs, workflows, and generated documentation.
 | gateway/run.py | 158 | 32603 | 2 | 10302548 |
 | hermes_cli/web_server.py | 95 | 21737 | 2 | 4130030 |
 | cli.py | 77 | 25125 | 2 | 3869250 |
-| tui_gateway/server.py | 96 | 19388 | 2 | 3722496 |
+| tui_gateway/server.py | 96 | 19378 | 2 | 3720576 |
 | hermes_state.py | 112 | 16244 | 2 | 3638656 |
-| hermes_cli/update_cmd.py | 85 | 11088 | 3 | 2827440 |
+| hermes_cli/update_cmd.py | 85 | 11426 | 3 | 2913630 |
 | hermes_cli/main.py | 73 | 15984 | 2 | 2333664 |
 | agent/auxiliary_client.py | 89 | 12702 | 2 | 2260956 |
 | agent/context_compressor.py | 82 | 9929 | 2 | 1628356 |
