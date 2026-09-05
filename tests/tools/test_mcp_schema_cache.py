@@ -110,3 +110,84 @@ class TestWriteSkip:
         # Changed payload → rewrite.
         msc.write_cache_entry("srv", "fp2", tools=tools, utility_tools=[])
         assert len(saves) == 2
+
+
+class TestWriteThroughPreservesSchema:
+    """The live SDK-to-cache path must retain required tool parameters."""
+
+    _SCHEMA = {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "model": {"type": "string"},
+        },
+        "required": ["query", "model"],
+    }
+
+    def _cache_write_through(self, tmp_path, monkeypatch):
+        import json
+        from unittest.mock import MagicMock, patch
+
+        from mcp.types import Tool
+
+        import tools.mcp_tool as mt
+        from tools.registry import ToolRegistry
+
+        monkeypatch.setattr(msc, "_cache_path", lambda: tmp_path / "cache.json")
+        # Live registration records per-server state in module globals. Keep
+        # this probe isolated so it cannot affect later discovery assertions.
+        for attr in (
+            "_lazy_server_tool_names",
+            "_lazy_server_configs",
+            "_lazy_server_fingerprints",
+            "_mcp_tool_server_names",
+            "_server_trust_levels",
+            "_tool_read_only_hints",
+        ):
+            monkeypatch.setattr(mt, attr, {})
+
+        server = mt.MCPServerTask("probe_srv")
+        server._tools = [
+            Tool(name="zhida", description="probe", inputSchema=self._SCHEMA)
+        ]
+        server.session = MagicMock()
+
+        with patch("tools.registry.registry", ToolRegistry()):
+            registered = mt._register_server_tools("probe_srv", server, {})
+
+        assert registered, "tool was not registered; write-through never ran"
+        return json.loads(
+            (tmp_path / "cache.json").read_text(encoding="utf-8")
+        )["probe_srv"]
+
+    def test_cached_schema_keeps_properties(self, tmp_path, monkeypatch):
+        cached = self._cache_write_through(tmp_path, monkeypatch)["tools"][0][
+            "inputSchema"
+        ]
+        assert set(cached.get("properties", {})) == {"query", "model"}
+
+    def test_cached_schema_keeps_required(self, tmp_path, monkeypatch):
+        cached = self._cache_write_through(tmp_path, monkeypatch)["tools"][0][
+            "inputSchema"
+        ]
+        assert cached.get("required") == ["query", "model"]
+
+    def test_cache_round_trip_reaches_agent_schema(self, tmp_path, monkeypatch):
+        from unittest.mock import patch
+
+        import tools.mcp_tool as mt
+        from tools.registry import ToolRegistry
+
+        entry = self._cache_write_through(tmp_path, monkeypatch)
+        lazy_registry = ToolRegistry()
+        with patch("tools.registry.registry", lazy_registry):
+            names = mt._register_from_cache_sync("probe_srv", {}, entry)
+
+        assert names, "lazy registration produced no tools"
+        schema = lazy_registry.get_schema("mcp__probe_srv__zhida")
+        assert schema is not None
+        assert set(schema["parameters"].get("properties", {})) == {
+            "query",
+            "model",
+        }
+        assert schema["parameters"].get("required") == ["query", "model"]
