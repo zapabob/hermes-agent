@@ -2,56 +2,38 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 )
 
-func TestRequireAdminRejectsEmptyToken(t *testing.T) {
-	cfg := Config{AdminToken: ""}
-	wd := NewWatchdog(cfg, NewLogger(t.TempDir() + "/test.log"))
-	srv := NewHTTPServer(cfg, wd, func() {})
-	req := httptest.NewRequest("POST", "/api/v1/pause", nil)
-	req.Header.Set("Authorization", "Bearer anything")
-	w := httptest.NewRecorder()
-	srv.handlePause(w, req)
-	if w.Code != 403 {
-		t.Fatalf("expected 403, got %d", w.Code)
-	}
-}
-
-func TestRequireAdminRejectsWrongToken(t *testing.T) {
-	cfg := Config{AdminToken: "secret-token"}
+func TestMutatingRoutesAreNotRegistered(t *testing.T) {
+	cfg := Config{}
 	wd := NewWatchdog(cfg, NewLogger(t.TempDir()+"/test.log"))
-	srv := NewHTTPServer(cfg, wd, func() {})
-	req := httptest.NewRequest("POST", "/api/v1/pause", nil)
-	req.Header.Set("X-Admin-Token", "wrong")
-	w := httptest.NewRecorder()
-	srv.handlePause(w, req)
-	if w.Code != 401 {
-		t.Fatalf("expected 401, got %d", w.Code)
-	}
-}
-
-func TestRequireAdminAcceptsBearer(t *testing.T) {
-	cfg := Config{AdminToken: "secret-token"}
-	wd := NewWatchdog(cfg, NewLogger(t.TempDir()+"/test.log"))
-	srv := NewHTTPServer(cfg, wd, func() {})
-	req := httptest.NewRequest("POST", "/api/v1/pause", nil)
-	req.Header.Set("Authorization", "Bearer secret-token")
-	w := httptest.NewRecorder()
-	srv.handlePause(w, req)
-	if w.Code != 200 {
-		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
-	}
-	if !wd.IsPaused() {
-		t.Fatal("expected paused")
+	srv := NewHTTPServer(wd)
+	for _, path := range []string{
+		"/api/v1/pause",
+		"/api/v1/resume",
+		"/api/v1/cycle",
+		"/api/v1/stop",
+		"/api/v1/restart",
+		"/api/v1/force-restart",
+	} {
+		req := httptest.NewRequest(http.MethodPost, path, nil)
+		req.Header.Set("Authorization", "Bearer secret-token")
+		req.Header.Set("X-Admin-Token", "secret-token")
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("%s must not be registered; got %d body=%s", path, w.Code, w.Body.String())
+		}
 	}
 }
 
 func TestStatusJSON(t *testing.T) {
-	cfg := Config{AdminToken: "x", ListenAddr: "127.0.0.1:9920"}
+	cfg := Config{ListenAddr: "127.0.0.1:9920"}
 	wd := NewWatchdog(cfg, NewLogger(t.TempDir()+"/test.log"))
-	srv := NewHTTPServer(cfg, wd, func() {})
+	srv := NewHTTPServer(wd)
 	req := httptest.NewRequest("GET", "/api/status", nil)
 	w := httptest.NewRecorder()
 	srv.handleStatus(w, req)

@@ -23,7 +23,6 @@ type cycleResult struct {
 type WatchdogState struct {
 	UpdatedAt               string      `json:"updatedAt"`
 	WatchdogPID             int         `json:"watchdogPid"`
-	Paused                  bool        `json:"paused"`
 	MaintenanceState        string      `json:"maintenanceState"`
 	MaintenanceOwner        string      `json:"maintenanceOwner,omitempty"`
 	Result                  cycleResult `json:"result"`
@@ -41,7 +40,6 @@ type Watchdog struct {
 
 	cycleMu          sync.Mutex
 	mu               sync.RWMutex
-	paused           bool
 	failCount        int
 	maintenanceState string
 	maintenanceOwner string
@@ -94,19 +92,6 @@ func (w *Watchdog) State() WatchdogState {
 	return w.lastState
 }
 
-func (w *Watchdog) SetPaused(v bool) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.paused = v
-	w.lastState.Paused = v
-}
-
-func (w *Watchdog) IsPaused() bool {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-	return w.paused
-}
-
 func (w *Watchdog) maintenanceSuspended() bool {
 	state, active, err := maintenanceMode(w.cfg.MaintenancePath, time.Now())
 	if err != nil {
@@ -125,7 +110,6 @@ func (w *Watchdog) saveState(result cycleResult) {
 	w.lastState = WatchdogState{
 		UpdatedAt:               time.Now().Format(time.RFC3339),
 		WatchdogPID:             os.Getpid(),
-		Paused:                  w.paused,
 		MaintenanceState:        w.maintenanceState,
 		MaintenanceOwner:        w.maintenanceOwner,
 		Result:                  result,
@@ -145,11 +129,6 @@ func (w *Watchdog) saveState(result cycleResult) {
 func (w *Watchdog) RunCycle() cycleResult {
 	w.cycleMu.Lock()
 	defer w.cycleMu.Unlock()
-	if w.IsPaused() {
-		res := cycleResult{Desktop: "paused", Backend: "paused", Embedding: "paused"}
-		w.saveState(res)
-		return res
-	}
 	if w.maintenanceSuspended() {
 		res := cycleResult{Desktop: "maintenance", Backend: "maintenance", Embedding: "maintenance"}
 		w.saveState(res)
