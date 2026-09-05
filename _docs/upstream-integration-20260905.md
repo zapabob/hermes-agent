@@ -865,3 +865,28 @@ UPSTREAM_ADOPTION.yaml is the commit-level authority. Decisions derive from
 each commit subject, touched paths, and intersections with the downstream
 delta. Semantic conflict resolution is excluded from this generator and must
 preserve the policy files under .codex.
+
+## Integration verification checkpoint
+
+The composed tree at `e8ab2d22e92f87af4975e4b2bcc5761df409a72d`
+completed the stacked-branch verification campaign before pull request 102 was
+retargeted to `main` on 2026-09-06. The exact-head evidence was:
+
+- CI run 33968981634: success. The parallel Python summary reported 3,567
+  files, 41,782 passing tests, zero failing tests, and 435 skipped tests.
+- Windows Workstation Tier-1 run 33968993844: success across all seven jobs.
+- Nix flake run 33968981340: success.
+- Docker run 33968981330: success.
+
+Pull request 102 was then retargeted from
+`codex/daybreak-b51c-integration` to `main` without changing the frozen
+upstream input. This checkpoint commit exists to trigger and distinguish the
+required `main`-target validation from the earlier stacked-branch results.
+Pull request 101 remains open until the `main`-target campaign and integration
+are complete.
+
+Operational exclusions remain explicit: the primary checkout is not modified,
+the disabled `HermesGoWatchdogBootAutoStart` scheduled task is not treated as
+reboot-durability evidence, and the missing machine-wide
+`C:\Users\downl\_docs\prompts\CLAUDE-FABLE-5.md` remains a recorded
+pre-implementation-context limitation.
