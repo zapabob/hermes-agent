@@ -18,6 +18,10 @@ def _launcher() -> str:
     return LAUNCHER.read_text(encoding="utf-8")
 
 
+def test_launcher_source_is_windows_powershell_compatible_ascii() -> None:
+    _launcher().encode("ascii")
+
+
 def _run_stop(local_app_data: Path) -> subprocess.CompletedProcess[str]:
     powershell = shutil.which("powershell.exe")
     assert powershell is not None, "Windows PowerShell is required"
