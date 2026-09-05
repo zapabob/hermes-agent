@@ -17,12 +17,12 @@
   "schema_version": 1,
   "snapshot_sha": "5a8e8a6b87487c0e0785cd9eb561cc6a96c64f5e",
   "summary": {
-    "all_fork_specific_loc": 724869,
+    "all_fork_specific_loc": 724962,
     "carry_surface_files": 2372,
-    "cwc": 2667106,
+    "cwc": 2674582,
     "fork_owned_loc": 408546,
-    "upstream_owned_fork_loc": 316323,
-    "utr": 0.436386
+    "upstream_owned_fork_loc": 316416,
+    "utr": 0.436459
   },
   "top_carry_risks": [
     {
@@ -89,6 +89,15 @@
       "upstream_frequency": 41
     },
     {
+      "added": 169,
+      "cwc": 96232,
+      "deleted": 877,
+      "patch_size": 1046,
+      "path": "hermes_cli/update_cmd.py",
+      "semantic_coupling": 2,
+      "upstream_frequency": 46
+    },
+    {
       "added": 943,
       "cwc": 94668,
       "deleted": 1115,
@@ -96,15 +105,6 @@
       "path": "agent/auxiliary_client.py",
       "semantic_coupling": 2,
       "upstream_frequency": 23
-    },
-    {
-      "added": 107,
-      "cwc": 88780,
-      "deleted": 858,
-      "patch_size": 965,
-      "path": "hermes_cli/update_cmd.py",
-      "semantic_coupling": 2,
-      "upstream_frequency": 46
     },
     {
       "added": 758,
