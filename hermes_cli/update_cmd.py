@@ -36,10 +36,24 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from hermes_cli._subprocess_compat import noninteractive_git_env
 from hermes_cli.config import get_hermes_home
 from hermes_constants import venv_python_path
 
 logger = logging.getLogger(__name__)
+
+
+def _no_prompt_git_kwargs() -> dict[str, object]:
+    """Return fail-closed subprocess options for network Git operations.
+
+    A remote may answer an anonymous request with HTTP 401 and cause Git to
+    prompt on the inherited terminal. Disable only interactive prompting;
+    configured credential helpers and askpass integrations remain available.
+    """
+    return {
+        "stdin": subprocess.DEVNULL,
+        "env": noninteractive_git_env(),
+    }
 
 
 def _m():
@@ -2746,6 +2760,7 @@ def _sync_fork_with_upstream(git_cmd: list[str], cwd: Path) -> bool:
             cwd=cwd,
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
+            **_no_prompt_git_kwargs(),
         )
         return result.returncode == 0
     except Exception:
@@ -2808,6 +2823,7 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
             cwd=cwd,
             capture_output=True,
             check=True,
+            **_no_prompt_git_kwargs(),
         )
     except subprocess.CalledProcessError:
         print("  ✗ Failed to fetch upstream. Skipping upstream sync.")
@@ -2847,6 +2863,7 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
             git_cmd + ["pull", "--ff-only", "upstream", "main"],
             cwd=cwd,
             check=True,
+            **_no_prompt_git_kwargs(),
         )
     except subprocess.CalledProcessError:
         print(
@@ -3969,7 +3986,14 @@ def _classify_fetch_failure(stderr: str) -> str:
         )
     if "Could not resolve host" in stderr or "unable to access" in stderr:
         return "✗ Network error — cannot reach the remote repository."
-    if "Authentication failed" in stderr or "could not read Username" in stderr:
+    if "could not read Username" in stderr or "terminal prompts disabled" in stderr:
+        return (
+            "✗ GitHub rejected the anonymous fetch (asked for a login) — this"
+            " usually means a GitHub outage; try again in a few minutes"
+            " (https://www.githubstatus.com). If it persists, check"
+            " `git remote -v` points at a public repo."
+        )
+    if "Authentication failed" in stderr:
         return "✗ Authentication failed — check your git credentials or SSH key."
     return "✗ Failed to fetch updates from origin."
 
@@ -4079,6 +4103,7 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
                 cwd=_m().PROJECT_ROOT,
                 capture_output=True,
                 text=True, encoding="utf-8", errors="replace",
+                **_no_prompt_git_kwargs(),
             )
         if fetch_result is not None and fetch_result.returncode == 0:
             upstream_exists = True
@@ -4091,6 +4116,7 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
                 cwd=_m().PROJECT_ROOT,
                 capture_output=True,
                 text=True, encoding="utf-8", errors="replace",
+                **_no_prompt_git_kwargs(),
             )
             upstream_exists = False
             compare_branch = f"origin/{branch}"
@@ -4102,6 +4128,7 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
             cwd=_m().PROJECT_ROOT,
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
+            **_no_prompt_git_kwargs(),
         )
         upstream_exists = False
         compare_branch = f"origin/{branch}"
@@ -7665,6 +7692,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
             cwd=_m().PROJECT_ROOT,
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
+            **_no_prompt_git_kwargs(),
         )
         if fetch_result.returncode != 0:
             _print_fetch_failure(fetch_result.stderr)
