@@ -2979,9 +2979,7 @@ async function checkUpdates() {
     // flagging that as an update nudges the user into wiping their work.
     const tipsEqual = Boolean(currentSha && currentSha === targetSha)
 
-    const sshBehind = tipsEqual
-      ? 0
-      : await fetchCompareBehindCount({ currentSha, originUrl: passiveRemote, targetSha })
+    const sshBehind = tipsEqual ? 0 : await fetchCompareBehindCount({ currentSha, originUrl: passiveRemote, targetSha })
 
     const upToDate = tipsEqual || sshBehind === 0
 
@@ -12423,11 +12421,7 @@ async function startHermes() {
           return null
         }
 
-        await advanceBootProgress(
-          'backend.watchdog',
-          `Using watchdog prewarmed backend at ${prewarmed.baseUrl}`,
-          50
-        )
+        await advanceBootProgress('backend.watchdog', `Using watchdog prewarmed backend at ${prewarmed.baseUrl}`, 50)
         rememberLog(`Watchdog prewarmed backend ready at ${prewarmed.baseUrl}`)
         await waitForHermes(prewarmed.baseUrl, prewarmed.token)
         updateBootProgress({
