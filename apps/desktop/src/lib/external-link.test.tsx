@@ -123,15 +123,33 @@ describe('external link helpers', () => {
 
   // Platform-specific on purpose (same rule as terminal links / middle-click):
   // ⌘ on macOS, Ctrl elsewhere. The suite runs as non-mac.
-  it('escapes to the OS browser on the platform open-elsewhere modifier', () => {
+  it('opens X and YouTube in the OS browser only after an explicit open-elsewhere click', () => {
     const openExternal = vi.fn().mockResolvedValue(undefined)
     installDesktopBridge({ openExternal: openExternal as unknown as Window['hermesDesktop']['openExternal'] })
 
-    render(<ExternalLink href="https://example.com/path/to/resource">Example link</ExternalLink>)
+    const targets = [
+      ['X post', 'https://x.com/hermes/status/123'],
+      ['YouTube video', 'https://www.youtube.com/watch?v=explicit-click-only']
+    ] as const
 
-    fireEvent.click(screen.getByRole('link', { name: 'Example link' }), IS_MAC ? { metaKey: true } : { ctrlKey: true })
+    render(
+      <>
+        {targets.map(([label, href]) => (
+          <ExternalLink href={href} key={href}>
+            {label}
+          </ExternalLink>
+        ))}
+      </>
+    )
 
-    expect(openExternal).toHaveBeenCalledWith('https://example.com/path/to/resource')
+    expect(openExternal).not.toHaveBeenCalled()
+
+    for (const [label, href] of targets) {
+      fireEvent.click(screen.getByRole('link', { name: label }), IS_MAC ? { metaKey: true } : { ctrlKey: true })
+      expect(openExternal).toHaveBeenLastCalledWith(href)
+    }
+
+    expect(openExternal).toHaveBeenCalledTimes(targets.length)
     expect($previewTabs.get()).toHaveLength(0)
   })
 
