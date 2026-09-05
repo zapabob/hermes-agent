@@ -17,12 +17,12 @@
   "schema_version": 1,
   "snapshot_sha": "5a8e8a6b87487c0e0785cd9eb561cc6a96c64f5e",
   "summary": {
-    "all_fork_specific_loc": 724855,
-    "carry_surface_files": 2371,
-    "cwc": 2666290,
+    "all_fork_specific_loc": 724869,
+    "carry_surface_files": 2372,
+    "cwc": 2667106,
     "fork_owned_loc": 408546,
-    "upstream_owned_fork_loc": 316309,
-    "utr": 0.436376
+    "upstream_owned_fork_loc": 316323,
+    "utr": 0.436386
   },
   "top_carry_risks": [
     {
@@ -161,6 +161,15 @@
       "upstream_frequency": 23
     },
     {
+      "added": 38,
+      "cwc": 22236,
+      "deleted": 180,
+      "patch_size": 218,
+      "path": "apps/desktop/electron/main.ts",
+      "semantic_coupling": 3,
+      "upstream_frequency": 34
+    },
+    {
       "added": 37,
       "cwc": 22168,
       "deleted": 289,
@@ -176,15 +185,6 @@
       "patch_size": 321,
       "path": "hermes_cli/config_defaults.py",
       "semantic_coupling": 2,
-      "upstream_frequency": 34
-    },
-    {
-      "added": 31,
-      "cwc": 21420,
-      "deleted": 179,
-      "patch_size": 210,
-      "path": "apps/desktop/electron/main.ts",
-      "semantic_coupling": 3,
       "upstream_frequency": 34
     },
     {
