@@ -273,7 +273,11 @@ class TestKillStaleDashboardWindows:
 
         with patch("hermes_cli.main._find_stale_dashboard_pids",
                    return_value=[12345, 12346]), \
-             patch("subprocess.run", side_effect=fake_run) as mock_run:
+             patch("subprocess.run", side_effect=fake_run) as mock_run, \
+             patch("gateway.status.get_process_start_time",
+                   side_effect=lambda pid: 1000 + pid), \
+             patch("hermes_cli._subprocess_compat.pid_is_hermes",
+                   return_value=True):
             _kill_stale_dashboard_processes()
 
         # Each PID triggered a taskkill /PID <n> /F invocation.

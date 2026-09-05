@@ -184,9 +184,11 @@ def test_shell_hooks_hide_hook_command_windows(monkeypatch):
     )
 
     assert result["returncode"] == 0
-    assert captured[0][1]["creationflags"] == _CREATE_NO_WINDOW
+    hook_spawns = [entry for entry in captured if entry[0][:1] == ["hook-bin"]]
+    assert hook_spawns, captured
+    assert hook_spawns[0][1]["creationflags"] == _CREATE_NO_WINDOW
     # The POSIX-only process_group kwarg must NOT reach a Windows spawn.
-    assert "process_group" not in captured[0][1]
+    assert "process_group" not in hook_spawns[0][1]
 
 
 def test_agent_browser_npx_warmup_hides_npx_window(monkeypatch):
