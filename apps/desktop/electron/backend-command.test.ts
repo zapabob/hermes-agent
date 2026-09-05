@@ -2,12 +2,7 @@ import assert from 'node:assert/strict'
 
 import { test } from 'vitest'
 
-import {
-  dashboardFallbackArgs,
-  serveBackendArgs,
-  sourceDeclaresServe,
-  sourceDeclaresWsOnly
-} from './backend-command'
+import { dashboardFallbackArgs, serveBackendArgs, sourceDeclaresServe, sourceDeclaresWsOnly } from './backend-command'
 
 test('serveBackendArgs builds a headless serve invocation WITHOUT --ws-only by default', () => {
   // Opt-in until the desktop REST plane migrates to JSON-RPC (#94484 ph.3):
@@ -20,7 +15,14 @@ test('serveBackendArgs pins a profile when provided', () => {
 })
 
 test('serveBackendArgs emits --ws-only only on explicit opt-in', () => {
-  assert.deepEqual(serveBackendArgs(undefined, { wsOnly: true }), ['serve', '--host', '127.0.0.1', '--port', '0', '--ws-only'])
+  assert.deepEqual(serveBackendArgs(undefined, { wsOnly: true }), [
+    'serve',
+    '--host',
+    '127.0.0.1',
+    '--port',
+    '0',
+    '--ws-only'
+  ])
   assert.deepEqual(serveBackendArgs(undefined, { wsOnly: false }), ['serve', '--host', '127.0.0.1', '--port', '0'])
 })
 

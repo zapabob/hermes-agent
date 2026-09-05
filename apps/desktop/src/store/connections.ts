@@ -281,9 +281,11 @@ export async function selectConnection(connectionId: string, options: SelectConn
   const currentConnectionId = $activeConnectionId.get()
   const currentProfile = normalizeProfileKey($activeGatewayProfile.get())
   const explicitProfile = String(options.profile ?? '').trim()
+
   const targetProfile = normalizeProfileKey(
     explicitProfile || ($lastProfileByConnection.get()[connectionId] ?? 'default')
   )
+
   const targetKey = `${connectionId}::${targetProfile}`
 
   const targetIsActive = () => {

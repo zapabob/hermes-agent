@@ -206,13 +206,7 @@ describe('modelOptionsQueryKey', () => {
     const sourceBKey = modelOptionsQueryKey('default', 'session-1', 'source-b')
     const queryClient = new QueryClient()
 
-    expect(sourceAKey).toEqual([
-      'model-options',
-      'default',
-      'session-1',
-      'owner',
-      'source-a'
-    ])
+    expect(sourceAKey).toEqual(['model-options', 'default', 'session-1', 'owner', 'source-a'])
     queryClient.setQueryData(sourceAKey, { providers: [{ models: ['a/model'], slug: 'a' }] })
     queryClient.setQueryData(sourceBKey, { providers: [{ models: ['b/model'], slug: 'b' }] })
 
@@ -260,11 +254,13 @@ describe('manualPickRemoved', () => {
 
 describe('reconcileSelectionAfterCatalogRefresh', () => {
   const zhipu = { name: '智谱2', slug: 'zhipu', models: ['glm-4.5-air', 'glm-5-turbo'] }
+
   const bytea = {
     name: '字节A',
     slug: 'byteplus',
     models: ['deepseek-v4-flash', 'doubao-seed-2.0-pro']
   }
+
   const moa = { name: 'Mixture of Agents', slug: 'moa', models: ['default'] }
 
   it('switches to the first new-group model when the current pick is gone', () => {

@@ -419,6 +419,7 @@ export function PreviewPane({ embedded = false, onRestartServer, reloadRequest =
         const viewport = (await bindPreviewExecuteJavaScript(webview)(
           '({ width: window.innerWidth, height: window.innerHeight })'
         )) as { height: number; width: number }
+
         const dataUrl = await window.hermesDesktop.capturePreview?.({ rect, viewport, webContentsId })
 
         if (!dataUrl) {
@@ -457,6 +458,7 @@ export function PreviewPane({ embedded = false, onRestartServer, reloadRequest =
     setAnnotate(emptyAnnotateSession())
 
     const guest = annotateGuest()
+
     if (guest) {
       void teardownAnnotateOverlay(guest).catch(() => undefined)
     }
@@ -464,6 +466,7 @@ export function PreviewPane({ embedded = false, onRestartServer, reloadRequest =
 
   const saveAnnotateDraft = useCallback(async () => {
     const session = annotateRef.current
+
     if (!session.draft) {
       return
     }
@@ -574,6 +577,7 @@ export function PreviewPane({ embedded = false, onRestartServer, reloadRequest =
 
       if (event.type === 'end') {
         await stopAnnotate()
+
         break
       }
 
@@ -581,6 +585,7 @@ export function PreviewPane({ embedded = false, onRestartServer, reloadRequest =
         setAnnotate(session =>
           session.draft ? { ...session, draft: { ...session.draft, rect: event.rect } } : session
         )
+
         continue
       }
 
