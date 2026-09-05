@@ -23,6 +23,7 @@ import { useModelControls } from './use-model-controls'
 const setGlobalModel = vi.fn()
 const notify = vi.fn()
 const notifyError = vi.fn()
+const dismissNotification = vi.fn()
 const sessionTileDelegateMock = vi.hoisted(() => vi.fn())
 
 vi.mock('@/hermes', () => ({
@@ -54,6 +55,7 @@ vi.mock('@/i18n', () => ({
 }))
 
 vi.mock('@/store/notifications', () => ({
+  dismissNotification: (...args: Parameters<typeof dismissNotification>) => dismissNotification(...args),
   notify: (...args: Parameters<typeof notify>) => notify(...args),
   notifyError: (...args: Parameters<typeof notifyError>) => notifyError(...args)
 }))
@@ -80,6 +82,7 @@ function Harness({
 describe('useModelControls', () => {
   beforeEach(() => {
     notifyError.mockReset()
+    dismissNotification.mockReset()
     sessionTileDelegateMock.mockReset().mockReturnValue(null)
     $activeGatewayProfile.set('default')
     $activeSessionId.set(null)
@@ -406,7 +409,7 @@ describe('useModelControls', () => {
     expect(requestGateway).toHaveBeenCalledTimes(1)
     expect($currentModel.get()).toBe('fable-5')
     expect($currentProvider.get()).toBe('nous')
-    expect(notifyError).toHaveBeenCalledWith(expect.any(Error), 'Model switch failed')
+    expect(notifyError).not.toHaveBeenCalled()
   })
 
   it('keeps a mid-turn pick painted and skips the refetch that would repaint the old model', async () => {
@@ -497,7 +500,7 @@ describe('useModelControls', () => {
       confirm_expensive_model: true,
       key: 'model',
       session_id: 'session-1',
-      value: 'muse-spark-1.2-contributor --provider opencode-go --global'
+      value: 'muse-spark-1.2-contributor --provider opencode-go --session'
     })
     expect($currentModel.get()).toBe('muse-spark-1.2-contributor')
     expect($currentProvider.get()).toBe('opencode-go')

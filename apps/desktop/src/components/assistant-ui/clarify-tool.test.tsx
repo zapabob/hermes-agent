@@ -769,8 +769,10 @@ function armCrossProfileOwner() {
   setSessionOwnerHint('session-a', { connectionId: OWNER_CONNECTION_ID, profile: OWNER_PROFILE })
 
   const ambient = vi.fn().mockResolvedValue({ ok: true })
+  const ownerGateway = { connectionState: 'open', request: vi.fn().mockResolvedValue({ ok: true }) }
 
   $activeSessionId.set('session-a')
+  setPrimaryGateway(ownerGateway as never, OWNER_PROFILE, OWNER_CONNECTION_ID)
   $gateway.set({ request: ambient } as never)
 
   return ambient
@@ -801,6 +803,7 @@ describe('ClarifyTool owner routing', () => {
       multiSelect: false,
       question: 'Which deployment target?',
       requestId: 'request-1',
+      scope: gatewayScope(OWNER_CONNECTION_ID, OWNER_PROFILE),
       sessionId: 'session-a'
     })
     renderClarify(<ClarifyTool {...liveClarifyProps()} />)
@@ -827,6 +830,7 @@ describe('ClarifyTool owner routing', () => {
         { choices: null, multiSelect: false, qid: 'q1', question: 'Name?' }
       ],
       requestId: 'request-batch',
+      scope: gatewayScope(OWNER_CONNECTION_ID, OWNER_PROFILE),
       sessionId: 'session-a'
     })
     renderClarify(<ClarifyTool {...liveBatchProps()} />)
@@ -856,6 +860,7 @@ describe('ClarifyTool owner routing', () => {
         { choices: null, multiSelect: false, qid: 'q1', question: 'Name?' }
       ],
       requestId: 'request-batch',
+      scope: gatewayScope(OWNER_CONNECTION_ID, OWNER_PROFILE),
       sessionId: 'session-a'
     })
     renderClarify(<ClarifyTool {...liveBatchProps()} />)
