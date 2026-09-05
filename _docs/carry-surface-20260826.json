@@ -17,12 +17,12 @@
   "schema_version": 1,
   "snapshot_sha": "5a8e8a6b87487c0e0785cd9eb561cc6a96c64f5e",
   "summary": {
-    "all_fork_specific_loc": 724962,
+    "all_fork_specific_loc": 724968,
     "carry_surface_files": 2372,
-    "cwc": 2674582,
+    "cwc": 2674622,
     "fork_owned_loc": 408546,
-    "upstream_owned_fork_loc": 316416,
-    "utr": 0.436459
+    "upstream_owned_fork_loc": 316422,
+    "utr": 0.436463
   },
   "top_carry_risks": [
     {
