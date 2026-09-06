@@ -36,20 +36,17 @@ def _msys_to_windows_path(cwd: str) -> str:
     No-ops on non-Windows hosts or for paths that aren't in MSYS form.
     Returns the input unchanged when no translation applies. This is
     idempotent — calling it on an already-Windows path returns it as-is.
+
+    Implementation delegates to
+    :func:`downstream.platform.windows.paths.translate_msys_drive_path` so
+    CLI and local environment share one drive-alias contract.
     """
     if not _IS_WINDOWS or not cwd:
         return cwd
-    # Match leading "/<single letter>/" or exactly "/<letter>" (bare drive root),
-    # plus /cygdrive/<letter>/... and /mnt/<letter>/... variants.
-    m = re.match(r'^/(?:(?:cygdrive|mnt)/)?([a-zA-Z])(/.*)?$', cwd)
-    if not m:
-        return cwd
-    # Reject /cygdrive or /mnt with no drive letter — the optional group above
-    # already requires the letter. Multi-char first segments (/home, /tmp)
-    # fail the single-letter capture and fall through as no-ops.
-    drive = m.group(1).upper()
-    tail = (m.group(2) or "").replace('/', '\\')
-    return f"{drive}:{tail or chr(92)}"  # chr(92) = backslash, avoid raw-string escape
+    from downstream.platform.windows.paths import translate_msys_drive_path
+
+    translated = translate_msys_drive_path(cwd)
+    return translated if translated is not None else cwd
 
 
 def _resolve_local_initial_cwd(cwd: str) -> str:
