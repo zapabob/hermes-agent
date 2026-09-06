@@ -1,3 +1,4 @@
+import { resolveBrowserOpenDeepLink } from '@/lib/browser-deeplink'
 import type { PluginInstallLegacyHint } from '@/store/plugin-install-request'
 
 export interface DeepLinkPayload {
@@ -9,6 +10,9 @@ export interface DeepLinkPayload {
 export type DeepLinkAction =
   | { type: 'plugin-install'; repo: string; enable: boolean; force: boolean; legacyHint: PluginInstallLegacyHint }
   | { type: 'composer-blueprint'; name: string; params: Record<string, string> }
+  | { type: 'open-browser'; url: string | null }
+  /** Claimed by a core handler but intentionally a no-op (do not navigate). */
+  | { type: 'handled' }
   | { type: 'ignore' }
 
 function truthyParam(value: string | undefined, defaultValue = false): boolean {
@@ -24,6 +28,18 @@ function truthyParam(value: string | undefined, defaultValue = false): boolean {
 export function resolveDeepLinkAction(payload: DeepLinkPayload | null | undefined): DeepLinkAction {
   if (!payload?.kind) {
     return { type: 'ignore' }
+  }
+
+  const browserOpen = resolveBrowserOpenDeepLink(payload)
+
+  if (browserOpen) {
+    return { type: 'open-browser', url: browserOpen.url }
+  }
+
+  // Reject mistyped open/browser?url=javascript:… before the generic open/
+  // router navigates to `/browser` (a non-route that used to swallow the link).
+  if (payload.kind === 'open' && (payload.name || '').replace(/^\//, '').toLowerCase() === 'browser') {
+    return { type: 'handled' }
   }
 
   if (payload.kind === 'blueprint' && payload.name) {

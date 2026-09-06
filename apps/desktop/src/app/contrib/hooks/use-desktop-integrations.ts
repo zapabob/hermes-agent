@@ -4,6 +4,7 @@ import { closeActiveTab } from '@/app/chat/close-tab'
 import { commandFocusedPreview } from '@/app/chat/right-rail/preview-nav'
 import { openSession } from '@/app/open-session'
 import { resolveDeepLinkAction } from '@/lib/deeplink-routes'
+import { hostPathLabel } from '@/lib/external-link'
 import { pathFromHermesDeepLink, resolveHermesOpenPath } from '@/lib/hermes-open-target'
 import { storedSessionIdForNotification } from '@/lib/session-ids'
 import { requestMcpInstallFromDeepLink } from '@/store/mcp-deeplink-install'
@@ -15,6 +16,7 @@ import {
   respondToApprovalAction
 } from '@/store/native-notifications'
 import { openPluginInstallRequest } from '@/store/plugin-install-request'
+import { openBrowserTab, openPreview } from '@/store/preview'
 import { openFolderAsProject } from '@/store/projects'
 import {
   getRememberedRoute,
@@ -241,6 +243,7 @@ export function useDesktopIntegrations({
   //  - plugin/install?… (and legacy plugin-agent/plugin-desktop) → plugin install
   //    modal awaiting explicit confirmation. Never auto-installs.
   //  - blueprint/<name>?… → reviewable /blueprint command in the composer
+  //  - open/browser?url=… → in-app Browser tab (Chrome/Edge → Hermes hand-off)
   //  - <plugin>/<path>?… → in-app navigate (e.g. index-network/intent/1)
   //  - open/<path>?… → in-app navigate (generic)
   useEffect(() => {
@@ -256,6 +259,26 @@ export function useDesktopIntegrations({
       }
 
       const action = resolveDeepLinkAction(payload)
+
+      // Core-owned deep links that were claimed (including hard rejects such as
+      // open/browser?url=javascript:…) must not fall through to the generic
+      // open/ router — that used to navigate to `/browser`, a non-route.
+      if (action.type === 'handled') {
+        return
+      }
+
+      if (action.type === 'open-browser') {
+        if (action.url) {
+          openPreview(
+            { kind: 'url', label: hostPathLabel(action.url), source: action.url, url: action.url },
+            'explicit-link'
+          )
+        } else {
+          openBrowserTab()
+        }
+
+        return
+      }
 
       if (action.type === 'composer-blueprint') {
         const slots = Object.entries(action.params || {})

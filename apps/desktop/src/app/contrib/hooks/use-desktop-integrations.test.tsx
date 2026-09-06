@@ -2,6 +2,7 @@ import { renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { requestMcpInstallFromDeepLink } from '@/store/mcp-deeplink-install'
+import { openBrowserTab, openPreview } from '@/store/preview'
 import { _resetLegacyDiscardForTests } from '@/store/session'
 import type * as WindowsStore from '@/store/windows'
 import type { SessionInfo } from '@/types/hermes'
@@ -18,6 +19,16 @@ const { hudWindowMock } = vi.hoisted(() => ({ hudWindowMock: vi.fn(() => false) 
 vi.mock('@/store/mcp-deeplink-install', () => ({
   requestMcpInstallFromDeepLink: vi.fn()
 }))
+
+vi.mock('@/store/preview', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/store/preview')>()
+
+  return {
+    ...actual,
+    openPreview: vi.fn(),
+    openBrowserTab: vi.fn()
+  }
+})
 
 vi.mock('@/store/windows', async importOriginal => {
   const actual = await importOriginal<typeof WindowsStore>()
@@ -47,6 +58,8 @@ describe('useDesktopIntegrations', () => {
     window.localStorage.clear()
     _resetLegacyDiscardForTests()
     vi.mocked(requestMcpInstallFromDeepLink).mockClear()
+    vi.mocked(openPreview).mockClear()
+    vi.mocked(openBrowserTab).mockClear()
     navigate = vi.fn()
     // Every test starts as a main window; only the HUD describe flips this.
     hudWindowMock.mockReturnValue(false)
@@ -508,6 +521,69 @@ describe('useDesktopIntegrations', () => {
       render({ profileReady: true, sessions: [] })
       deepLink?.({ kind: 'mcp', name: 'install', params: { name: 'context7' } })
       expect(requestMcpInstallFromDeepLink).toHaveBeenCalledWith({ name: 'context7' })
+      expect(navigate).not.toHaveBeenCalled()
+    })
+
+    it('opens hermes://open/browser?url=… in the in-app Browser pane (Chrome/Edge hand-off)', () => {
+      let deepLink: ((payload: { kind: string; name: string; params: Record<string, string> }) => void) | undefined
+      desktopWindow.hermesDesktop = {
+        ...desktopWindow.hermesDesktop,
+        onDeepLink: (cb: (payload: { kind: string; name: string; params: Record<string, string> }) => void) => {
+          deepLink = cb
+
+          return () => undefined
+        },
+        signalDeepLinkReady: vi.fn()
+      } as unknown as Window['hermesDesktop']
+
+      render({ profileReady: true, sessions: [] })
+      deepLink?.({ kind: 'open', name: 'browser', params: { url: 'https://example.com/from-edge' } })
+      expect(openPreview).toHaveBeenCalledWith(
+        {
+          kind: 'url',
+          label: 'example.com/from-edge',
+          source: 'https://example.com/from-edge',
+          url: 'https://example.com/from-edge'
+        },
+        'explicit-link'
+      )
+      expect(navigate).not.toHaveBeenCalled()
+    })
+
+    it('re-fronts a blank Browser for hermes://open/browser with no url', () => {
+      let deepLink: ((payload: { kind: string; name: string; params: Record<string, string> }) => void) | undefined
+      desktopWindow.hermesDesktop = {
+        ...desktopWindow.hermesDesktop,
+        onDeepLink: (cb: (payload: { kind: string; name: string; params: Record<string, string> }) => void) => {
+          deepLink = cb
+
+          return () => undefined
+        },
+        signalDeepLinkReady: vi.fn()
+      } as unknown as Window['hermesDesktop']
+
+      render({ profileReady: true, sessions: [] })
+      deepLink?.({ kind: 'open', name: 'browser', params: {} })
+      expect(openBrowserTab).toHaveBeenCalled()
+      expect(navigate).not.toHaveBeenCalled()
+    })
+
+    it('does not navigate for hermes://open/browser with a rejected scheme', () => {
+      let deepLink: ((payload: { kind: string; name: string; params: Record<string, string> }) => void) | undefined
+      desktopWindow.hermesDesktop = {
+        ...desktopWindow.hermesDesktop,
+        onDeepLink: (cb: (payload: { kind: string; name: string; params: Record<string, string> }) => void) => {
+          deepLink = cb
+
+          return () => undefined
+        },
+        signalDeepLinkReady: vi.fn()
+      } as unknown as Window['hermesDesktop']
+
+      render({ profileReady: true, sessions: [] })
+      deepLink?.({ kind: 'open', name: 'browser', params: { url: 'javascript:alert(1)' } })
+      expect(openPreview).not.toHaveBeenCalled()
+      expect(openBrowserTab).not.toHaveBeenCalled()
       expect(navigate).not.toHaveBeenCalled()
     })
   })

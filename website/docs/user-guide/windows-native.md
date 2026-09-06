@@ -101,6 +101,47 @@ Everything except the dashboard's embedded terminal pane runs natively on Window
 
 The dashboard's `/chat` tab embeds a real terminal via a POSIX PTY (`ptyprocess`). Native Windows has no equivalent primitive; Python's `pywinpty` / Windows ConPTY would work but is a separate implementation — treat as future work. **The rest of the dashboard works natively** — only that one tab shows a "use WSL2 for this" banner.
 
+## Chrome / Edge tab control (native, not WSL)
+
+On native Windows you do **not** need the WSL → Windows Chrome MCP bridge. Hermes talks to Chromium-family browsers over CDP on the same host:
+
+| Path | What it drives | When to use |
+|---|---|---|
+| `/browser connect` | A dedicated debug profile of your OS-default Chrome / Edge / Brave | Watch the agent live; keep your normal profile untouched |
+| `browser.use_real_profile: true` | Snapshot of your real Edge/Chrome logins (cookies copied lock-aware) | Agent must act as you; browser must be fully quit first on Windows |
+| Desktop **Browser** pane | In-app webview tabs (Electron), plus the real-profile consent prompt | Visual rail inside Hermes Desktop |
+
+Auto-launch for `/browser connect` prefers the OS https handler — if Edge is default, Edge is opened first even when Chrome is also installed. Manual PowerShell recipes (dedicated `--user-data-dir` required for Chrome 136+) live in [Browser → Local Chromium-family via CDP](./features/browser.md#local-chromium-family-browser-via-cdp-browser-connect).
+
+### Open a Chrome / Edge tab inside Hermes Desktop
+
+Hermes Desktop's **Browser** pane is an in-app Electron webview (same semantics as the official Desktop Browser). To hand a page **from** Chrome or Edge **into** that pane, use the registered `hermes://` protocol:
+
+```text
+hermes://open/browser?url=https%3A%2F%2Fexample.com
+hermes://open/browser
+```
+
+- With `url` / `href` / `u` (http or https only) → opens that page as a Browser tab.
+- With no URL → re-fronts / opens a blank Browser tab.
+- Non-http schemes are rejected (they must not fall through to an in-app `/browser` route).
+
+**Chrome / Edge bookmarklet** (save as a bookmark, click on any page):
+
+```javascript
+javascript:void(location.href='hermes://open/browser?url='+encodeURIComponent(location.href))
+```
+
+Or from PowerShell (after Hermes Desktop is installed and `hermes://` is registered):
+
+```powershell
+Start-Process 'hermes://open/browser?url=https%3A%2F%2Fexample.com'
+```
+
+:::tip WSL still?
+If Hermes itself runs **inside WSL2** while Chrome/Edge run on the Windows host, prefer the MCP bridge documented in [Use MCP with Hermes](../guides/use-mcp-with-hermes.md#wsl2-bridge-hermes-in-wsl-to-windows-chrome) instead of `/browser connect`.
+:::
+
 ## How Hermes runs shell commands on Windows
 
 Hermes's terminal tool runs commands through **Git Bash**, same strategy Claude Code uses. This sidesteps the POSIX-vs-Windows gap without rewriting every tool.

@@ -1034,6 +1034,54 @@ def cleanup_real_profile_snapshots() -> None:
         logger.debug("real-profile cleanup failed for %s: %s", root, e)
 
 
+def _classify_debug_binary_browser(path: str) -> str | None:
+    """Map a Chromium-family binary path to a canonical browser key.
+
+    Used to reorder ``/browser connect`` launch candidates so the OS default
+    (Chrome / Edge / Brave / Chromium) is tried first. Path fragments beat
+    basename alone so ``…\\Microsoft\\Edge\\…\\msedge.exe`` cannot be
+    mistaken for a differently named Chrome install.
+    """
+    low = os.path.normcase(os.path.normpath(path)).replace("\\", "/")
+    base = os.path.basename(low)
+    if "/microsoft/edge/" in low or base in {"msedge.exe", "msedge", "microsoft-edge", "microsoft-edge-stable"}:
+        return "edge"
+    if "/google/chrome/" in low or base in {"chrome.exe", "google-chrome", "google-chrome-stable"}:
+        return "chrome"
+    if "/bravesoftware/brave-browser/" in low or base in {"brave.exe", "brave", "brave-browser", "brave-browser-stable"}:
+        return "brave"
+    if "/chromium/" in low or base in {"chromium.exe", "chromium", "chromium-browser"}:
+        return "chromium"
+    return None
+
+
+def _prefer_default_chromium_candidates(
+    candidates: list[str], system: str | None = None
+) -> list[str]:
+    """Stable-reorder candidates so the OS default Chromium binary leads.
+
+    Windows users commonly keep Edge as the https handler while Chrome is
+    also installed; the static install tables list Chrome first, so without
+    this pass ``/browser connect`` would open Chrome instead of the browser
+    whose tabs the user actually uses. Non-Chromium / unsupported-channel
+    defaults leave the table order untouched (fail closed on real-profile;
+    connect still has a usable candidate list).
+    """
+    if not candidates:
+        return candidates
+    default = detect_default_chromium(system)
+    if not default or default == UNSUPPORTED_CHANNEL:
+        return candidates
+    head: list[str] = []
+    tail: list[str] = []
+    for path in candidates:
+        if _classify_debug_binary_browser(path) == default:
+            head.append(path)
+        else:
+            tail.append(path)
+    return head + tail if head else candidates
+
+
 def get_chrome_debug_candidates(system: str) -> list[str]:
     candidates: list[str] = []
     seen: set[str] = set()
@@ -1062,7 +1110,7 @@ def get_chrome_debug_candidates(system: str) -> list[str]:
     if system == "Darwin":
         for app in _DARWIN_APPS:
             add(app)
-        return candidates
+        return _prefer_default_chromium_candidates(candidates, system)
 
     if system == "Windows":
         install_bases = (
@@ -1076,7 +1124,7 @@ def get_chrome_debug_candidates(system: str) -> list[str]:
             for base in filter(None, install_bases):
                 for parts in install_parts:
                     add(os.path.join(base, *parts))
-        return candidates
+        return _prefer_default_chromium_candidates(candidates, system)
 
     for names, paths in _LINUX_BROWSER_GROUPS:
         for name in names:
@@ -1084,7 +1132,7 @@ def get_chrome_debug_candidates(system: str) -> list[str]:
         for path in paths:
             add(path)
     add_windows_install_paths(("/mnt/c/Program Files", "/mnt/c/Program Files (x86)"), _WINDOWS_BROWSER_GROUPS)
-    return candidates
+    return _prefer_default_chromium_candidates(candidates, system)
 
 
 def chrome_debug_data_dir() -> str:

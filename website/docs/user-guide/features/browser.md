@@ -442,7 +442,7 @@ In the CLI, use:
 /browser disconnect              # Detach and return to cloud/local mode
 ```
 
-If a browser isn't already running with remote debugging, Hermes will attempt to auto-launch a supported Chromium-family browser with `--remote-debugging-port=9222`. Detection includes Brave, Google Chrome, Chromium, and Microsoft Edge, with common Linux install paths such as `/opt/brave-bin/brave` and `/snap/bin/brave`.
+If a browser isn't already running with remote debugging, Hermes will attempt to auto-launch a supported Chromium-family browser with `--remote-debugging-port=9222`. Detection includes Brave, Google Chrome, Chromium, and Microsoft Edge, with common Linux install paths such as `/opt/brave-bin/brave` and `/snap/bin/brave`. On Windows (and other platforms), auto-launch **prefers your OS default Chromium browser** — if Edge is the https handler, Hermes opens Edge first even when Chrome is also installed.
 
 :::tip
 To start a Chromium-family browser manually with CDP enabled, use a dedicated user-data-dir so the debug port actually comes up even if the browser is already running with your normal profile:
@@ -477,11 +477,27 @@ google-chrome \
   --no-default-browser-check &
 ```
 
+```powershell
+# Windows (native) — Microsoft Edge
+& "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe" `
+  --remote-debugging-port=9222 `
+  --user-data-dir="$env:USERPROFILE\.hermes\chrome-debug" `
+  --no-first-run `
+  --no-default-browser-check
+
+# Windows (native) — Google Chrome
+& "$env:ProgramFiles\Google\Chrome\Application\chrome.exe" `
+  --remote-debugging-port=9222 `
+  --user-data-dir="$env:USERPROFILE\.hermes\chrome-debug" `
+  --no-first-run `
+  --no-default-browser-check
+```
+
 Then launch the Hermes CLI and run `/browser connect`.
 
 **Why `--user-data-dir`?** Without it, launching a Chromium-family browser while a regular instance is already running typically opens a new window on the existing process — and that existing process was not started with `--remote-debugging-port`, so port 9222 never opens. A dedicated user-data-dir forces a fresh browser process where the debug port actually listens. `--no-first-run --no-default-browser-check` skips the first-launch wizard for the fresh profile.
 
-**Chrome 136+ makes the dedicated profile mandatory.** As a security hardening change, Chrome 136 and later silently refuse to open the remote debugging port when `--remote-debugging-port` is combined with the *default* user-data-dir — even from a cold start with no other Chrome running. The browser launches normally but nothing ever listens on 9222, so `/browser connect` (and any manual `curl http://127.0.0.1:9222/json/version`) fails with connection refused. There is no error message. The fix is exactly the commands above: always pass a `--user-data-dir` pointing somewhere other than your default profile directory (e.g. `$HOME/.hermes/chrome-debug`). This applies to Chrome, Chromium, Edge, and Brave builds that have picked up the change.
+**Chrome 136+ makes the dedicated profile mandatory.** As a security hardening change, Chrome 136 and later silently refuse to open the remote debugging port when `--remote-debugging-port` is combined with the *default* user-data-dir — even from a cold start with no other Chrome running. The browser launches normally but nothing ever listens on 9222, so `/browser connect` (and any manual `curl http://127.0.0.1:9222/json/version`) fails with connection refused. There is no error message. The fix is exactly the commands above: always pass a `--user-data-dir` pointing somewhere other than your default profile directory (e.g. `$HOME/.hermes/chrome-debug` / `%USERPROFILE%\.hermes\chrome-debug`). This applies to Chrome, Chromium, Edge, and Brave builds that have picked up the change.
 :::
 
 When connected via CDP, all browser tools (`browser_navigate`, `browser_click`, etc.) operate on your live browser instance instead of spinning up a cloud session.

@@ -171,3 +171,61 @@ class TestLinuxProfileDir:
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setenv("XDG_CONFIG_HOME", "/home/t/.config")
         assert bc.real_profile_data_dir("edge", "Linux") == "/home/t/.config/microsoft-edge"
+
+
+class TestPreferDefaultDebugCandidates:
+    """``/browser connect`` must open the user's default Chromium, not the
+    first row of the static install table (Chrome-before-Edge on Windows)."""
+
+    def test_classify_windows_edge_and_chrome_paths(self):
+        assert (
+            bc._classify_debug_binary_browser(
+                r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+            )
+            == "edge"
+        )
+        assert (
+            bc._classify_debug_binary_browser(
+                r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+            )
+            == "chrome"
+        )
+        assert bc._classify_debug_binary_browser(r"C:\Tools\mystery.exe") is None
+
+    def test_edge_default_leads_when_chrome_is_listed_first(self):
+        chrome = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        edge = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+        with patch.object(bc, "detect_default_chromium", return_value="edge"):
+            ordered = bc._prefer_default_chromium_candidates([chrome, edge], "Windows")
+        assert ordered == [edge, chrome]
+
+    def test_chrome_default_keeps_chrome_first(self):
+        chrome = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        edge = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+        with patch.object(bc, "detect_default_chromium", return_value="chrome"):
+            ordered = bc._prefer_default_chromium_candidates([chrome, edge], "Windows")
+        assert ordered == [chrome, edge]
+
+    def test_non_chromium_default_leaves_table_order(self):
+        chrome = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        edge = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+        with patch.object(bc, "detect_default_chromium", return_value=None):
+            ordered = bc._prefer_default_chromium_candidates([chrome, edge], "Windows")
+        assert ordered == [chrome, edge]
+
+    def test_unsupported_channel_leaves_table_order(self):
+        chrome = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        edge = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+        with patch.object(bc, "detect_default_chromium", return_value=bc.UNSUPPORTED_CHANNEL):
+            ordered = bc._prefer_default_chromium_candidates([chrome, edge], "Windows")
+        assert ordered == [chrome, edge]
+
+    @pytest.mark.windows_only
+    def test_live_windows_candidates_lead_with_os_default(self):
+        default = bc.detect_default_chromium("Windows")
+        if not default or default == bc.UNSUPPORTED_CHANNEL:
+            pytest.skip("OS default is not a supported Chromium browser")
+        candidates = bc.get_chrome_debug_candidates("Windows")
+        if not candidates:
+            pytest.skip("no Chromium-family browser installed")
+        assert bc._classify_debug_binary_browser(candidates[0]) == default

@@ -42,4 +42,24 @@ describe('resolveDeepLinkAction', () => {
       params: { time: '08:00' }
     })
   })
+
+  it('routes open/browser into the in-app Browser pane', () => {
+    expect(
+      resolveDeepLinkAction({
+        kind: 'open',
+        name: 'browser',
+        params: { url: 'https://example.com/' }
+      })
+    ).toEqual({ type: 'open-browser', url: 'https://example.com/' })
+  })
+
+  it('consumes invalid open/browser urls without falling through', () => {
+    expect(
+      resolveDeepLinkAction({
+        kind: 'open',
+        name: 'browser',
+        params: { url: 'file:///C:/Secrets.txt' }
+      })
+    ).toEqual({ type: 'handled' })
+  })
 })
