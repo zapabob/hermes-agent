@@ -18,11 +18,20 @@ from __future__ import annotations
 import subprocess
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from tools.browser_tool import (
     AGENT_BROWSER_NPX_SPEC,
     _legacy_kill_process_tree,
     warm_agent_browser_npx_cache,
 )
+
+
+@pytest.fixture(autouse=True)
+def _compatible_npx_runtime():
+    """Keep process-group tests focused on warm-up mechanics, not Node probing."""
+    with patch("tools.browser_tool._ensure_agent_browser_runtime", return_value=True):
+        yield
 
 
 def _mock_proc(returncode=0, communicate_side_effect=None, pid=4242):

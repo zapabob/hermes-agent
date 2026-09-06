@@ -98,6 +98,26 @@ def test_find_agent_browser_lazy_install_cycle_terminates(monkeypatch):
     assert validate_calls == [True, False]
 
 
+@pytest.mark.linux_only
+def test_ensure_agent_browser_uses_posix_capability_installer(tmp_path):
+    """The browser-specific runtime request must not be an unknown no-op."""
+    from hermes_cli.dep_ensure import ensure_dependency
+
+    script = tmp_path / "install.sh"
+    script.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    with patch("hermes_cli.dep_ensure._DEP_CHECKS", {"agent_browser": lambda: False}), \
+         patch("hermes_cli.dep_ensure._find_install_script", return_value=(script, "bash")), \
+         patch("subprocess.run") as mock_run, \
+         patch("sys.stdin") as mock_stdin:
+        mock_stdin.isatty.return_value = False
+        mock_run.return_value = type("R", (), {"returncode": 0})()
+
+        assert ensure_dependency("agent_browser", interactive=False) is False
+
+    cmd = mock_run.call_args[0][0]
+    assert cmd == ["bash", str(script), "--ensure", "agent_browser"]
+
+
 @pytest.mark.windows_only
 def test_ensure_dependency_uses_powershell_on_windows(tmp_path):
     """``windows_only``: the assertion is that we shell out to a real

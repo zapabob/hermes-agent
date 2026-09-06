@@ -378,6 +378,7 @@ class TestRunBrowserCommandPathConstruction:
 
         with patch("tools.browser_tool._find_agent_browser", return_value="npx agent-browser"), \
              patch("tools.browser_tool._resolve_npx_bin", return_value="/opt/hermes/node/bin/npx"), \
+             patch("tools.browser_tool._ensure_agent_browser_runtime", return_value=True), \
              patch("tools.browser_tool._chromium_installed", return_value=True), \
              patch("tools.browser_tool._get_session_info", return_value=fake_session), \
              patch("tools.browser_tool._socket_safe_tmpdir", return_value=str(tmp_path)), \
@@ -487,6 +488,7 @@ class TestRunChromeFallbackCommandNpxResolution:
         with patch("tools.browser_tool._run_browser_command", return_value=url_result), \
              patch("tools.browser_tool._find_agent_browser", return_value="npx agent-browser"), \
              patch("tools.browser_tool._resolve_npx_bin", return_value="/opt/hermes/node/bin/npx"), \
+             patch("tools.browser_tool._ensure_agent_browser_runtime", return_value=True), \
              patch("tools.browser_tool._chromium_installed", return_value=True), \
              patch("tools.browser_tool._running_in_docker", return_value=False), \
              patch("tools.browser_tool._socket_safe_tmpdir", return_value=str(tmp_path)), \

@@ -198,7 +198,7 @@ while [[ $# -gt 0 ]]; do
             echo "  small and ensures the command is on PATH for all shells."
             echo "  Existing installs at \$HERMES_HOME/hermes-agent are preserved in-place."
             echo "  --ensure DEPS  Install only specified deps (comma-separated)"
-            echo "                   Supported: node, browser, ripgrep, ffmpeg"
+            echo "                   Supported: node, browser, agent_browser, ripgrep, ffmpeg"
             echo "                   Does NOT clone repo or create venv"
 
             exit 0
@@ -902,6 +902,18 @@ node_satisfies_build() {
     return 1
 }
 
+# Keep this narrower than node_satisfies_build(): Hermes itself remains
+# compatible with Node 22.22+, while agent-browser v0.36.0 declares Node >=24.
+# This predicate is used only by the explicit ``--ensure agent_browser`` path,
+# never by the ordinary Node or browser setup paths.
+node_satisfies_agent_browser() {
+    local ver="${1#v}"
+    case "$ver" in *-*) return 1 ;; esac
+    local major="${ver%%.*}"
+    case "$major" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$major" -ge 24 ]
+}
+
 # npm 11.10.0–11.16.x honor `min-release-age` but ignore
 # `min-release-age-exclude`, both of which `.npmrc` sets. That combination
 # applies the 14-day age gate to packages we deliberately exempted, so every
@@ -973,6 +985,38 @@ check_node() {
         log_info "Node.js not found — installing Node.js $NODE_VERSION LTS..."
     fi
     install_node
+}
+
+check_agent_browser_node() {
+    # Reuse the ordinary Node/npm readiness logic first. A valid Node 22.22+
+    # remains a successful Hermes installation; only the npx agent-browser
+    # execution capability needs the higher floor below.
+    check_node
+
+    if [ "$HAS_NODE" = true ] && node_satisfies_agent_browser "$(node --version 2>/dev/null)"; then
+        return 0
+    fi
+
+    # Prefer a previously provisioned compatible managed runtime over an
+    # ambient Node 22. That avoids replacing a usable user/system Node merely
+    # because agent-browser has a stricter runtime requirement.
+    if [ -x "$HERMES_HOME/node/bin/node" ] \
+        && node_satisfies_agent_browser "$("$HERMES_HOME/node/bin/node" --version 2>/dev/null)"; then
+        export PATH="$HERMES_HOME/node/bin:$PATH"
+        HAS_NODE=true
+        log_success "Node.js $("$HERMES_HOME/node/bin/node" --version) found for agent-browser (Hermes-managed)"
+        return 0
+    fi
+
+    log_info "agent-browser requires Node.js 24+; installing Hermes-managed Node $NODE_VERSION..."
+    install_node
+    if [ "$HAS_NODE" = true ] && node_satisfies_agent_browser "$(node --version 2>/dev/null)"; then
+        return 0
+    fi
+
+    HAS_NODE=false
+    log_warn "agent-browser requires Node.js 24+; the available Node runtime is incompatible"
+    return 1
 }
 
 install_node() {
@@ -3004,6 +3048,12 @@ ensure_mode() {
                 if [ "$HAS_NODE" = true ]; then
                     ensure_browser
                 fi
+                ;;
+            agent_browser)
+                # Do not call ensure_browser here: agent-browser resolves at
+                # execution time through the exact npx pin. This dedicated
+                # capability path only supplies its stricter Node runtime.
+                check_agent_browser_node
                 ;;
             ripgrep)
                 if ! command -v rg &>/dev/null; then

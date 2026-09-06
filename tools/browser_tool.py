@@ -68,6 +68,7 @@ from pathlib import Path
 from agent.redact import redact_cdp_url
 from hermes_constants import (
     agent_browser_runnable,
+    find_node_executable,
     get_hermes_home,
     get_hermes_home_override,
     hermes_home_key,
@@ -124,6 +125,42 @@ _BROWSER_PASSTHROUGH_KEYS: tuple[str, ...] = (
     "FIRECRAWL_BROWSER_TTL",
 )
 
+# agent-browser v0.36.0 declares ``node >=24``. Hermes itself still supports
+# Node 22.22+ for its desktop and TUI toolchains, so this is deliberately a
+# browser-runtime gate, not a product-wide engine change.
+_AGENT_BROWSER_MIN_NODE_MAJOR = 24
+
+
+def _agent_browser_node_is_compatible() -> bool:
+    """Return whether the resolved Node runtime can execute agent-browser.
+
+    This is intentionally an execution-time probe. Readiness and schema paths
+    must remain free of child-process launches, and a direct native
+    agent-browser executable need not use Node at all.
+    """
+    node_path = find_node_executable("node")
+    if not node_path:
+        return False
+    try:
+        result = subprocess.run(
+            [node_path, "--version"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            creationflags=windows_hide_flags(),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if result.returncode != 0:
+        return False
+    try:
+        major = int(result.stdout.strip().lstrip("v").split(".", 1)[0])
+    except (ValueError, IndexError):
+        return False
+    return major >= _AGENT_BROWSER_MIN_NODE_MAJOR
+
 def _build_browser_env() -> dict:
     """Credential-scrubbed env for an agent-browser subprocess.
 
@@ -139,6 +176,13 @@ def _build_browser_env() -> dict:
     for _key in _BROWSER_PASSTHROUGH_KEYS:
         if _key in os.environ:
             env[_key] = os.environ[_key]
+    # agent-browser 0.36 enables experimental WebMCP for local Chrome by
+    # default. Hermes does not delegate browser-page tool registration to a
+    # page, so turn it off at the single environment construction boundary
+    # shared by every agent-browser launch. Override ambient state rather than
+    # trusting it: a parent process must not silently broaden browser child
+    # capability.
+    env["AGENT_BROWSER_NO_WEBMCP"] = "1"
     return env
 
 try:
@@ -1259,6 +1303,9 @@ def _run_chrome_fallback_command(
     except FileNotFoundError as e:
         return {"success": False, "error": str(e)}
 
+    if not _ensure_agent_browser_runtime(browser_cmd):
+        return {"success": False, "error": _agent_browser_runtime_error()}
+
     if not _chromium_installed():
         if _running_in_docker():
             hint = (
@@ -1462,6 +1509,11 @@ _real_profile_cdp_cache: dict = {}
 def _agent_browser_argv(browser_cmd: str) -> list:
     """Command prefix to invoke agent-browser (binary or npx sentinel)."""
     if _is_npx_agent_browser_sentinel(browser_cmd):
+        # This is the final execution boundary. Callers that can provision do
+        # so via _ensure_agent_browser_runtime first; this guard prevents a
+        # missed path from invoking the incompatible package under Node 22.
+        if not _agent_browser_node_is_compatible():
+            raise RuntimeError(_agent_browser_runtime_error())
         _npx_bin = _resolve_npx_bin() or "npx"
         return [_npx_bin, "--ignore-scripts", "--prefer-offline", "-y", AGENT_BROWSER_NPX_SPEC]
     return [browser_cmd]
@@ -1523,7 +1575,7 @@ def _agent_browser_get_cdp(session_name: str) -> Optional[str]:
             [*_agent_browser_argv(browser_cmd), "--session", session_name, "get", "cdp-url"],
             timeout=15,
         )
-    except (subprocess.SubprocessError, OSError) as e:
+    except (RuntimeError, subprocess.SubprocessError, OSError) as e:
         logger.debug("real-profile get cdp-url failed: %s", e)
         return None
     out = (proc.stdout or "").strip()
@@ -1563,7 +1615,7 @@ def _agent_browser_close_session(session_name: str) -> None:
             [*_agent_browser_argv(browser_cmd), "--session", session_name, "close"],
             timeout=15,
         )
-    except (subprocess.SubprocessError, OSError) as e:
+    except (RuntimeError, subprocess.SubprocessError, OSError) as e:
         logger.debug("real-profile session close failed: %s", e)
 
 
@@ -1693,6 +1745,8 @@ def _real_profile_cdp() -> tuple:
                 "browser.use_real_profile is on, but the local browser engine "
                 f"(agent-browser) is not installed: {e}"
             )
+        if not _ensure_agent_browser_runtime(browser_cmd):
+            return None, _agent_browser_runtime_error()
         argv = [
             *_agent_browser_argv(browser_cmd),
             "--session", _REAL_PROFILE_SESSION,
@@ -1716,7 +1770,7 @@ def _real_profile_cdp() -> tuple:
                 "browser.use_real_profile is on, but the real-profile browser "
                 "took too long to start. Retry, or turn the toggle off."
             )
-        except (subprocess.SubprocessError, OSError) as e:
+        except (RuntimeError, subprocess.SubprocessError, OSError) as e:
             return None, f"browser.use_real_profile is on, but the launch failed: {e}"
         if proc.returncode != 0:
             tail = (proc.stderr or proc.stdout or "").strip().splitlines()
@@ -2954,6 +3008,34 @@ def _resolve_npx_bin() -> Optional[str]:
     return None
 
 
+def _agent_browser_runtime_error() -> str:
+    return (
+        f"{AGENT_BROWSER_NPX_SPEC} requires Node.js "
+        f"{_AGENT_BROWSER_MIN_NODE_MAJOR}+ when Hermes runs it through npx. "
+        "Hermes could not provision a compatible managed Node runtime."
+    )
+
+
+def _ensure_agent_browser_runtime(browser_cmd: str) -> bool:
+    """Ensure the npx execution path has agent-browser's Node floor.
+
+    Concrete agent-browser binaries are deliberately left alone: they may be
+    native launchers with their own embedded runtime. The npx sentinel is the
+    only path Hermes owns and therefore the only one that needs provisioning.
+    """
+    if not _is_npx_agent_browser_sentinel(browser_cmd):
+        return True
+    if _agent_browser_node_is_compatible():
+        return True
+    try:
+        from hermes_cli.dep_ensure import ensure_dependency
+
+        return ensure_dependency("agent_browser") and _agent_browser_node_is_compatible()
+    except Exception:
+        logger.debug("agent-browser runtime provisioning failed", exc_info=True)
+        return False
+
+
 def _find_agent_browser(*, validate: bool = True) -> str:
     """
     Find the agent-browser CLI executable.
@@ -3051,7 +3133,7 @@ def _find_agent_browser(*, validate: bool = True) -> str:
     # Nothing found — try lazy installation before giving up.
     try:
         from hermes_cli.dep_ensure import ensure_dependency
-        if ensure_dependency("browser"):
+        if ensure_dependency("agent_browser"):
             candidates = [
                 shutil.which("agent-browser"),
                 shutil.which("agent-browser", path=extended_path) if extended_path else None,
@@ -3064,6 +3146,13 @@ def _find_agent_browser(*, validate: bool = True) -> str:
                     _cached_agent_browser = recheck
                     _agent_browser_resolved = True
                     return recheck
+            # `install.ps1 -Ensure agent_browser` provisions Node only when
+            # the pinned browser CLI needs it; npx is therefore the normal
+            # post-install resolution, not a second agent-browser install.
+            if _resolve_npx_bin():
+                _cached_agent_browser = NPX_AGENT_BROWSER_SENTINEL
+                _agent_browser_resolved = True
+                return _cached_agent_browser
     except Exception:
         pass
 
@@ -3185,6 +3274,8 @@ def warm_agent_browser_npx_cache(timeout: float = 60.0) -> bool:
     """
     npx_bin = _resolve_npx_bin()
     if not npx_bin:
+        return False
+    if not _ensure_agent_browser_runtime(NPX_AGENT_BROWSER_SENTINEL):
         return False
 
     env = _build_browser_env()
@@ -3466,6 +3557,11 @@ def _run_browser_command(
     except FileNotFoundError as e:
         logger.warning("agent-browser CLI not found: %s", e)
         return {"success": False, "error": str(e)}
+
+    if not _ensure_agent_browser_runtime(browser_cmd):
+        error = _agent_browser_runtime_error()
+        logger.warning("browser command blocked: %s", error)
+        return {"success": False, "error": error}
 
     if _requires_real_termux_browser_install(browser_cmd):
         error = _termux_browser_install_error()
@@ -5843,6 +5939,8 @@ def _maybe_autoinstall_chromium() -> bool:
     try:
         browser_cmd = _find_agent_browser()
     except FileNotFoundError:
+        return False
+    if not _ensure_agent_browser_runtime(browser_cmd):
         return False
 
     if _is_npx_agent_browser_sentinel(browser_cmd):

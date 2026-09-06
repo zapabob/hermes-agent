@@ -2045,6 +2045,9 @@ def _run_post_setup(post_setup_key: str):
                 _find_agent_browser,
                 _resolve_npx_bin,
                 _is_npx_agent_browser_sentinel,
+                _ensure_agent_browser_runtime,
+                _agent_browser_runtime_error,
+                _build_browser_env,
                 AGENT_BROWSER_NPX_SPEC,
             )
         except Exception as exc:  # pragma: no cover — defensive
@@ -2091,6 +2094,10 @@ def _run_post_setup(post_setup_key: str):
             )
             return
 
+        if not _ensure_agent_browser_runtime(browser_cmd):
+            _print_warning(f"    {_agent_browser_runtime_error()}")
+            return
+
         # browser_cmd was already resolved above (same PATH -> Homebrew ->
         # Hermes-managed-node -> npx cascade _find_agent_browser uses at
         # runtime), so this can't diverge from what actually gets invoked.
@@ -2116,7 +2123,7 @@ def _run_post_setup(post_setup_key: str):
             result = subprocess.run(
                 install_cmd,
                 capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(PROJECT_ROOT), timeout=600,
-                creationflags=_post_setup_no_window_flags(),
+                creationflags=_post_setup_no_window_flags(), env=_build_browser_env(),
             )
             if result.returncode == 0:
                 _print_success("    Chromium installed")
