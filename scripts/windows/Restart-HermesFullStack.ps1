@@ -88,6 +88,24 @@ $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
 $HermesHome = Join-Path $env:USERPROFILE ".hermes"
 $env:HERMES_HOME = $HermesHome
 
+function Test-IsElevatedOperator {
+    try {
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+        return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch {
+        return $false
+    }
+}
+
+function Assert-ElevatedOperator {
+    if (-not (Test-IsElevatedOperator)) {
+        throw "UAC elevation is required before stopping the Hermes Gateway stack. Open PowerShell with Run as administrator and rerun Restart-HermesFullStack.ps1."
+    }
+}
+
+Assert-ElevatedOperator
+
 Write-Step "=== Full Hermes Stack Restart ==="
 Write-Step "RepoRoot: $RepoRoot"
 

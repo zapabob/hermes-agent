@@ -22,6 +22,22 @@ if (-not (Test-Path -LiteralPath $PythonExe)) {
 }
 $HermesHome = Join-Path $env:USERPROFILE ".hermes"
 
+function Test-IsElevatedOperator {
+    try {
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+        return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch {
+        return $false
+    }
+}
+
+function Assert-ElevatedOperator {
+    if (-not (Test-IsElevatedOperator)) {
+        throw "UAC elevation is required before stopping the Hermes Gateway stack. Open PowerShell with Run as administrator and rerun restart-hermes-stack.ps1."
+    }
+}
+
 function Get-HermesDotEnvValue {
     param([string]$Key)
     $dotEnv = Join-Path $HermesHome ".env"
@@ -147,6 +163,9 @@ function Stop-DesktopWatchdogStack {
     Stop-OwnedDesktop
     Start-Sleep -Seconds 2
 }
+
+Assert-ElevatedOperator
+Write-Step "UAC elevation check passed; operator-level Go watchdog lifecycle is permitted"
 
 Set-Location -LiteralPath $ProjectRoot
 $env:HERMES_HOME = $HermesHome

@@ -221,6 +221,27 @@ def test_windows_restart_scripts_fall_back_to_netstat_for_listener_discovery(
 
 
 @pytest.mark.parametrize(
+    ("script_name", "first_stop_boundary"),
+    [
+        ("Restart-HermesFullStack.ps1", "Stop-OwnedGoWatchdog"),
+        ("restart-hermes-stack.ps1", "Stop-DesktopWatchdogStack"),
+    ],
+)
+def test_windows_restart_scripts_check_uac_before_stopping_gateway_stack(
+    script_name: str,
+    first_stop_boundary: str,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = (root / "scripts" / "windows" / script_name).read_text(encoding="utf-8")
+
+    assert "function Test-IsElevatedOperator" in script
+    assert "WindowsBuiltInRole]::Administrator" in script
+    assert "function Assert-ElevatedOperator" in script
+    assert "UAC elevation is required before stopping the Hermes Gateway stack." in script
+    assert script.index("\nAssert-ElevatedOperator\n") < script.rindex(first_stop_boundary)
+
+
+@pytest.mark.parametrize(
     "script_name",
     ["Restart-HermesFullStack.ps1", "restart-hermes-stack.ps1"],
 )
