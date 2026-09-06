@@ -38,15 +38,19 @@ test('normal Desktop quit persists until the same installation is explicitly lau
 
 test('Desktop quit waits for the exact watchdog maintenance acknowledgement', async () => {
   const { root, filePath } = temporaryFence()
+
   const result = writeDesktopStopFence({
     filePath,
     repoRoot: path.join(root, 'repo'),
     now: new Date('2026-09-06T01:00:00.000Z')
   })
+
   assert.equal(result.written, true)
+
   if (!result.written) {
     throw new Error('expected a new Desktop stop fence')
   }
+
   fs.writeFileSync(path.join(root, 'watchdog.lock'), JSON.stringify({ pid: 4242 }), 'utf8')
   fs.writeFileSync(
     path.join(root, 'watchdog.state.json'),
@@ -73,15 +77,19 @@ test('Desktop quit waits for the exact watchdog maintenance acknowledgement', as
 
 test('Desktop quit remains cancelled when a live watchdog has not acknowledged the fence', async () => {
   const { root, filePath } = temporaryFence()
+
   const result = writeDesktopStopFence({
     filePath,
     repoRoot: path.join(root, 'repo'),
     now: new Date('2026-09-06T01:00:00.000Z')
   })
+
   assert.equal(result.written, true)
+
   if (!result.written) {
     throw new Error('expected a new Desktop stop fence')
   }
+
   fs.writeFileSync(path.join(root, 'watchdog.lock'), JSON.stringify({ pid: 4242 }), 'utf8')
 
   assert.equal(
@@ -97,6 +105,7 @@ test('Desktop quit remains cancelled when a live watchdog has not acknowledged t
 
 test('normal Desktop quit never overwrites a live updater fence', () => {
   const { root, filePath } = temporaryFence()
+
   const update = {
     state: 'UPDATE',
     owner: 'hermes-update:42',
@@ -104,10 +113,10 @@ test('normal Desktop quit never overwrites a live updater fence', () => {
   }
 
   fs.writeFileSync(filePath, JSON.stringify(update), 'utf8')
-  assert.deepEqual(
-    writeDesktopStopFence({ filePath, repoRoot: root, now: new Date('2026-09-06T01:00:00.000Z') }),
-    { written: false, preserved: true }
-  )
+  assert.deepEqual(writeDesktopStopFence({ filePath, repoRoot: root, now: new Date('2026-09-06T01:00:00.000Z') }), {
+    written: false,
+    preserved: true
+  })
   assert.deepEqual(JSON.parse(fs.readFileSync(filePath, 'utf8')), update)
 })
 
@@ -123,8 +132,5 @@ test('Windows default and portable fallback match the Go watchdog data paths', (
     watchdogMaintenancePath({ LOCALAPPDATA: 'C:\\Users\\test\\AppData\\Local' }),
     path.join('C:\\Users\\test\\AppData\\Local', 'HermesWatchdog', 'maintenance.json')
   )
-  assert.equal(
-    watchdogMaintenancePath({}),
-    path.join(os.homedir(), '.hermes', 'watchdog-go', 'maintenance.json')
-  )
+  assert.equal(watchdogMaintenancePath({}), path.join(os.homedir(), '.hermes', 'watchdog-go', 'maintenance.json'))
 })

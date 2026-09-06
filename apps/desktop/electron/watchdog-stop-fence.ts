@@ -19,6 +19,7 @@ interface DesktopStopFenceIdentity extends Record<string, unknown> {
 function watchdogMaintenancePath(env: NodeJS.ProcessEnv = process.env) {
   const explicit = String(env.HERMES_WATCHDOG_DATA || '').trim()
   const localAppData = String(env.LOCALAPPDATA || '').trim()
+
   const fallback = localAppData
     ? path.join(localAppData, 'HermesWatchdog')
     : path.join(os.homedir(), '.hermes', 'watchdog-go')
@@ -77,7 +78,15 @@ function atomicWriteFence(filePath: string, payload: Record<string, unknown>) {
   }
 }
 
-function writeDesktopStopFence({ filePath, repoRoot, now = new Date() }: { filePath: string; repoRoot: string; now?: Date }) {
+function writeDesktopStopFence({
+  filePath,
+  repoRoot,
+  now = new Date()
+}: {
+  filePath: string
+  repoRoot: string
+  now?: Date
+}) {
   const existing = readFence(filePath)
 
   if (liveFence(existing, now) && existing?.state !== DESKTOP_STOP) {
@@ -85,6 +94,7 @@ function writeDesktopStopFence({ filePath, repoRoot, now = new Date() }: { fileP
   }
 
   const expiresAt = new Date(now.getTime() + DESKTOP_STOP_LEASE_MS)
+
   const payload: DesktopStopFenceIdentity = {
     schemaVersion: 1,
     state: DESKTOP_STOP,
@@ -136,18 +146,23 @@ async function waitForDesktopStopFenceAck({
 
   while (Date.now() - startedAt <= timeoutMs) {
     const lock = readFence(lockPath)
+
     if (!lock) {
       return true
     }
+
     const watchdogPid = Number(lock.pid)
+
     if (!Number.isInteger(watchdogPid) || watchdogPid <= 0) {
       return false
     }
+
     if (!isProcessAlive(watchdogPid)) {
       return true
     }
 
     const state = readFence(statePath)
+
     if (
       state?.maintenanceState === fence.state &&
       state.maintenanceOwner === fence.owner &&
@@ -164,7 +179,15 @@ async function waitForDesktopStopFenceAck({
   return false
 }
 
-function clearDesktopStopFence({ filePath, repoRoot, now = new Date() }: { filePath: string; repoRoot: string; now?: Date }) {
+function clearDesktopStopFence({
+  filePath,
+  repoRoot,
+  now = new Date()
+}: {
+  filePath: string
+  repoRoot: string
+  now?: Date
+}) {
   const existing = readFence(filePath)
 
   if (
