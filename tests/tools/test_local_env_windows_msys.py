@@ -71,6 +71,17 @@ class TestMsysToWindowsPath:
         assert _msys_to_windows_path("/d/Projects/foo bar") == r"D:\Projects\foo bar"
 
     @pytest.mark.windows_only
+    def test_translates_wsl_and_cygdrive_aliases(self):
+        """Adjacent regression after Wave1 DRY (CodeGraph local wrapper impact)."""
+        assert _msys_to_windows_path("/mnt/c/Users/NVIDIA") == r"C:\Users\NVIDIA"
+        assert _msys_to_windows_path("/cygdrive/d/data") == r"D:\data"
+
+    @pytest.mark.windows_only
+    def test_leaves_non_drive_posix_paths(self):
+        assert _msys_to_windows_path("/home/teknium") == "/home/teknium"
+        assert _msys_to_windows_path("/tmp/foo") == "/tmp/foo"
+
+    @pytest.mark.windows_only
     def test_empty_string(self):
         assert _msys_to_windows_path("") == ""
 
