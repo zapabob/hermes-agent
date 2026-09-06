@@ -395,8 +395,14 @@ class _HealPass:
         if profile_singleton is None or not profile_singleton.exists():
             return
         from hermes_cli.auth import _is_same_auth_store
-        if self.root_singleton is not None and _is_same_auth_store(profile_singleton, self.root_singleton):
-            return  # an aliased singleton pair is one shared grant, not a fork: never self-compare/unlink
+        if self.root_singleton is not None:
+            identity = _is_same_auth_store(profile_singleton, self.root_singleton)
+            if identity is True:
+                return  # an aliased singleton pair is one shared grant, not a fork: never self-compare/unlink
+            elif identity is None:
+                # Unknown identity — transient resolution/stat failure. Fail closed.
+                logger.debug("profile singleton heal skipped, store identity unknown")
+                return
         # See #101356.
         p_single = _singleton_as_row(profile_singleton)
         root_has_grant = bool(self.r_oauth) or self.root_singleton_row is not None
@@ -492,7 +498,9 @@ def _heal_forked_single_use_oauth_grants(provider_id: str) -> Optional[Dict[str,
     if fingerprint[1] is None and fingerprint[2] is None:
         _oauth_heal_clean_marks[provider_id] = fingerprint
         return None
-    if _is_same_auth_store(profile_path, root_path):
+    # If store identity is unknown (None), fail closed — don't assume it's the root store
+    identity = _is_same_auth_store(profile_path, root_path)
+    if identity is True:
         # The profile's auth.json IS the root store (symlink/hardlink alias — a deliberate way to
         # share one grant). Both "sides" would read the same file, every OAuth row would match
         # itself, and the strip would write through the alias and delete the shared credential.
@@ -501,6 +509,12 @@ def _heal_forked_single_use_oauth_grants(provider_id: str) -> Optional[Dict[str,
         # See #101356.
         logger.debug("%s: forked-OAuth heal skipped, %s is the root store", provider_id, profile_path)
         return None
+    elif identity is None:
+        # Unknown identity — transient resolution/stat failure. Fail closed to avoid
+        # accidentally classifying a shared store as a fork and destroying credentials.
+        logger.debug("%s: forked-OAuth heal skipped, store identity unknown", provider_id)
+        return None
+    # identity is False: different stores, proceed with heal
 
     # Lock order: active (profile) store first, then the root source store — the same order
     # ``_provider_state_transaction`` uses.

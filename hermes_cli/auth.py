@@ -508,20 +508,26 @@ def _same_path(left: Path, right: Path) -> bool:
         return left == right
 
 
-def _is_same_auth_store(left: Path, right: Path) -> bool:
-    """True when two auth paths name ONE store rather than two copies.
-    ``_same_path`` resolves symlinks and ``..``; ``samefile`` adds hardlinks and bind-mounts
-    (same inode under two resolved names). Used by the forked-grant heal: a shared store has
-    no "other side" to consolidate.
+def _is_same_auth_store(left: Path, right: Path) -> Optional[bool]:
+    """Three-way store identity check.
 
-    See #101356.
+    Returns:
+        True  -- left and right are the SAME store (symlink/hardlink/bind-mount alias)
+        False -- left and right are DIFFERENT stores (resolved to different inodes)
+        None  -- IDENTITY UNKNOWN (transient resolution/stat failure); callers must fail closed
+
+    ``_same_path`` resolves symlinks and ``..``; ``samefile`` adds hardlinks and bind-mounts
+    (same inode under two resolved names). Used by forked-grant heal and clone cleanup:
+    a shared store has no "other side" to consolidate or strip.
+
+    See #101356, #104095.
     """
     if _same_path(left, right):
         return True
     try:
         return left.samefile(right)
     except OSError:
-        return False
+        return None  # fail-closed: unknown identity must not authorize destructive mutation
 
 
 def _resolved_key(path: Path) -> str:
