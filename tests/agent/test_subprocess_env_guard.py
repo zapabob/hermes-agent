@@ -105,7 +105,7 @@ APPROVED_IMPLICIT_SPAWN_BASELINES = {
     "downstream": ("8eb57e2d493e19d6e0e0b9c91627d3980693c6a4ec5a5dea503c3441ef139551", LEGACY_IMPLICIT_RATIONALE),
     "gateway": ("7c888db74531e5ade41e806eb9ae704b5657b00c27fbe36a00e547d5f7ca6c78", LEGACY_IMPLICIT_RATIONALE),
     # Audited reduction: browser post-setup now supplies the scrubbed child env.
-    "hermes_cli": ("419ba0ac6735ada971064664ea37f1956debd7b9e5ec6d11d9445f6de530b26f", LEGACY_IMPLICIT_RATIONALE),
+    "hermes_cli": ("bd8c057f85095e0e55ffbfac0a9ab8768f6221ab822e9b17f599ae3a7a7c4365", LEGACY_IMPLICIT_RATIONALE),
     "hermes_constants.py": (
         "5b23578a51cafa9b8233e03e7bdddf96a68954014b2cfeae2b1da311ee734704",
         LEGACY_IMPLICIT_RATIONALE,
