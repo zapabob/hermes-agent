@@ -149,6 +149,7 @@ def _agent_browser_node_is_compatible() -> bool:
             errors="replace",
             timeout=10,
             creationflags=windows_hide_flags(),
+            env=_build_browser_env(),
         )
     except (OSError, subprocess.SubprocessError):
         return False

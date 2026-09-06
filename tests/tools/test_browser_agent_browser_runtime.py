@@ -66,6 +66,7 @@ def test_runtime_provisioning_is_npx_only_and_rechecks_node(monkeypatch):
 def test_exact_native_agent_browser_does_not_require_node(monkeypatch, tmp_path):
     executable = tmp_path / "agent-browser.exe"
     executable.write_bytes(b"MZ")
+    executable.chmod(0o755)
     monkeypatch.setattr(
         bt, "_agent_browser_node_is_compatible",
         lambda: (_ for _ in ()).throw(AssertionError("native executable must not probe Node")),
@@ -83,6 +84,7 @@ def test_exact_native_agent_browser_does_not_require_node(monkeypatch, tmp_path)
 def test_stale_native_agent_browser_is_rejected(monkeypatch, tmp_path):
     executable = tmp_path / "agent-browser.exe"
     executable.write_bytes(b"MZ")
+    executable.chmod(0o755)
     monkeypatch.setattr(bt, "_agent_browser_executable_is_native", lambda _path: True)
     monkeypatch.setattr(
         bt.subprocess,
@@ -96,6 +98,7 @@ def test_stale_native_agent_browser_is_rejected(monkeypatch, tmp_path):
 def test_exact_node_shim_cannot_bypass_node_24_floor(monkeypatch, tmp_path):
     shim = tmp_path / "agent-browser.cmd"
     shim.write_text("@echo off\n", encoding="utf-8")
+    shim.chmod(0o755)
     monkeypatch.setattr(bt, "_agent_browser_executable_is_native", lambda _path: False)
     monkeypatch.setattr(bt, "_agent_browser_node_is_compatible", lambda: False)
     monkeypatch.setattr(
@@ -110,6 +113,7 @@ def test_exact_node_shim_cannot_bypass_node_24_floor(monkeypatch, tmp_path):
 def test_exact_node_shim_is_allowed_with_node_24(monkeypatch, tmp_path):
     shim = tmp_path / "agent-browser.cmd"
     shim.write_text("@echo off\n", encoding="utf-8")
+    shim.chmod(0o755)
     monkeypatch.setattr(bt, "_agent_browser_executable_is_native", lambda _path: False)
     monkeypatch.setattr(bt, "_agent_browser_node_is_compatible", lambda: True)
     monkeypatch.setattr(

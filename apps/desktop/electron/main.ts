@@ -2860,8 +2860,10 @@ function getPassiveGitIsolation() {
 function runGit(args, options: any = {}): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const noCredentialUI = options.noCredentialUI === true
-    const inheritedEnv = { ...process.env, ...((options.env || {}) as any) }
+    const inheritedEnv = buildDesktopUpdaterEnv({ extra: options.env || {} })
+
     const isolation = noCredentialUI ? getPassiveGitIsolation() : null
+
     const env = noCredentialUI
       ? passiveGitEnvironment(
           inheritedEnv,
