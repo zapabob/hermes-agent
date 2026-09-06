@@ -21,6 +21,8 @@ Local-only refactor campaign: freeze Windows contracts with characterization tes
 | `dfce6a857a` | Delegate `local._msys_to_windows_path` only |
 | `875aa025d0` | Delegate `cli._normalize_git_bash_path` only (bare-drive no-ops kept) |
 | `e6226f6185` | Freeze MSYS core + wrapper divergence contracts |
+| `b7eec4e98e` | Implementation ledger (this file) force-added despite `_docs/` gitignore |
+| `10e54de775` | Adjacent local-env MSYS `/mnt` + `/cygdrive` + leave-alone cases |
 
 ## CodeGraph (prepared intelligence only)
 
