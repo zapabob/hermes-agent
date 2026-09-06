@@ -1581,6 +1581,14 @@ def _normalize_git_bash_path(p: Optional[str]) -> Optional[str]:
     (``C:/Users/...``) which both bash and Python handle, but certain
     configurations (Git Bash shells, MSYS2, WSL-mounted repos) surface
     ``/c/...`` or ``/cygdrive/c/...`` variants.
+
+    Historical no-ops preserved before shared translation:
+    - bare ``/c`` (single letter, no slash)
+    - bare ``/mnt/c`` / ``/cygdrive/d`` without a path segment after the letter
+      (the previous regex required ``/<letter>/``)
+
+    Shared drive-alias translation lives in
+    :func:`downstream.platform.windows.paths.translate_msys_drive_path`.
     """
     if not p:
         return p
@@ -1588,17 +1596,15 @@ def _normalize_git_bash_path(p: Optional[str]) -> Optional[str]:
         return p
     import re as _re
 
-    # /c/Users/... or /C/Users/...
-    m = _re.match(r"^/([a-zA-Z])/(.*)$", p)
-    if m:
-        drive, rest = m.group(1), m.group(2)
-        return f"{drive.upper()}:\\{rest.replace('/', chr(92))}"
-    # /cygdrive/c/... or /mnt/c/...
-    m = _re.match(r"^/(?:cygdrive|mnt)/([a-zA-Z])/(.*)$", p)
-    if m:
-        drive, rest = m.group(1), m.group(2)
-        return f"{drive.upper()}:\\{rest.replace('/', chr(92))}"
-    return p
+    # Preserve historical bare-drive no-ops before shared translation.
+    if _re.fullmatch(r"/[A-Za-z]", p):
+        return p
+    if _re.fullmatch(r"/(?:cygdrive|mnt)/[A-Za-z]", p):
+        return p
+    from downstream.platform.windows.paths import translate_msys_drive_path
+
+    translated = translate_msys_drive_path(p)
+    return translated if translated is not None else p
 
 
 def _git_repo_root() -> Optional[str]:
