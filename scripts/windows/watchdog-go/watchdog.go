@@ -21,16 +21,22 @@ type cycleResult struct {
 }
 
 type WatchdogState struct {
-	UpdatedAt               string      `json:"updatedAt"`
-	WatchdogPID             int         `json:"watchdogPid"`
-	MaintenanceState        string      `json:"maintenanceState"`
-	MaintenanceOwner        string      `json:"maintenanceOwner,omitempty"`
-	Result                  cycleResult `json:"result"`
-	ConsecutiveBackendFails int         `json:"consecutiveBackendFails"`
-	PackagedExe             string      `json:"packagedExe,omitempty"`
-	ListenAddr              string      `json:"listenAddr,omitempty"`
-	TsnetHostname           string      `json:"tsnetHostname,omitempty"`
-	TsnetEnabled            bool        `json:"tsnetEnabled"`
+	UpdatedAt                string      `json:"updatedAt"`
+	WatchdogPID              int         `json:"watchdogPid"`
+	MaintenanceState         string      `json:"maintenanceState"`
+	MaintenanceOwner         string      `json:"maintenanceOwner,omitempty"`
+	MaintenanceNonce         string      `json:"maintenanceNonce,omitempty"`
+	MaintenanceEpoch         int64       `json:"maintenanceEpoch,omitempty"`
+	MaintenanceTimestamp     string      `json:"maintenanceTimestamp,omitempty"`
+	Result                   cycleResult `json:"result"`
+	ConsecutiveBackendFails  int         `json:"consecutiveBackendFails"`
+	RecoveryEvents           int         `json:"recoveryEvents"`
+	RecoveryNextAllowedAt    string      `json:"recoveryNextAllowedAt,omitempty"`
+	RecoveryCircuitOpenUntil string      `json:"recoveryCircuitOpenUntil,omitempty"`
+	PackagedExe              string      `json:"packagedExe,omitempty"`
+	ListenAddr               string      `json:"listenAddr,omitempty"`
+	TsnetHostname            string      `json:"tsnetHostname,omitempty"`
+	TsnetEnabled             bool        `json:"tsnetEnabled"`
 }
 
 type Watchdog struct {
@@ -38,23 +44,39 @@ type Watchdog struct {
 	logger *Logger
 	back   *BackendManager
 
-	cycleMu          sync.Mutex
-	mu               sync.RWMutex
-	failCount        int
-	maintenanceState string
-	maintenanceOwner string
-	lastState        WatchdogState
+	cycleMu              sync.Mutex
+	mu                   sync.RWMutex
+	failCount            int
+	maintenanceState     string
+	maintenanceOwner     string
+	maintenanceNonce     string
+	maintenanceEpoch     int64
+	maintenanceTimestamp string
+	lastState            WatchdogState
+	recovery             recoveryState
+	now                  func() time.Time
 
 	embeddingMu        sync.Mutex
 	embeddingPID       int
+	embeddingProcess   *os.Process
 	embeddingStartedAt time.Time
 }
 
 func NewWatchdog(cfg Config, logger *Logger) *Watchdog {
+	if cfg.RecoveryPath == "" {
+		base := cfg.DataDir
+		if base == "" && cfg.StatePath != "" {
+			base = filepath.Dir(cfg.StatePath)
+		}
+		if base != "" {
+			cfg.RecoveryPath = filepath.Join(base, "recovery-budget.json")
+		}
+	}
 	return &Watchdog{
 		cfg:    cfg,
 		logger: logger,
 		back:   NewBackendManager(cfg, logger),
+		now:    time.Now,
 		lastState: WatchdogState{
 			WatchdogPID:   os.Getpid(),
 			PackagedExe:   cfg.PackagedExe,
@@ -71,13 +93,48 @@ func (w *Watchdog) PrewarmBackend() {
 	if !w.cfg.PrewarmBackend || w.maintenanceSuspended() {
 		return
 	}
+	if w.back.currentHealthy() != nil {
+		return
+	}
+	if !w.reserveRecovery("backend_prewarm") {
+		return
+	}
+	if w.maintenanceSuspended() {
+		return
+	}
 	if _, err := w.back.EnsureHealthy(); err != nil {
 		w.logger.Infof("prewarm backend: %v", err)
 	}
 }
 
+func (w *Watchdog) reserveRecovery(action string) bool {
+	state, allowed, wait, err := reserveRecovery(w.cfg.RecoveryPath, action, w.now())
+	w.mu.Lock()
+	w.recovery = state
+	w.mu.Unlock()
+	if err != nil {
+		w.logger.Infof("recovery %s denied: %v", action, err)
+		return false
+	}
+	if !allowed {
+		w.logger.Infof("recovery %s deferred for %s by persistent budget", action, wait.Round(time.Second))
+	}
+	return allowed
+}
+
+func (w *Watchdog) markHealthy() {
+	state, err := markRecoveryHealthy(w.cfg.RecoveryPath, w.now())
+	if err != nil {
+		w.logger.Infof("recovery healthy state: %v", err)
+		return
+	}
+	w.mu.Lock()
+	w.recovery = state
+	w.mu.Unlock()
+}
+
 func (w *Watchdog) findAnyHealthyBackend() *backendInfo {
-	if child := findHealthyDesktopBackend(); child != nil {
+	if child := findHealthyDesktopBackend(w.cfg); child != nil {
 		return child
 	}
 	if managed := w.back.currentHealthy(); managed != nil {
@@ -100,6 +157,9 @@ func (w *Watchdog) maintenanceSuspended() bool {
 	w.mu.Lock()
 	w.maintenanceState = state.State
 	w.maintenanceOwner = state.Owner
+	w.maintenanceNonce = state.Nonce
+	w.maintenanceEpoch = state.Epoch
+	w.maintenanceTimestamp = state.Timestamp
 	w.mu.Unlock()
 	return active
 }
@@ -108,16 +168,22 @@ func (w *Watchdog) saveState(result cycleResult) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.lastState = WatchdogState{
-		UpdatedAt:               time.Now().Format(time.RFC3339),
-		WatchdogPID:             os.Getpid(),
-		MaintenanceState:        w.maintenanceState,
-		MaintenanceOwner:        w.maintenanceOwner,
-		Result:                  result,
-		ConsecutiveBackendFails: w.failCount,
-		PackagedExe:             w.cfg.PackagedExe,
-		ListenAddr:              w.cfg.ListenAddr,
-		TsnetHostname:           w.cfg.TsnetHostname,
-		TsnetEnabled:            w.cfg.EnableTsnet && w.cfg.TsAuthKey != "",
+		UpdatedAt:                time.Now().Format(time.RFC3339Nano),
+		WatchdogPID:              os.Getpid(),
+		MaintenanceState:         w.maintenanceState,
+		MaintenanceOwner:         w.maintenanceOwner,
+		MaintenanceNonce:         w.maintenanceNonce,
+		MaintenanceEpoch:         w.maintenanceEpoch,
+		MaintenanceTimestamp:     w.maintenanceTimestamp,
+		Result:                   result,
+		ConsecutiveBackendFails:  w.failCount,
+		RecoveryEvents:           len(w.recovery.Events),
+		RecoveryNextAllowedAt:    w.recovery.NextAllowedAt,
+		RecoveryCircuitOpenUntil: w.recovery.CircuitOpenUntil,
+		PackagedExe:              w.cfg.PackagedExe,
+		ListenAddr:               w.cfg.ListenAddr,
+		TsnetHostname:            w.cfg.TsnetHostname,
+		TsnetEnabled:             w.cfg.EnableTsnet && w.cfg.TsAuthKey != "",
 	}
 	raw, err := json.MarshalIndent(w.lastState, "", "  ")
 	if err != nil {
@@ -141,15 +207,23 @@ func (w *Watchdog) RunCycle() cycleResult {
 		return res
 	}
 
-	desktop, derr := getDesktopProcesses()
+	desktop, derr := getDesktopProcesses(w.cfg)
 	managedReady := !w.cfg.PrewarmBackend
+	backendRecoveryAttempted := false
 	if w.cfg.PrewarmBackend {
-		if _, err := w.back.EnsureHealthy(); err != nil {
+		if w.back.currentHealthy() != nil {
+			managedReady = true
+		} else if !w.reserveRecovery("backend_start") {
+			managedReady = false
+		} else if w.maintenanceSuspended() {
+			managedReady = false
+		} else if _, err := w.back.EnsureHealthy(); err != nil {
 			w.logger.Infof("ensure managed backend: %v", err)
 			managedReady = false
 		} else {
 			managedReady = true
 		}
+		backendRecoveryAttempted = true
 	}
 	backend := w.findAnyHealthyBackend()
 
@@ -166,9 +240,30 @@ func (w *Watchdog) RunCycle() cycleResult {
 		if managed := w.back.currentHealthy(); managed != nil {
 			skipPID = managed.PID
 		}
+		if w.maintenanceSuspended() {
+			res := withEmbedding(cycleResult{Desktop: "maintenance", Backend: "maintenance"})
+			w.saveState(res)
+			return res
+		}
 		stopOrphanDesktopBackends(w.logger, w.cfg, skipPID)
+		if !w.reserveRecovery("desktop_relaunch") {
+			res := withEmbedding(cycleResult{Desktop: "cooldown", Backend: "pending"})
+			w.saveState(res)
+			return res
+		}
+		if w.maintenanceSuspended() {
+			res := withEmbedding(cycleResult{Desktop: "maintenance", Backend: "maintenance"})
+			w.saveState(res)
+			return res
+		}
 		w.logger.Infof("Desktop DOWN — relaunch")
-		startPackagedDesktop(w.cfg, w.logger, w.back)
+		if !startPackagedDesktop(w.cfg, w.logger, w.back, func() bool { return !w.maintenanceSuspended() }) {
+			if w.maintenanceSuspended() {
+				res := withEmbedding(cycleResult{Desktop: "maintenance", Backend: "maintenance"})
+				w.saveState(res)
+				return res
+			}
+		}
 		w.mu.Lock()
 		w.failCount = 0
 		w.mu.Unlock()
@@ -179,8 +274,17 @@ func (w *Watchdog) RunCycle() cycleResult {
 
 	if backend == nil {
 		w.logger.Infof("Desktop UP but backend DOWN — starting managed serve")
-		if _, err := w.back.EnsureHealthy(); err != nil {
-			w.logger.Infof("managed backend assist failed: %v", err)
+		if !backendRecoveryAttempted && w.reserveRecovery("backend_start") {
+			backendRecoveryAttempted = true
+			if w.maintenanceSuspended() {
+				res := withEmbedding(cycleResult{Desktop: "maintenance", Backend: "maintenance"})
+				w.saveState(res)
+				return res
+			} else if _, err := w.back.EnsureHealthy(); err != nil {
+				w.logger.Infof("managed backend assist failed: %v", err)
+			}
+		} else if !backendRecoveryAttempted {
+			w.logger.Infof("managed backend assist deferred by recovery budget")
 		}
 		backend = w.findAnyHealthyBackend()
 	}
@@ -192,7 +296,16 @@ func (w *Watchdog) RunCycle() cycleResult {
 		w.mu.Unlock()
 		w.logger.Infof("Desktop UP but backend still DOWN (fail=%d/%d)", fails, w.cfg.FailThreshold)
 		if fails >= w.cfg.FailThreshold {
-			restartPackagedDesktop(w.cfg, w.logger, w.back)
+			if !w.reserveRecovery("desktop_restart") {
+				res := withEmbedding(cycleResult{Desktop: "cooldown", Backend: "down"})
+				w.saveState(res)
+				return res
+			}
+			if !restartPackagedDesktop(w.cfg, w.logger, w.back, func() bool { return !w.maintenanceSuspended() }) && w.maintenanceSuspended() {
+				res := withEmbedding(cycleResult{Desktop: "maintenance", Backend: "maintenance"})
+				w.saveState(res)
+				return res
+			}
 			w.mu.Lock()
 			w.failCount = 0
 			w.mu.Unlock()
@@ -208,6 +321,7 @@ func (w *Watchdog) RunCycle() cycleResult {
 	w.mu.Lock()
 	w.failCount = 0
 	w.mu.Unlock()
+	w.markHealthy()
 	w.logger.Infof("OK backend=pid:%d port:%d", backend.PID, backend.Port)
 	res := withEmbedding(cycleResult{
 		Desktop:     "up",
@@ -267,7 +381,10 @@ func readProcessIdentity(pid int) (processIdentity, bool) {
 		return processIdentity{}, false
 	}
 	defer windows.CloseHandle(handle)
+	return readProcessIdentityFromHandle(handle, pid)
+}
 
+func readProcessIdentityFromHandle(handle windows.Handle, pid int) (processIdentity, bool) {
 	var exitCode uint32
 	if err := windows.GetExitCodeProcess(handle, &exitCode); err != nil {
 		return processIdentity{}, false

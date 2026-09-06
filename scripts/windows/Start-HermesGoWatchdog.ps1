@@ -68,13 +68,7 @@ function Invoke-GoWatchdogBuildBounded {
     }
     $finished = $proc.WaitForExit($TimeoutSec * 1000)
     if (-not $finished) {
-        try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
-        # Also kill orphaned go children from the timed-out build.
-        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-            $_.CommandLine -and $_.CommandLine -match 'watchdog-go' -and $_.Name -match '^(go|compile|link)\.exe$'
-        } | ForEach-Object {
-            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-        }
+        try { $proc.Kill() } catch {}
         throw "Go watchdog build timed out after ${TimeoutSec}s"
     }
     if ($proc.ExitCode -ne 0) {
@@ -84,6 +78,42 @@ function Invoke-GoWatchdogBuildBounded {
 
 $DataDir = Join-Path $env:LOCALAPPDATA "HermesWatchdog"
 $LockPath = Join-Path $DataDir "watchdog.lock"
+
+if (-not ("HermesWatchdog.NativeProcess" -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+
+namespace HermesWatchdog {
+    public static class NativeProcess {
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern IntPtr OpenProcess(uint access, bool inheritHandle, uint processId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool GetProcessTimes(
+            IntPtr process, out long creation, out long exit, out long kernel, out long user);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool QueryFullProcessImageName(
+            IntPtr process, uint flags, StringBuilder path, ref uint size);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool TerminateProcess(IntPtr process, uint exitCode);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool CloseHandle(IntPtr handle);
+    }
+}
+'@
+}
 
 function Get-NormalizedPath {
     param([AllowEmptyString()][string]$Path)
@@ -106,19 +136,33 @@ function Test-SamePath {
 function Get-WindowsProcessIdentity {
     param([int]$ProcessId)
     if ($ProcessId -le 0) { return $null }
+    $handle = [HermesWatchdog.NativeProcess]::OpenProcess(0x1000, $false, [uint32]$ProcessId)
+    if ($handle -eq [IntPtr]::Zero) { return $null }
     try {
-        $proc = Get-Process -Id $ProcessId -ErrorAction Stop
-        $processPath = [string]$proc.Path
-        $startedUtc = $proc.StartTime.ToUniversalTime()
-        if ([string]::IsNullOrWhiteSpace($processPath)) { return $null }
-        return [pscustomobject]@{
-            Pid = [int]$proc.Id
-            ProcessCreated = [uint64]($startedUtc.ToFileTimeUtc())
-            ExecutablePath = Get-NormalizedPath $processPath
-            StartedUtc = $startedUtc
-        }
-    } catch {
-        return $null
+        return Get-WindowsProcessIdentityFromHandle -Handle $handle -ProcessId $ProcessId
+    } finally {
+        [void][HermesWatchdog.NativeProcess]::CloseHandle($handle)
+    }
+}
+
+function Get-WindowsProcessIdentityFromHandle {
+    param([IntPtr]$Handle, [int]$ProcessId)
+    [long]$created = 0
+    [long]$exited = 0
+    [long]$kernel = 0
+    [long]$user = 0
+    if (-not [HermesWatchdog.NativeProcess]::GetProcessTimes(
+        $Handle, [ref]$created, [ref]$exited, [ref]$kernel, [ref]$user
+    )) { return $null }
+    $path = New-Object System.Text.StringBuilder 32768
+    [uint32]$pathLength = $path.Capacity
+    if (-not [HermesWatchdog.NativeProcess]::QueryFullProcessImageName(
+        $Handle, 0, $path, [ref]$pathLength
+    )) { return $null }
+    return [pscustomobject]@{
+        Pid = $ProcessId
+        ProcessCreated = [uint64]$created
+        ExecutablePath = Get-NormalizedPath $path.ToString()
     }
 }
 
@@ -150,28 +194,23 @@ function Get-GoWatchdogLockState {
     }
 
     $creationMatches = $false
-    if ($obj.processCreated) {
-        try {
-            $creationMatches = ([uint64]$obj.processCreated -eq [uint64]$identity.ProcessCreated)
-        } catch {
-            $creationMatches = $false
-        }
-    } elseif ($obj.startedAt) {
-        try {
-            $lockedStart = [DateTimeOffset]::Parse(
-                [string]$obj.startedAt,
-                [Globalization.CultureInfo]::InvariantCulture,
-                [Globalization.DateTimeStyles]::RoundtripKind
-            ).UtcDateTime
-            $creationMatches = ([math]::Abs(($lockedStart - $identity.StartedUtc).TotalSeconds) -le 10)
-        } catch {
-            $creationMatches = $false
-        }
-    }
+    try {
+        $creationMatches = (
+            $null -ne $obj.processCreated -and
+            [uint64]$obj.processCreated -eq [uint64]$identity.ProcessCreated
+        )
+    } catch { $creationMatches = $false }
     if (-not $creationMatches) {
         return [pscustomobject]@{ Status = "foreign"; Pid = $pidLock; Reason = "process creation time mismatch" }
     }
-    return [pscustomobject]@{ Status = "owned"; Pid = $pidLock; Reason = "full identity matched" }
+    return [pscustomobject]@{
+        Status = "owned"
+        Pid = $pidLock
+        ProcessCreated = [uint64]$identity.ProcessCreated
+        ExecutablePath = $identity.ExecutablePath
+        RepoRoot = Get-NormalizedPath ([string]$obj.repoRoot)
+        Reason = "full identity matched"
+    }
 }
 
 function Test-GoWatchdogAlive {
@@ -182,14 +221,30 @@ function Test-GoWatchdogAlive {
 function Stop-GoWatchdog {
     $state = Get-GoWatchdogLockState
     if ($state.Status -eq "owned") {
-        Stop-Process -Id $state.Pid -Force -ErrorAction Stop
-        for ($attempt = 0; $attempt -lt 20; $attempt++) {
-            if (-not (Get-Process -Id $state.Pid -ErrorAction SilentlyContinue)) { break }
-            Start-Sleep -Milliseconds 100
-        }
-        if (Get-Process -Id $state.Pid -ErrorAction SilentlyContinue) {
-            Write-Warning "Go watchdog pid $($state.Pid) did not exit; preserving its lock."
+        $access = 0x1000 -bor 0x0001 -bor 0x00100000
+        $handle = [HermesWatchdog.NativeProcess]::OpenProcess($access, $false, [uint32]$state.Pid)
+        if ($handle -eq [IntPtr]::Zero) {
+            Write-Warning "Could not open the validated watchdog process; preserving its lock."
             return $false
+        }
+        try {
+            $current = Get-WindowsProcessIdentityFromHandle -Handle $handle -ProcessId $state.Pid
+            if (
+                -not $current -or
+                [uint64]$current.ProcessCreated -ne [uint64]$state.ProcessCreated -or
+                -not (Test-SamePath $current.ExecutablePath $state.ExecutablePath) -or
+                -not (Test-SamePath $state.RepoRoot $RepoRoot)
+            ) {
+                Write-Warning "Watchdog identity changed before stop; preserving its lock."
+                return $false
+            }
+            if (-not [HermesWatchdog.NativeProcess]::TerminateProcess($handle, 1)) {
+                Write-Warning "Exact watchdog process handle could not be terminated; preserving its lock."
+                return $false
+            }
+            [void][HermesWatchdog.NativeProcess]::WaitForSingleObject($handle, 2000)
+        } finally {
+            [void][HermesWatchdog.NativeProcess]::CloseHandle($handle)
         }
         $state = Get-GoWatchdogLockState
     }
@@ -203,17 +258,12 @@ function Stop-GoWatchdog {
 }
 
 function Stop-PsDesktopBackendWatchdog {
-    # PS and Go watchdogs use different lock files; running both causes dual
-    # Hermes.exe relaunch loops. Prefer Go; stop the legacy PS mutual watchdog.
-    $psLock = Join-Path $HermesHome "logs\desktop-backend-watchdog.lock"
-    $LegacyWatchdogScript = (Resolve-Path -LiteralPath (Join-Path $ScriptDir "Start-HermesDesktopBackendWatchdog.ps1") -ErrorAction Stop).Path
-    $legacyScriptPattern = [regex]::Escape($LegacyWatchdogScript)
-    Get-CimInstance Win32_Process -Property ProcessId, CommandLine -OperationTimeoutSec 8 -ErrorAction SilentlyContinue | Where-Object {
-        $_.CommandLine -and $_.CommandLine -match $legacyScriptPattern
-    } | ForEach-Object {
-        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-    }
-    Remove-Item -LiteralPath $psLock -Force -ErrorAction SilentlyContinue
+    # The legacy entry point is now a non-resident compatibility shim that
+    # delegates to this launcher.  Command-line matching is not process
+    # identity and must never authorize killing a PowerShell process.  Old
+    # lock files are deliberately preserved: only their proven owner may
+    # remove them, and the Go watchdog never consumes that lock namespace.
+    Write-Verbose "Legacy Desktop/backend watchdog shim has no restart authority."
 }
 
 if ($Stop) {

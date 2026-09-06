@@ -76,7 +76,10 @@ class TestFindAgentBrowser:
     def test_finds_in_current_path(self):
         """Should return result from shutil.which if available on current PATH."""
         with patch("shutil.which", return_value="/usr/local/bin/agent-browser"), \
-             patch("tools.browser_tool.agent_browser_runnable", return_value=True):
+             patch(
+                 "tools.browser_tool._agent_browser_direct_is_compatible",
+                 return_value=True,
+             ):
             assert _find_agent_browser() == "/usr/local/bin/agent-browser"
 
 
@@ -121,7 +124,10 @@ class TestFindAgentBrowser:
         with patch("shutil.which", side_effect=mock_which), \
              patch("os.path.isdir", return_value=False), \
              patch.object(Path, "is_dir", mock_is_dir), \
-             patch("tools.browser_tool.agent_browser_runnable", return_value=True), \
+             patch(
+                 "tools.browser_tool._agent_browser_direct_is_compatible",
+                 return_value=True,
+             ), \
              patch(
                  "tools.browser_tool._discover_homebrew_node_dirs",
                  return_value=[],
@@ -133,8 +139,8 @@ class TestFindAgentBrowser:
     def test_extended_path_hit_validate_false_skips_runnable_check(self, tmp_path):
         """Readiness probes (validate=False, used by _has_agent_browser) must
         resolve a candidate found via the extended PATH's path= kwarg lookup
-        without calling agent_browser_runnable — that keeps the probe a cheap
-        existence check with no subprocess spawn."""
+        without calling _agent_browser_direct_is_compatible — that keeps the
+        probe a cheap existence check with no subprocess spawn."""
         fake_binary = tmp_path / "agent-browser"
         fake_binary.write_text("#!/bin/sh\n")
         fake_binary.chmod(0o755)
@@ -147,9 +153,9 @@ class TestFindAgentBrowser:
         with patch("shutil.which", side_effect=mock_which), \
              patch("os.path.isdir", return_value=True), \
              patch(
-                 "tools.browser_tool.agent_browser_runnable",
+                 "tools.browser_tool._agent_browser_direct_is_compatible",
                  side_effect=AssertionError(
-                     "validate=False must not call agent_browser_runnable"
+                     "validate=False must not validate the runtime"
                  ),
              ), \
              patch(
@@ -187,9 +193,9 @@ class TestFindAgentBrowser:
              patch("os.path.isdir", return_value=False), \
              patch.object(Path, "is_dir", mock_is_dir), \
              patch(
-                 "tools.browser_tool.agent_browser_runnable",
+                 "tools.browser_tool._agent_browser_direct_is_compatible",
                  side_effect=AssertionError(
-                     "validate=False must not call agent_browser_runnable"
+                     "validate=False must not validate the runtime"
                  ),
              ), \
              patch(
@@ -321,7 +327,8 @@ class TestRunBrowserCommandPathConstruction:
         hermes_home = str(tmp_path / "hermes-home")
 
         with patch("tools.browser_tool._find_agent_browser", return_value=browser_path), \
- patch("tools.browser_tool._chromium_installed", return_value=True), \
+             patch("tools.browser_tool._ensure_agent_browser_runtime", return_value=True), \
+             patch("tools.browser_tool._chromium_installed", return_value=True), \
              patch("tools.browser_tool._get_session_info", return_value=fake_session), \
              patch("tools.browser_tool._socket_safe_tmpdir", return_value=str(tmp_path)), \
              patch("tools.browser_tool._discover_homebrew_node_dirs", return_value=[]), \
@@ -378,6 +385,7 @@ class TestRunBrowserCommandPathConstruction:
 
         with patch("tools.browser_tool._find_agent_browser", return_value="npx agent-browser"), \
              patch("tools.browser_tool._resolve_npx_bin", return_value="/opt/hermes/node/bin/npx"), \
+             patch("tools.browser_tool._ensure_agent_browser_runtime", return_value=True), \
              patch("tools.browser_tool._chromium_installed", return_value=True), \
              patch("tools.browser_tool._get_session_info", return_value=fake_session), \
              patch("tools.browser_tool._socket_safe_tmpdir", return_value=str(tmp_path)), \
@@ -439,7 +447,8 @@ class TestRunBrowserCommandPathConstruction:
             return real_isdir(path)
 
         with patch("tools.browser_tool._find_agent_browser", return_value="/usr/local/bin/agent-browser"), \
- patch("tools.browser_tool._chromium_installed", return_value=True), \
+             patch("tools.browser_tool._ensure_agent_browser_runtime", return_value=True), \
+             patch("tools.browser_tool._chromium_installed", return_value=True), \
              patch("tools.browser_tool._get_session_info", return_value=fake_session), \
              patch("tools.browser_tool._socket_safe_tmpdir", return_value=str(tmp_path)), \
              patch("tools.browser_tool._discover_homebrew_node_dirs", return_value=[]), \
@@ -487,6 +496,7 @@ class TestRunChromeFallbackCommandNpxResolution:
         with patch("tools.browser_tool._run_browser_command", return_value=url_result), \
              patch("tools.browser_tool._find_agent_browser", return_value="npx agent-browser"), \
              patch("tools.browser_tool._resolve_npx_bin", return_value="/opt/hermes/node/bin/npx"), \
+             patch("tools.browser_tool._ensure_agent_browser_runtime", return_value=True), \
              patch("tools.browser_tool._chromium_installed", return_value=True), \
              patch("tools.browser_tool._running_in_docker", return_value=False), \
              patch("tools.browser_tool._socket_safe_tmpdir", return_value=str(tmp_path)), \

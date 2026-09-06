@@ -58,6 +58,21 @@ def test_has_npx_agent_browser_false_when_nothing_resolves():
         assert _has_npx_agent_browser() is False
 
 
+@pytest.mark.parametrize("compatible", [True, False])
+def test_agent_browser_capability_validates_direct_launcher(compatible):
+    from hermes_cli.dep_ensure import _has_compatible_agent_browser_runtime
+    import tools.browser_tool as bt
+
+    with patch.object(
+        bt, "_find_agent_browser", return_value="C:\\tools\\agent-browser.cmd"
+    ), patch.object(
+        bt, "_agent_browser_direct_is_compatible", return_value=compatible
+    ) as validate:
+        assert _has_compatible_agent_browser_runtime() is compatible
+
+    validate.assert_called_once_with("C:\\tools\\agent-browser.cmd")
+
+
 def test_find_agent_browser_lazy_install_cycle_terminates(monkeypatch):
     """tools.browser_tool._find_agent_browser's "nothing found" branch calls
     ensure_dependency("browser"), whose "browser" check now includes
@@ -96,6 +111,26 @@ def test_find_agent_browser_lazy_install_cycle_terminates(monkeypatch):
     # a second ensure_dependency("browser") call (which would show up as a
     # second `True` in this list).
     assert validate_calls == [True, False]
+
+
+@pytest.mark.linux_only
+def test_ensure_agent_browser_uses_posix_capability_installer(tmp_path):
+    """The browser-specific runtime request must not be an unknown no-op."""
+    from hermes_cli.dep_ensure import ensure_dependency
+
+    script = tmp_path / "install.sh"
+    script.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    with patch("hermes_cli.dep_ensure._DEP_CHECKS", {"agent_browser": lambda: False}), \
+         patch("hermes_cli.dep_ensure._find_install_script", return_value=(script, "bash")), \
+         patch("subprocess.run") as mock_run, \
+         patch("sys.stdin") as mock_stdin:
+        mock_stdin.isatty.return_value = False
+        mock_run.return_value = type("R", (), {"returncode": 0})()
+
+        assert ensure_dependency("agent_browser", interactive=False) is False
+
+    cmd = mock_run.call_args[0][0]
+    assert cmd == ["bash", str(script), "--ensure", "agent_browser"]
 
 
 @pytest.mark.windows_only

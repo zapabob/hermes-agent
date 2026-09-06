@@ -105,6 +105,7 @@ func main() {
 	cfg.LockPath = filepath.Join(cfg.DataDir, "watchdog.lock")
 	cfg.StatePath = filepath.Join(cfg.DataDir, "watchdog.state.json")
 	cfg.MaintenancePath = filepath.Join(cfg.DataDir, "maintenance.json")
+	cfg.RecoveryPath = filepath.Join(cfg.DataDir, "recovery-budget.json")
 
 	logger := NewLogger(cfg.LogPath)
 	release, ok := acquireLock(cfg.LockPath, root, logger)

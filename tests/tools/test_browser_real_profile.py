@@ -170,6 +170,7 @@ class TestRealProfileCdpLaunch:
              patch.object(bt, "_agent_browser_get_cdp",
                           side_effect=[None, "http://127.0.0.1:41000"]), \
              patch.object(bt, "_find_agent_browser", return_value="/usr/bin/agent-browser"), \
+             patch.object(bt, "_ensure_agent_browser_runtime", return_value=True), \
              patch.object(bt.subprocess, "run", return_value=proc), \
              patch.object(bt, "_is_headed_mode", return_value=False):
             cdp, err = bt._real_profile_cdp()
@@ -212,6 +213,7 @@ class TestRealProfileCdpLaunch:
              patch.object(bt, "_agent_browser_get_cdp",
                           side_effect=[None, "http://127.0.0.1:41000"]), \
              patch.object(bt, "_find_agent_browser", return_value="/usr/bin/agent-browser"), \
+             patch.object(bt, "_ensure_agent_browser_runtime", return_value=True), \
              patch.object(bt.subprocess, "run", side_effect=fake_run), \
              patch.object(bt, "_is_headed_mode", return_value=False):
             bt._real_profile_cdp()
@@ -236,6 +238,7 @@ class TestRealProfileCdpLaunch:
              patch.object(bt, "_agent_browser_close_session",
                           side_effect=lambda s: closed.__setitem__("n", closed["n"] + 1)), \
              patch.object(bt, "_find_agent_browser", return_value="/usr/bin/agent-browser"), \
+             patch.object(bt, "_ensure_agent_browser_runtime", return_value=True), \
              patch.object(bt.subprocess, "run", return_value=proc), \
              patch.object(bt, "_is_headed_mode", return_value=False):
             cdp, err = bt._real_profile_cdp()
@@ -1002,6 +1005,7 @@ class TestReviewRound3:
              patch.object(bt, "_agent_browser_get_cdp",
                           side_effect=[None, "http://127.0.0.1:9251"]), \
              patch.object(bt, "_find_agent_browser", return_value="/usr/bin/agent-browser"), \
+             patch.object(bt, "_ensure_agent_browser_runtime", return_value=True), \
              patch.object(bt.subprocess, "run", return_value=proc), \
              patch.object(bt, "_is_headed_mode", return_value=False):
             cdp, err = bt._real_profile_cdp()

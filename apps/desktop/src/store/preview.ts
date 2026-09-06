@@ -117,26 +117,7 @@ function isPdfFileTarget(target: PreviewTarget): boolean {
 /** Upgrade tabs persisted by builds that classified PDFs as generic binary.
  * Without this restore-time migration, an already-open PDF keeps taking the
  * obsolete raw-binary path after Desktop itself has been upgraded. */
-export const DEFAULT_PREVIEW_TABS: PreviewTab[] = [
-  {
-    id: 'url:https://www.youtube.com',
-    target: {
-      kind: 'url',
-      label: 'YouTube',
-      source: 'https://www.youtube.com',
-      url: 'https://www.youtube.com'
-    }
-  },
-  {
-    id: 'url:https://x.com',
-    target: {
-      kind: 'url',
-      label: 'X',
-      source: 'https://x.com',
-      url: 'https://x.com'
-    }
-  }
-]
+export const DEFAULT_PREVIEW_TABS: PreviewTab[] = []
 
 export function decodePreviewTabs(raw: string): PreviewTab[] {
   const parsed = JSON.parse(raw) as unknown

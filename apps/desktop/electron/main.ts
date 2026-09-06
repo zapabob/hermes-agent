@@ -39,8 +39,6 @@ import {
   claimDecision,
   createBackendOutputTail,
   execText,
-  isPidOnlyStartMarker,
-  pidOnlyStartMarker,
   probeStartMarker,
   processStartMarker
 } from './backend-claim'
@@ -59,7 +57,12 @@ import {
   makeUnsignedOauthError,
   waitForHermesReady
 } from './backend-health'
-import { backendCommandMatches, createBackendOwnership, createBackendShutdownCoordinator } from './backend-ownership'
+import {
+  backendCommandMatches,
+  type BackendIdentity,
+  createBackendOwnership,
+  createBackendShutdownCoordinator
+} from './backend-ownership'
 import {
   canImportHermesCli,
   execProbeSync,
@@ -201,7 +204,6 @@ import {
 } from './gateway-file-download'
 import { probeGatewayWebSocket } from './gateway-ws-probe'
 import { registerGitIpc } from './git-ipc'
-import { clearStaleGitLocks } from './gitlock'
 import { readAndConsumeHandoffResult } from './handoff-result'
 import {
   ATTACHMENT_UPLOAD_DEFAULT_MAX_BYTES,
@@ -230,7 +232,12 @@ import { snapHudBounds } from './hud-snap'
 import { createHudSnapShortcut } from './hud-snap-shortcut'
 import { buildHudWindowUrl } from './hud-url'
 import { resolveHudWindowing } from './hud-windowing'
-import { createLinkTitleWindow, guardLinkTitleSession, readLinkTitleWindowTitle } from './link-title-window'
+import {
+  createLinkTitleWindow,
+  guardLinkTitleSession,
+  installLinkTitleRequestGuard,
+  readLinkTitleWindowTitle
+} from './link-title-window'
 import { ensureMainWindow } from './main-window-lifecycle'
 import {
   assertManagedUpdatePreflightClear,
@@ -350,6 +357,7 @@ import { ensureLoginShellPath } from './shell-path'
 import { createBootstrapCoordinator, sshConfigFingerprint } from './ssh-bootstrap-coordinator'
 import { collectSshConfigHosts, parseSshGOutput } from './ssh-config'
 import { createSshProbeConnection, pickLocalPort, redactSecrets, SshConnection } from './ssh-connection'
+import { configuredStartupExternalUrlsFromYaml, startupExternalUrlsConfigPath } from './startup-external-urls'
 import { createStreamThrottle } from './stream-throttle'
 import { registerTerminalIpc } from './terminal-ipc'
 import { nativeOverlayWidth as computeNativeOverlayWidth, macTitleBarOverlayHeight } from './titlebar-overlay-width'
@@ -366,16 +374,10 @@ import {
   windowOpacityFor,
   windowOpacityOptions
 } from './translucency'
-import {
-  compareApiUrl,
-  parseCompareBehindCount,
-  resolveBehindCount,
-  resolveCommitLogSelection,
-  shouldCountCommits
-} from './update-count'
+import { compareApiUrl, parseCompareUpdate } from './update-count'
 import { waitForUpdateClearance } from './update-gate'
 import { readLiveUpdateMarker, updateHandoffConflict, writeUpdateMarker } from './update-marker'
-import { isSshRemote, resolvePassiveUpdateRemote } from './update-remote'
+import { passiveGitArgs, passiveGitEnvironment, resolvePassiveUpdateRemote } from './update-remote'
 import {
   collectRelaunchArgs,
   observeUpdaterHandoff,
@@ -396,6 +398,12 @@ import {
 import { fetchMarketplaceThemes, searchMarketplaceThemes } from './vscode-marketplace'
 import { createWakeIndicatorWindowController } from './wake-indicator-window'
 import { resolveWatchdogPrewarmedBackend } from './watchdog-backend'
+import {
+  clearDesktopStopFence,
+  waitForDesktopStopFenceAck,
+  watchdogMaintenancePath,
+  writeDesktopStopFence
+} from './watchdog-stop-fence'
 import { enumerateWindowsFrontToBack, enumerationFailed, readWindowBelow } from './window-below'
 import { registrySshScopeForWindowRoute, WindowConnectionRouteRegistry } from './window-connection-route'
 import { createWindowOpenHandler } from './window-open-policy'
@@ -2831,14 +2839,46 @@ function resolveUpdateRoot() {
   return candidates.find(c => directoryExists(path.join(c, '.git'))) || candidates[0] || ACTIVE_HERMES_ROOT
 }
 
+let passiveGitIsolation: { cwd: string; home: string } | null = null
+
+function getPassiveGitIsolation() {
+  if (passiveGitIsolation) {
+    return passiveGitIsolation
+  }
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-passive-git-'))
+  const cwd = path.join(root, 'repo-free')
+  const home = path.join(root, 'empty-home')
+
+  fs.mkdirSync(cwd, { recursive: true })
+  fs.mkdirSync(home, { recursive: true })
+  passiveGitIsolation = { cwd, home }
+
+  return passiveGitIsolation
+}
+
 function runGit(args, options: any = {}): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
+    const noCredentialUI = options.noCredentialUI === true
+    const inheritedEnv = buildDesktopUpdaterEnv({ extra: options.env || {} })
+
+    const isolation = noCredentialUI ? getPassiveGitIsolation() : null
+
+    const env = noCredentialUI
+      ? passiveGitEnvironment(
+          inheritedEnv,
+          IS_WINDOWS ? 'NUL' : '/dev/null',
+          isolation?.home,
+          isolation?.cwd
+        )
+      : inheritedEnv
+
     const child = spawn(
       resolveGitBinary(),
       IS_WINDOWS ? ['-c', 'windows.appendAtomically=false', ...args] : args,
       hiddenWindowsChildOptions({
         cwd: options.cwd,
-        env: { ...process.env, ...((options.env || {}) as any), GIT_TERMINAL_PROMPT: '0' },
+        env,
         stdio: ['ignore', 'pipe', 'pipe']
       })
     )
@@ -2863,7 +2903,10 @@ function runGit(args, options: any = {}): Promise<{ code: number; stdout: string
 const firstLine = text => (text || '').split('\n').find(Boolean) || ''
 
 async function getOriginUrl(updateRoot) {
-  const origin = await runGit(['remote', 'get-url', 'origin'], { cwd: updateRoot })
+  const origin = await runGit(passiveGitArgs(['remote', 'get-url', 'origin']), {
+    cwd: updateRoot,
+    noCredentialUI: true
+  })
 
   return origin.code === 0 ? origin.stdout.trim() : ''
 }
@@ -2892,15 +2935,15 @@ async function resolveHealedBranch(updateRoot, branch) {
   const remote = resolvePassiveUpdateRemote(originUrl)
 
   if (!remote) {
-    rememberLog(`[updates] passive branch probe skipped for SSH origin ${originUrl || '<unknown>'}`)
+    rememberLog(`[updates] passive branch probe skipped for unsupported origin ${originUrl || '<unknown>'}`)
 
     return branch
   }
 
-  // An empty credential.helper resets inherited helpers. Together with
-  // GIT_TERMINAL_PROMPT=0 in runGit(), this keeps the probe non-interactive.
-  const probe = await runGit(['-c', 'credential.helper=', 'ls-remote', '--exit-code', '--heads', remote, branch], {
-    cwd: updateRoot
+  // This direct URL probe resets credential helpers and every askpass surface.
+  const probe = await runGit(passiveGitArgs(['ls-remote', '--exit-code', '--heads', remote, branch]), {
+    cwd: getPassiveGitIsolation().cwd,
+    noCredentialUI: true
   })
 
   if (probe.code !== 2) {
@@ -2936,153 +2979,75 @@ async function checkUpdates() {
   const originUrl = await getOriginUrl(updateRoot)
   const passiveRemote = resolvePassiveUpdateRemote(originUrl)
 
-  if (isSshRemote(originUrl)) {
-    if (!passiveRemote) {
-      return {
-        supported: true,
-        branch,
-        error: 'passive-ssh-check-disabled',
-        message: 'Automatic update checks do not authenticate to SSH remotes. Run an explicit update when ready.',
-        hermesRoot: updateRoot,
-        fetchedAt: Date.now()
-      }
-    }
-
-    const git = args => runGit(args, { cwd: updateRoot }).then(r => r.stdout.trim())
-
-    const [currentSha, target, dirtyStr, currentBranch] = await Promise.all([
-      git(['rev-parse', 'HEAD']),
-      runGit(['-c', 'credential.helper=', 'ls-remote', passiveRemote, `refs/heads/${branch}`], { cwd: updateRoot }),
-      git(['status', '--porcelain']),
-      git(['rev-parse', '--abbrev-ref', 'HEAD'])
-    ])
-
-    const targetSha = firstLine(target.stdout).split(/\s+/)[0] || ''
-
-    if (target.code !== 0 || !targetSha) {
-      return {
-        supported: true,
-        branch,
-        error: 'fetch-failed',
-        message: firstLine(target.stderr) || 'git ls-remote failed.',
-        hermesRoot: updateRoot,
-        fetchedAt: Date.now()
-      }
-    }
-
-    // Passive SSH checks only know tip SHAs (ls-remote) — never
-    // fabricate a "1 commit behind". Recover the exact count via the GitHub
-    // compare API when possible; otherwise behind stays null ("update
-    // available, count unknown") and updateAvailable carries the signal.
-    // ahead_by === 0 with differing tips means the remote tip is reachable
-    // from our HEAD — a local carried commit sitting AHEAD, not behind:
-    // flagging that as an update nudges the user into wiping their work.
-    const tipsEqual = Boolean(currentSha && currentSha === targetSha)
-
-    const sshBehind = tipsEqual ? 0 : await fetchCompareBehindCount({ currentSha, originUrl: passiveRemote, targetSha })
-
-    const upToDate = tipsEqual || sshBehind === 0
-
+  if (!passiveRemote) {
     return {
       supported: true,
       branch,
-      currentBranch,
-      behind: upToDate ? 0 : sshBehind,
-      updateAvailable: !upToDate,
-      currentSha,
-      targetSha,
-      commits: [],
-      dirty: dirtyStr.length > 0,
+      error: 'passive-credential-check-disabled',
+      message: 'Automatic update checks require an explicit HTTP(S) remote. Run an explicit update when ready.',
       hermesRoot: updateRoot,
       fetchedAt: Date.now()
     }
   }
 
-  // Self-heal abandoned git lock files before fetching. A stale
-  // .git/shallow.lock from a crashed/interrupted fetch otherwise fails every
-  // later fetch ("Unable to create '.git/shallow.lock': File exists") and this
-  // check reports 'fetch-failed' forever — git never removes these itself.
-  await clearStaleGitLocks(updateRoot)
+  const git = args =>
+    runGit(passiveGitArgs(args), { cwd: updateRoot, noCredentialUI: true }).then(r => r.stdout.trim())
 
-  const fetched = await runGit(['fetch', '--quiet', 'origin', branch], { cwd: updateRoot })
+  const [currentSha, target, dirtyStr, currentBranch] = await Promise.all([
+    git(['rev-parse', 'HEAD']),
+    runGit(passiveGitArgs(['ls-remote', passiveRemote, `refs/heads/${branch}`]), {
+      cwd: getPassiveGitIsolation().cwd,
+      noCredentialUI: true
+    }),
+    git(['status', '--porcelain']),
+    git(['rev-parse', '--abbrev-ref', 'HEAD'])
+  ])
 
-  if (fetched.code !== 0) {
+  const targetSha = firstLine(target.stdout).split(/\s+/)[0] || ''
+
+  if (target.code !== 0 || !targetSha) {
     return {
       supported: true,
       branch,
       error: 'fetch-failed',
-      message: firstLine(fetched.stderr) || 'git fetch failed.',
+      message: firstLine(target.stderr) || 'git ls-remote failed without requesting credentials.',
       hermesRoot: updateRoot,
       fetchedAt: Date.now()
     }
   }
 
-  const git = args => runGit(args, { cwd: updateRoot }).then(r => r.stdout.trim())
+  const tipsEqual = Boolean(currentSha && currentSha === targetSha)
 
-  const [currentSha, targetSha, dirtyStr, currentBranch, shallowStr] = await Promise.all([
-    git(['rev-parse', 'HEAD']),
-    git(['rev-parse', `origin/${branch}`]),
-    git(['status', '--porcelain']),
-    git(['rev-parse', '--abbrev-ref', 'HEAD']),
-    git(['rev-parse', '--is-shallow-repository'])
-  ])
+  const compare = tipsEqual
+    ? { behind: 0, commits: [] }
+    : await fetchCompareUpdate({
+        currentSha,
+        originUrl: passiveRemote,
+        targetSha
+      })
 
-  const isShallow = shallowStr === 'true'
-
-  // A shallow graph cannot provide a trustworthy exact count, even when it has
-  // a visible merge-base. Skip the ancestry walk and use the SHA fallback.
-  const countStr = shouldCountCommits({ isShallow }) ? await git(['rev-list', `HEAD..origin/${branch}`, '--count']) : ''
-
-  // A positive directional ancestry result remains trustworthy in a shallow
-  // graph and prevents a local commit on top of origin from looking outdated.
-  const targetIsAncestorOfHead =
-    isShallow &&
-    currentSha !== targetSha &&
-    (await runGit(['merge-base', '--is-ancestor', `origin/${branch}`, 'HEAD'], { cwd: updateRoot })).code === 0
-
-  let behind = resolveBehindCount({
-    countStr,
-    currentSha,
-    targetSha,
-    isShallow,
-    targetIsAncestorOfHead
-  })
-
-  // Recover the exact count a shallow clone can't compute: the GitHub compare
-  // API knows the full graph regardless of local clone depth. Best-effort —
-  // offline, rate-limited, or non-GitHub origins keep the honest null
-  // ("update available", no fabricated number).
-  if (behind === null) {
-    behind = await fetchCompareBehindCount({ currentSha, originUrl, targetSha })
-  }
-
-  // behind === null means "update available, exact count unknown" (shallow
-  // clone): still list what origin offers — resolveCommitLogSelection keeps
-  // the shallow log to the fetched tip so the range walk can't enumerate the
-  // contaminated ancestry — so "See what's new" stays useful and honest.
-  const commits = behind !== 0 ? await readCommitLog(updateRoot, branch, isShallow) : []
+  const behind = compare?.behind ?? null
+  const upToDate = tipsEqual || behind === 0
 
   return {
     supported: true,
     branch,
     currentBranch,
-    behind,
-    updateAvailable: behind === null || behind > 0,
+    behind: upToDate ? 0 : behind,
+    updateAvailable: !upToDate,
     currentSha,
     targetSha,
-    commits,
+    commits: compare?.commits ?? [],
     dirty: dirtyStr.length > 0,
     hermesRoot: updateRoot,
     fetchedAt: Date.now()
   }
 }
 
-// Best-effort exact behind-count for graphs the local clone can't measure.
-// Delegates URL building + response parsing to update-count.ts (pure, unit
-// tested); this wrapper only does the bounded network call. Any failure —
-// offline, 4xx/5xx, rate limit, shape surprise — returns null so callers keep
-// the honest "update available, count unknown" state.
-async function fetchCompareBehindCount({ currentSha, originUrl, targetSha }) {
+// Best-effort anonymous compare for exact behind count and a bounded changelog.
+// URL building and response parsing stay pure and unit tested in update-count.
+// Any network or shape failure returns null, preserving honest unknown state.
+async function fetchCompareUpdate({ currentSha, originUrl, targetSha }) {
   const url = compareApiUrl({ currentSha, originUrl, targetSha })
 
   if (!url) {
@@ -3125,31 +3090,10 @@ async function fetchCompareBehindCount({ currentSha, originUrl, targetSha }) {
       req.on('error', reject)
     })
 
-    return parseCompareBehindCount(payload)
+    return parseCompareUpdate(payload)
   } catch {
     return null
   }
-}
-
-async function readCommitLog(cwd, branch, isShallow) {
-  const SEP = '\x1f'
-  const REC = '\x1e'
-  const { limit, revision } = resolveCommitLogSelection({ branch, isShallow })
-
-  const { stdout } = await runGit(
-    ['log', revision, `--pretty=format:%H${SEP}%s${SEP}%an${SEP}%at${REC}`, '-n', String(limit)],
-    { cwd }
-  )
-
-  return stdout
-    .split(REC)
-    .map(line => line.trim())
-    .filter(Boolean)
-    .map(line => {
-      const [sha, summary, author, at] = line.split(SEP)
-
-      return { sha, summary, author, at: Number.parseInt(at, 10) * 1000 }
-    })
 }
 
 let updateInFlight = false
@@ -3163,6 +3107,8 @@ let updateInFlight = false
 // set, window-all-closed calls app.quit() on every platform so the process
 // actually dies and the hand-off script can proceed immediately.
 let isQuittingForHandoff = false
+let desktopStopFenceAckDone = false
+let desktopStopFenceAckWait: Promise<void> | null = null
 
 // Quit-guard latches: one while the confirmation is on screen (a second
 // Cmd-Q must not stack dialogs), one after the user has said "quit anyway"
@@ -3247,31 +3193,6 @@ function isShimLocked(shimPath) {
   }
 }
 
-// Force-kill the entire process TREE rooted at each PID. Node's child.kill()
-// only signals the direct child, so on Windows a backend `hermes.exe` that
-// spawned its own grandchildren (a `hermes` REPL, a pty terminal session, the
-// gateway) would survive and keep the venv shim locked. taskkill /T /F reaps
-// the whole tree synchronously. Windows-only: this is called solely from the
-// Windows shim-unlock path, and the backend is NOT spawned detached (so it's
-// not a process-group leader — a POSIX negative-pgid kill would be meaningless
-// here anyway). POSIX teardown stays with the existing before-quit SIGTERM.
-function forceKillProcessTree(pid) {
-  if (!IS_WINDOWS) {
-    return
-  }
-
-  if (!Number.isInteger(pid) || pid <= 0) {
-    return
-  }
-
-  try {
-    execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], hiddenWindowsChildOptions({ stdio: 'ignore' }))
-  } catch {
-    // Already gone, or no permission — best effort; the unlock wait below is
-    // the real gate.
-  }
-}
-
 function writeBackendOwnership(contents) {
   fs.mkdirSync(path.dirname(DESKTOP_BACKEND_OWNERSHIP_PATH), { recursive: true })
   const tempPath = `${DESKTOP_BACKEND_OWNERSHIP_PATH}.${process.pid}.tmp`
@@ -3312,20 +3233,10 @@ async function backendCommandForPid(pid) {
 }
 
 async function processIdentityMatches(identity) {
-  // Degraded PID-only identity (#93608): the start-marker probe failed while
-  // the child was verifiably alive, so only PID liveness can be checked here.
-  // backendIdentityMatches layers the command-line check on top before
-  // anything destructive relies on the answer.
-  if (isPidOnlyStartMarker(identity.startMarker)) {
-    try {
-      process.kill(identity.pid, 0)
-
-      return true
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException | null)?.code
-
-      return code === 'ESRCH' || code === 'ENOENT' ? false : code === 'EPERM' ? true : undefined
-    }
+  // Legacy PID-only records are non-authoritative. Preserve them for manual
+  // inspection, but never use them to authorize a signal.
+  if (String(identity.startMarker || '').startsWith('pid-only:')) {
+    return undefined
   }
 
   try {
@@ -3369,7 +3280,19 @@ async function stopOwnedBackend(identity) {
   }
 
   if (IS_WINDOWS) {
-    forceKillProcessTree(identity.pid)
+    const child = managedBackendChildren.get(identity.pid)
+    const childIdentity = child?.hermesBackendIdentity
+
+    if (
+      !child ||
+      childIdentity?.nonce !== identity.nonce ||
+      childIdentity?.startMarker !== identity.startMarker
+    ) {
+      throw new Error(`No live ChildProcess handle authorizes stopping backend PID ${identity.pid}.`)
+    }
+
+    child.kill('SIGTERM')
+    await waitForBackendExit(child)
   } else {
     try {
       process.kill(-identity.pid, 'SIGTERM')
@@ -3409,6 +3332,10 @@ async function stopOwnedBackend(identity) {
     throw new Error(`Backend PID ${identity.pid} did not stop cleanly.`)
   }
 }
+
+type ManagedBackendChild = ReturnType<typeof spawn> & { hermesBackendIdentity?: BackendIdentity }
+
+const managedBackendChildren = new Map<number, ManagedBackendChild>()
 
 const backendOwnership = createBackendOwnership({
   matchesIdentity: backendIdentityMatches,
@@ -3467,17 +3394,7 @@ async function claimBackendChild(child, command, profile, nonce, outputTail: Bac
     )
   }
 
-  let startMarker
-
-  if (decision.action === 'degrade') {
-    startMarker = pidOnlyStartMarker(child.pid)
-    rememberLog(
-      `WARNING: process start marker probe failed for live Hermes backend PID ${child.pid}; ` +
-        `claiming with PID-only identity instead of stopping it: ${decision.reason}`
-    )
-  } else {
-    startMarker = decision.startMarker
-  }
+  const startMarker = decision.startMarker
 
   try {
     const identity = await backendOwnership.claim({
@@ -3494,6 +3411,7 @@ async function claimBackendChild(child, command, profile, nonce, outputTail: Bac
     })
 
     child.hermesBackendIdentity = identity
+    managedBackendChildren.set(identity.pid, child)
 
     return identity
   } catch (error) {
@@ -3514,6 +3432,9 @@ function releaseBackendChild(child) {
 
   try {
     backendOwnership.release(identity)
+    if (managedBackendChildren.get(identity.pid) === child) {
+      managedBackendChildren.delete(identity.pid)
+    }
   } catch (error) {
     rememberLog(`Could not release backend ownership for PID ${identity.pid}: ${error.message}`)
   }
@@ -3593,7 +3514,6 @@ async function releaseBackendLock(updateRoot, tag) {
   }
 
   stopBackendTreesForUpdate(hermesProcess, {
-    forceKillProcessTree,
     stopAllPoolBackends
   })
 
@@ -3621,7 +3541,21 @@ async function releaseBackendLock(updateRoot, tag) {
 
         return stragglers
       },
-      killProcessTree: forceKillProcessTree,
+      stopManagedChild: pid => {
+        const current = backendConnectionState.getProcess()
+        if (current?.pid === pid) {
+          stopBackendChild(current)
+
+          return
+        }
+        for (const entry of backendPool.values()) {
+          if (entry.process?.pid === pid) {
+            stopBackendChild(entry.process)
+
+            return
+          }
+        }
+      },
       sleep: (ms: number) => new Promise(r => setTimeout(r, ms)),
       now: () => Date.now(),
       log: rememberLog
@@ -5349,13 +5283,10 @@ function filenameFromUrl(rawUrl, fallback = 'image') {
   }
 }
 
-// Link title resolution — curl (tier 1) → hidden BrowserWindow (tier 2).
+// Link title resolution through one isolated, request-guarded BrowserWindow.
 const titleCache = new Map()
 const titleInflight = new Map()
 const TITLE_CACHE_LIMIT = 500
-const TITLE_BYTE_BUDGET = 96 * 1024
-const TITLE_TIMEOUT_MS = 5000
-const TITLE_MAX_REDIRECTS = 3
 
 // Browser-shaped UA — many bot-walled sites (GetYourGuide, Cloudflare-protected
 // pages) refuse anything that doesn't look like a real Chrome.
@@ -5365,10 +5296,8 @@ const TITLE_USER_AGENT =
 const TITLE_ERROR_RE =
   /\b(access denied|attention required|captcha|error|forbidden|just a moment|request blocked|too many requests)\b/i
 
-const HTML_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'" }
-
-// Tier-2 renderer fallback config. Only invoked when curl came back empty or
-// matched TITLE_ERROR_RE — keeps cold/CDN-cached pages on the cheap path.
+// Renderer fetch config. The dedicated partition isolates title resolution
+// from the primary Desktop session.
 const RENDER_TITLE_MAX_CONCURRENT = 2
 const RENDER_TITLE_TIMEOUT_MS = 8000
 const RENDER_TITLE_GRACE_MS = 700
@@ -5416,86 +5345,19 @@ function cacheTitle(key, title) {
   titleCache.set(key, title)
 }
 
-function decodeHtmlEntities(value) {
-  return value
-    .replace(/&(amp|lt|gt|quot|apos|nbsp|#39);/gi, (_, k) => HTML_ENTITIES[k.toLowerCase()] ?? '')
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16) || 32))
-    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10) || 32))
-}
-
-function parseHtmlTitle(html) {
-  const raw = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]
-
-  return raw ? decodeHtmlEntities(raw).replace(/\s+/g, ' ').trim() : ''
-}
-
-function fetchHtmlTitleWithCurl(rawUrl: string): Promise<string> {
-  return new Promise(resolve => {
-    const url = String(rawUrl || '').trim()
-
-    if (!url) {
-      return resolve('')
-    }
-
-    const args = [
-      '--silent',
-      '--show-error',
-      '--location',
-      '--max-redirs',
-      String(TITLE_MAX_REDIRECTS),
-      '--max-time',
-      String(Math.max(2, Math.ceil(TITLE_TIMEOUT_MS / 1000))),
-      '--connect-timeout',
-      '4',
-      '--user-agent',
-      TITLE_USER_AGENT,
-      '--header',
-      'Accept: text/html,application/xhtml+xml;q=0.9,*/*;q=0.5',
-      '--header',
-      'Accept-Language: en-US,en;q=0.7',
-      '--header',
-      'Accept-Encoding: identity',
-      '--raw',
-      url
-    ]
-
-    const child = spawn('curl', args, hiddenWindowsChildOptions({ stdio: ['ignore', 'pipe', 'ignore'] }))
-    const chunks = []
-    let bytes = 0
-
-    child.stdout.on('data', chunk => {
-      if (bytes >= TITLE_BYTE_BUDGET) {
-        return
-      }
-
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-      const remaining = TITLE_BYTE_BUDGET - bytes
-      const next = buffer.length > remaining ? buffer.subarray(0, remaining) : buffer
-      chunks.push(next)
-      bytes += next.length
-    })
-
-    child.on('error', () => resolve(''))
-    child.on('close', () => {
-      if (!chunks.length) {
-        return resolve('')
-      }
-
-      resolve(parseHtmlTitle(Buffer.concat(chunks).toString('utf8')))
-    })
-  })
-}
-
 function getLinkTitleSession() {
   if (linkTitleSession || !app.isReady()) {
     return linkTitleSession
   }
 
-  linkTitleSession = session.fromPartition('hermes:link-titles', { cache: false })
-  linkTitleSession.webRequest.onBeforeRequest((details, callback) => {
-    callback({ cancel: RENDER_TITLE_BLOCKED_RESOURCES.has(details.resourceType) })
-  })
-  guardLinkTitleSession(linkTitleSession)
+  const candidate = session.fromPartition('hermes:link-titles', { cache: false })
+
+  if (!installLinkTitleRequestGuard(candidate, RENDER_TITLE_BLOCKED_RESOURCES)) {
+    return null
+  }
+
+  guardLinkTitleSession(candidate)
+  linkTitleSession = candidate
 
   return linkTitleSession
 }
@@ -5606,11 +5468,23 @@ function usableTitle(value: string): string {
   return value && !TITLE_ERROR_RE.test(value) ? value : ''
 }
 
+function linkTitleTransportAllowsRemoteFetch() {
+  // Creating the isolated partition installs its onBeforeRequest guard before
+  // any BrowserWindow or loadURL exists. Failure leaves remote title fetching
+  // unavailable instead of falling back to an unguarded transport.
+  return Boolean(getLinkTitleSession())
+}
+
 function fetchLinkTitle(rawUrl) {
   const url = String(rawUrl || '').trim()
+
   const key = canonicalTitleCacheKey(url)
 
   if (!key) {
+    return Promise.resolve('')
+  }
+
+  if (!linkTitleTransportAllowsRemoteFetch()) {
     return Promise.resolve('')
   }
 
@@ -5622,12 +5496,9 @@ function fetchLinkTitle(rawUrl) {
     return titleInflight.get(key)
   }
 
-  const pending = fetchHtmlTitleWithCurl(url)
+  const pending = fetchHtmlTitleWithRenderer(url)
     .catch(() => '')
     .then(value => usableTitle((value || '').slice(0, 240)))
-    .then(
-      async value => value || usableTitle(((await fetchHtmlTitleWithRenderer(url).catch(() => '')) || '').slice(0, 240))
-    )
     .then(clean => {
       cacheTitle(key, clean)
       titleInflight.delete(key)
@@ -5655,6 +5526,7 @@ const FAVICON_TTL_MS = 30 * 24 * 60 * 60 * 1000
 const FAVICON_MISS_TTL_MS = 12 * 60 * 60 * 1000
 const FAVICON_TIMEOUT_MS = 6000
 const FAVICON_MAX_BYTES = 256 * 1024
+const FAVICON_MAX_TEXT_CHARS = 192 * 1024
 const FAVICON_WRITE_DEBOUNCE_MS = 3000
 
 let faviconCache: Map<string, { at: number; icon: string }> | null = null
@@ -5750,7 +5622,7 @@ const faviconIo: FaviconIo = {
   fetchText: async url => {
     const response = await faviconFetch(url, 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.5')
 
-    return response.ok ? (await response.text()).slice(0, TITLE_BYTE_BUDGET * 2) : ''
+    return response.ok ? (await response.text()).slice(0, FAVICON_MAX_TEXT_CHARS) : ''
   }
 }
 
@@ -6412,6 +6284,7 @@ function sendPowerResume() {
 }
 
 let powerResumeRegistered = false
+let systemShutdownInProgress = false
 
 // Mirror of powerMonitor's AC/battery state, broadcast to every window so
 // renderer backstop polls can slow down on battery (see store/power.ts).
@@ -6450,6 +6323,9 @@ function registerPowerResumeListeners() {
     // full suspend. Either can drop an idle socket.
     powerMonitor.on('resume', sendPowerResume)
     powerMonitor.on('unlock-screen', sendPowerResume)
+    powerMonitor.on('shutdown', () => {
+      systemShutdownInProgress = true
+    })
     powerMonitor.on('on-battery', () => broadcastBatteryState(true))
     powerMonitor.on('on-ac', () => broadcastBatteryState(false))
     onBatteryPower = powerMonitor.isOnBatteryPower()
@@ -10858,7 +10734,7 @@ function resetBootProgressForReconnect() {
 }
 
 function stopBackendChild(child) {
-  stopBackendChildImpl(child, { forceKillProcessTree, isWindows: IS_WINDOWS })
+  stopBackendChildImpl(child, { isWindows: IS_WINDOWS })
 }
 
 // Soft gateway-mode apply: tear down the primary without resetting boot UI or
@@ -10958,8 +10834,8 @@ async function waitForBackendExit(child, timeoutMs = 5000) {
   }
 
   try {
-    if (IS_WINDOWS && Number.isInteger(child.pid)) {
-      forceKillProcessTree(child.pid)
+    if (IS_WINDOWS) {
+      child.kill('SIGKILL')
     } else if (Number.isInteger(child.pid)) {
       try {
         process.kill(-child.pid, 'SIGKILL')
@@ -17370,6 +17246,17 @@ if (!isPrimaryInstance) {
   // routes into the running window and never touches backend machinery.
   app.exit(0)
 } else {
+  if (IS_WINDOWS) {
+    try {
+      clearDesktopStopFence({
+        filePath: watchdogMaintenancePath(),
+        repoRoot: ACTIVE_HERMES_ROOT
+      })
+    } catch (error) {
+      rememberLog(`[watchdog] could not clear intentional Desktop stop fence: ${error.message}`)
+    }
+  }
+
   app.on('second-instance', (_event, argv) => {
     const url = _extractDeepLink(argv)
 
@@ -17470,6 +17357,23 @@ app.whenReady().then(() => {
   // captured by the original transaction before removing the journal entry.
   void resumeManagedSshRecoveries()
   createWindow()
+
+  // Personal services are an operator-owned startup convenience, not an
+  // app-wide browser policy. Public builds carry no account URL; profile-scoped
+  // config values open once in the existing OS-browser session.
+  const startupExternalUrls = (() => {
+    try {
+      const configPath = startupExternalUrlsConfigPath(HERMES_HOME, readActiveDesktopProfile())
+
+      return configuredStartupExternalUrlsFromYaml(fs.readFileSync(configPath, 'utf8'))
+    } catch {
+      return []
+    }
+  })()
+
+  for (const url of startupExternalUrls) {
+    openExternalUrl(url)
+  }
 
   // Win/Linux cold start: the launching hermes:// URL is in our own argv.
   const _coldStartLink = _extractDeepLink(process.argv)
@@ -17586,6 +17490,38 @@ app.on('before-quit', event => {
         managedUpdateQuitWaitDone = true
         app.quit()
       })
+    }
+
+    return
+  }
+
+  if (IS_WINDOWS && !isQuittingForHandoff && !systemShutdownInProgress && !desktopStopFenceAckDone) {
+    event.preventDefault()
+
+    if (!desktopStopFenceAckWait) {
+      const filePath = watchdogMaintenancePath()
+
+      try {
+        const result = writeDesktopStopFence({
+          filePath,
+          repoRoot: ACTIVE_HERMES_ROOT
+        })
+        desktopStopFenceAckWait = (result.preserved
+          ? Promise.resolve(true)
+          : waitForDesktopStopFenceAck({ filePath, fence: result.fence })
+        ).then(acknowledged => {
+          desktopStopFenceAckWait = null
+          if (!acknowledged) {
+            rememberLog('[watchdog] intentional Desktop stop was not acknowledged; quit remains cancelled')
+
+            return
+          }
+          desktopStopFenceAckDone = true
+          app.quit()
+        })
+      } catch (error) {
+        rememberLog(`[watchdog] could not record intentional Desktop stop fence; quit cancelled: ${error.message}`)
+      }
     }
 
     return

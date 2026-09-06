@@ -53,6 +53,42 @@ function Write-Step([string]$Message) {
     Write-Host ("[{0}] {1}" -f (Get-Date -Format "HH:mm:ss"), $Message)
 }
 
+function Test-SamePath([string]$Left, [string]$Right) {
+    if ([string]::IsNullOrWhiteSpace($Left) -or [string]::IsNullOrWhiteSpace($Right)) { return $false }
+    try {
+        return [System.IO.Path]::GetFullPath($Left).TrimEnd('\') -ieq [System.IO.Path]::GetFullPath($Right).TrimEnd('\')
+    } catch {
+        return $false
+    }
+}
+
+function Test-PathUnder([string]$Candidate, [string]$Root) {
+    if ([string]::IsNullOrWhiteSpace($Candidate) -or [string]::IsNullOrWhiteSpace($Root)) { return $false }
+    try {
+        $fullCandidate = [System.IO.Path]::GetFullPath($Candidate)
+        $fullRoot = [System.IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+        return $fullCandidate.StartsWith($fullRoot, [StringComparison]::OrdinalIgnoreCase)
+    } catch {
+        return $false
+    }
+}
+
+function Stop-OwnedDesktop {
+    $desktopExe = Join-Path $ProjectRoot "apps\desktop\release\win-unpacked\Hermes.exe"
+    foreach ($candidate in @(Get-CimInstance Win32_Process -Filter "Name='Hermes.exe'" -ErrorAction SilentlyContinue)) {
+        if (-not (Test-SamePath ([string]$candidate.ExecutablePath) $desktopExe)) {
+            Write-Step ("Preserving foreign Hermes.exe PID {0}: executable path is not the configured Desktop" -f $candidate.ProcessId)
+            continue
+        }
+        $current = Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f [int]$candidate.ProcessId) -ErrorAction SilentlyContinue
+        if (-not $current -or -not (Test-SamePath ([string]$current.ExecutablePath) $desktopExe) -or $current.CreationDate -ne $candidate.CreationDate) {
+            Write-Warning ("Desktop PID {0} changed identity; refusing to stop it" -f $candidate.ProcessId)
+            continue
+        }
+        Stop-Process -Id ([int]$candidate.ProcessId) -Force -ErrorAction Stop
+    }
+}
+
 function Stop-PortListener {
     param([int]$Port, [string]$NamePattern = ".*")
     $ownerPid = 0
@@ -81,34 +117,34 @@ function Stop-PortListener {
     }
 
     if ($ownerPid -le 0) { return }
-    $proc = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
-    if (-not $proc) { return }
-    if ($proc.Name -match "python|hermes|llama|node|memory-graph" -or $proc.ProcessName -match "python|hermes|llama|node|memory-graph") {
-        Write-Step "Stopping $Port pid=$($proc.Id) name=$($proc.Name)"
-        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 2
+    $candidate = Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f $ownerPid) -ErrorAction SilentlyContinue
+    if (-not $candidate -or -not $candidate.ExecutablePath -or -not $candidate.CommandLine) { return }
+    if ([string]$candidate.CommandLine -notmatch $NamePattern) {
+        Write-Warning ("Port {0} PID {1} command does not match the expected service; preserving it" -f $Port, $ownerPid)
+        return
     }
+    $allowedRoots = @($ProjectRoot, $HermesHome, $PSScriptRoot, (Join-Path $env:LOCALAPPDATA "HermesWebUI"))
+    if (-not ($allowedRoots | Where-Object { Test-PathUnder ([string]$candidate.ExecutablePath) $_ } | Select-Object -First 1)) {
+        Write-Warning ("Port {0} PID {1} is outside configured stack roots; preserving it" -f $Port, $ownerPid)
+        return
+    }
+    $current = Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f $ownerPid) -ErrorAction SilentlyContinue
+    if (-not $current -or $current.CreationDate -ne $candidate.CreationDate -or -not (Test-SamePath ([string]$current.ExecutablePath) ([string]$candidate.ExecutablePath))) {
+        Write-Warning ("Port {0} PID {1} changed identity; refusing to stop it" -f $Port, $ownerPid)
+        return
+    }
+    Write-Step "Stopping owned listener on port $Port pid=$ownerPid"
+    Stop-Process -Id $ownerPid -Force -ErrorAction Stop
+    Start-Sleep -Seconds 2
 }
 
 function Stop-DesktopWatchdogStack {
     Write-Step "Stopping Desktop/watchdog processes (prevent Hermes.exe proliferation)"
-    $goLock = Join-Path $env:LOCALAPPDATA "HermesWatchdog\watchdog.lock"
-    if (Test-Path -LiteralPath $goLock) {
-        try {
-            $obj = Get-Content -LiteralPath $goLock -Raw | ConvertFrom-Json
-            if ($obj.pid) {
-                Stop-Process -Id ([int]$obj.pid) -Force -ErrorAction SilentlyContinue
-            }
-        } catch {}
-        Remove-Item -LiteralPath $goLock -Force -ErrorAction SilentlyContinue
-    }
-    Get-Process -Name hermes-watchdog -ErrorAction SilentlyContinue | ForEach-Object {
-        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-    }
-    Remove-Item (Join-Path $HermesHome "logs\desktop-backend-watchdog.lock") -Force -ErrorAction SilentlyContinue
-    Get-Process -Name Hermes -ErrorAction SilentlyContinue | ForEach-Object {
-        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-    }
+    $launcher = Join-Path $PSScriptRoot "Start-HermesGoWatchdog.ps1"
+    if (-not (Test-Path -LiteralPath $launcher)) { throw "Go watchdog lifecycle launcher is missing: $launcher" }
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $launcher -HermesRoot $ProjectRoot -HermesHome $HermesHome -Stop
+    if ($LASTEXITCODE -ne 0) { throw "Go watchdog refused the stop request (exit $LASTEXITCODE)" }
+    Stop-OwnedDesktop
     Start-Sleep -Seconds 2
 }
 

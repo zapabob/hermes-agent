@@ -37,6 +37,11 @@ _DEP_CHECKS = {
         or _has_hermes_agent_browser()
         or _has_npx_agent_browser()
     ),
+    # Unlike the generic browser-engine check above, this is the exact
+    # agent-browser CLI/runtime requirement. It is used only by
+    # tools.browser_tool's lazy npx path, where a system Chrome alone cannot
+    # make the pinned agent-browser package executable.
+    "agent_browser": lambda: _has_compatible_agent_browser_runtime(),
     "ripgrep": lambda: shutil.which("rg") is not None,
     "ffmpeg": lambda: shutil.which("ffmpeg") is not None,
 }
@@ -44,6 +49,7 @@ _DEP_CHECKS = {
 _DEP_DESCRIPTIONS = {
     "node": "Node.js (required for browser tools and TUI)",
     "browser": "Browser engine (Chromium, for web browsing tools)",
+    "agent_browser": "agent-browser runtime (requires Node.js 24+)",
     "ripgrep": "ripgrep (fast file search)",
     "ffmpeg": "ffmpeg (TTS voice messages)",
 }
@@ -77,6 +83,31 @@ def _has_npx_agent_browser() -> bool:
     if not _is_npx_agent_browser_sentinel(browser_cmd):
         return False
     return not _requires_real_termux_browser_install(browser_cmd)
+
+
+def _has_compatible_agent_browser_runtime() -> bool:
+    """Return whether the pinned agent-browser can run under this Node.
+
+    A system Chromium is sufficient for the historical ``browser`` dependency,
+    but it cannot execute agent-browser v0.36.0. Keep this capability-specific
+    check separate so the lazy npx path can provision Hermes-managed Node 24+
+    without changing Hermes' general Node 22.22+ support. Direct launchers must
+    also report the pinned release; script shims are held to the Node 24 floor.
+    """
+    try:
+        from tools.browser_tool import (
+            _agent_browser_direct_is_compatible,
+            _agent_browser_node_is_compatible,
+            _find_agent_browser,
+            _is_npx_agent_browser_sentinel,
+        )
+
+        browser_cmd = _find_agent_browser(validate=False)
+        if not _is_npx_agent_browser_sentinel(browser_cmd):
+            return _agent_browser_direct_is_compatible(browser_cmd)
+        return _agent_browser_node_is_compatible() and _has_npx_agent_browser()
+    except Exception:
+        return False
 
 
 def _has_hermes_agent_browser() -> bool:

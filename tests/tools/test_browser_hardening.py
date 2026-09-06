@@ -1,6 +1,8 @@
 """Tests for browser_tool.py hardening: caching, security, thread safety, truncation."""
 
 import inspect
+import json
+import os
 import re
 from unittest.mock import MagicMock, patch
 
@@ -56,7 +58,10 @@ class TestFindAgentBrowserCache:
     def test_cached_after_first_call(self):
         import tools.browser_tool as bt
         with patch("shutil.which", return_value="/usr/bin/agent-browser"), \
-             patch("tools.browser_tool.agent_browser_runnable", return_value=True):
+             patch(
+                 "tools.browser_tool._agent_browser_direct_is_compatible",
+                 return_value=True,
+             ):
             result1 = bt._find_agent_browser()
             result2 = bt._find_agent_browser()
         assert result1 == result2 == "/usr/bin/agent-browser"
@@ -314,6 +319,13 @@ class TestEmptyStdoutFailure:
         assert isinstance(bt._EMPTY_OK_COMMANDS, frozenset)
         assert "close" in bt._EMPTY_OK_COMMANDS
         assert "record" in bt._EMPTY_OK_COMMANDS
+
+
+class TestAgentBrowserRelease:
+    def test_agent_browser_uses_exact_corrected_release(self):
+        import tools.browser_tool as bt
+
+        assert bt.AGENT_BROWSER_NPX_SPEC == "agent-browser@0.36.0"
 
 
 # ---------------------------------------------------------------------------

@@ -44,6 +44,7 @@ $script:FakeNpmAvailable = $true
 $script:FakeNpmVersion = '11.16.0'
 $script:FakeNodeVersion = 'v24.18.0'
 $script:DownloadAttempts = 0
+$script:LastDownloadUrl = ''
 $script:HasNode = $null
 $NodeVersion = '22'
 
@@ -71,7 +72,9 @@ function Get-Command {
 function Ensure-NodeExeOnPath { $true }
 function Get-WindowsArch { 'x64' }
 function Invoke-WebRequest {
+    param([string]$Uri)
     $script:DownloadAttempts++
+    $script:LastDownloadUrl = $Uri
     throw 'network disabled by test'
 }
 function Write-Info { param([string]$Message) }
@@ -82,18 +85,21 @@ function Invoke-SystemNodeProbe {
     param(
         [string]$NodeVersion,
         [string]$NpmVersion,
-        [bool]$NpmAvailable = $true
+        [bool]$NpmAvailable = $true,
+        [int]$MinimumMajor = 0
     )
 
     $script:FakeNodeVersion = $NodeVersion
     $script:FakeNpmVersion = $NpmVersion
     $script:FakeNpmAvailable = $NpmAvailable
     $script:DownloadAttempts = 0
+    $script:LastDownloadUrl = ''
     $script:HasNode = $null
-    [void](Test-Node)
+    [void](Test-Node -MinimumMajor $MinimumMajor)
     return [pscustomobject]@{
         HasNode = $script:HasNode
         DownloadAttempts = $script:DownloadAttempts
+        LastDownloadUrl = $script:LastDownloadUrl
     }
 }
 
@@ -106,6 +112,11 @@ Assert-Equal 0 $result.DownloadAttempts 'compatible system npm avoids managed do
 $result = Invoke-SystemNodeProbe 'v22.22.0' '10.9.8'
 Assert-Equal $true $result.HasNode 'minimum Node with bundled npm is accepted'
 Assert-Equal 0 $result.DownloadAttempts 'bundled npm avoids managed download'
+
+$result = Invoke-SystemNodeProbe 'v22.22.0' '10.9.8' $true 24
+Assert-Equal $false $result.HasNode 'Node 22 is rejected for agent-browser'
+Assert-Equal 1 $result.DownloadAttempts 'agent-browser Node floor provisions a managed runtime'
+Assert-Equal $true ($result.LastDownloadUrl -like '*latest-v24.x/*') 'agent-browser provisioning targets Node 24 without changing the product default'
 
 $result = Invoke-SystemNodeProbe 'v24.18.0' '11.16.0'
 Assert-Equal $false $result.HasNode 'incompatible system npm is not accepted'

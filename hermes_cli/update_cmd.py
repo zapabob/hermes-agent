@@ -73,6 +73,9 @@ def _begin_watchdog_update_maintenance() -> None:
 
         atexit.register(_release_watchdog_update_maintenance_at_exit)
         _WATCHDOG_MAINTENANCE_ATEXIT_REGISTERED = True
+    watchdog_maintenance.wait_for_acknowledgement(
+        _ACTIVE_WATCHDOG_MAINTENANCE
+    )
 
 
 def _transition_watchdog_update_maintenance(state: str, *, reason: str) -> None:

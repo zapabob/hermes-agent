@@ -54,3 +54,18 @@ carry:
     tests: [apps/desktop/electron/link-title-window.test.ts]
     integration_policy: COMPOSE
     removal_condition: upstream independently fails closed when setWindowOpenHandler cannot be installed
+  - id: desktop-operator-startup-pages
+    upstream_paths: [hermes_cli/config_defaults.py, apps/desktop/electron/main.ts, apps/desktop/electron/startup-external-urls.ts]
+    current_upstream_owner: desktop profile configuration and OS external URL handoff
+    downstream_reason: let an operator open private-session X and YouTube pages at Desktop startup without shipping account URLs or restricting browser automation
+    invariants: [public defaults contain no destination, values are profile-scoped config not environment variables, only credential-free HTTPS URLs on validated service hosts open once through the OS browser]
+    tests: [apps/desktop/electron/startup-external-urls.test.ts]
+    integration_policy: COMPOSE
+    removal_condition: upstream provides an equivalent profile-scoped startup-page configuration with no account-specific defaults
+  - id: windows-desktop-handle-bound-teardown
+    upstream_paths: [apps/desktop/electron/backend-child.ts, apps/desktop/electron/backend-claim.ts, apps/desktop/electron/backend-release-gate.ts, apps/desktop/electron/main.ts]
+    downstream_reason: authorize Windows Desktop backend termination only through retained ChildProcess handles
+    invariants: [no PID-only destructive claim, no taskkill in Desktop backend ownership, update aborts while managed processes linger]
+    tests: [apps/desktop/electron/backend-claim.test.ts, apps/desktop/electron/windows-child-options.test.ts, apps/desktop/electron/backend-release-gate.test.ts]
+    integration_policy: COMPOSE
+    removal_condition: upstream Desktop backend ownership uses an equivalent non-reopenable kernel-handle authority contract

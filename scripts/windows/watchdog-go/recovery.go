@@ -1,0 +1,116 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"time"
+)
+
+const (
+	recoveryWindow       = 10 * time.Minute
+	recoveryBudget       = 3
+	recoveryBaseBackoff  = 30 * time.Second
+	recoveryMaxBackoff   = 5 * time.Minute
+	recoveryCircuitBreak = 15 * time.Minute
+)
+
+type recoveryState struct {
+	Events           []string `json:"events,omitempty"`
+	Consecutive      int      `json:"consecutive"`
+	NextAllowedAt    string   `json:"nextAllowedAt,omitempty"`
+	CircuitOpenUntil string   `json:"circuitOpenUntil,omitempty"`
+	LastAction       string   `json:"lastAction,omitempty"`
+	UpdatedAt        string   `json:"updatedAt"`
+}
+
+func parseRecoveryTime(value string) time.Time {
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed
+}
+
+func readRecoveryState(path string, now time.Time) (recoveryState, error) {
+	if path == "" {
+		return recoveryState{}, fmt.Errorf("recovery state path is empty")
+	}
+	raw, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return recoveryState{}, nil
+	}
+	if err != nil {
+		return recoveryState{}, err
+	}
+	var state recoveryState
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return recoveryState{}, fmt.Errorf("invalid recovery state: %w", err)
+	}
+	cutoff := now.Add(-recoveryWindow)
+	kept := state.Events[:0]
+	for _, rawEvent := range state.Events {
+		if event := parseRecoveryTime(rawEvent); !event.IsZero() && !event.Before(cutoff) && !event.After(now.Add(time.Minute)) {
+			kept = append(kept, event.Format(time.RFC3339Nano))
+		}
+	}
+	state.Events = kept
+	return state, nil
+}
+
+func writeRecoveryState(path string, state recoveryState) error {
+	state.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	raw, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, raw, 0o600)
+}
+
+func reserveRecovery(path, action string, now time.Time) (recoveryState, bool, time.Duration, error) {
+	state, err := readRecoveryState(path, now)
+	if err != nil {
+		return state, false, recoveryCircuitBreak, err
+	}
+	if until := parseRecoveryTime(state.CircuitOpenUntil); until.After(now) {
+		return state, false, until.Sub(now), nil
+	}
+	if len(state.Events) >= recoveryBudget {
+		until := now.Add(recoveryCircuitBreak)
+		state.CircuitOpenUntil = until.Format(time.RFC3339Nano)
+		state.NextAllowedAt = state.CircuitOpenUntil
+		if err := writeRecoveryState(path, state); err != nil {
+			return state, false, recoveryCircuitBreak, err
+		}
+		return state, false, recoveryCircuitBreak, nil
+	}
+	if next := parseRecoveryTime(state.NextAllowedAt); next.After(now) {
+		return state, false, next.Sub(now), nil
+	}
+
+	state.Events = append(state.Events, now.Format(time.RFC3339Nano))
+	state.Consecutive++
+	backoff := recoveryBaseBackoff << min(state.Consecutive-1, 4)
+	if backoff > recoveryMaxBackoff {
+		backoff = recoveryMaxBackoff
+	}
+	state.NextAllowedAt = now.Add(backoff).Format(time.RFC3339Nano)
+	state.CircuitOpenUntil = ""
+	state.LastAction = action
+	if err := writeRecoveryState(path, state); err != nil {
+		return state, false, recoveryCircuitBreak, err
+	}
+	return state, true, 0, nil
+}
+
+func markRecoveryHealthy(path string, now time.Time) (recoveryState, error) {
+	state, err := readRecoveryState(path, now)
+	if err != nil {
+		return state, err
+	}
+	state.Consecutive = 0
+	state.NextAllowedAt = ""
+	state.CircuitOpenUntil = ""
+	state.LastAction = "healthy"
+	return state, writeRecoveryState(path, state)
+}

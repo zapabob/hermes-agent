@@ -1723,12 +1723,30 @@ function Test-NodeVersionOk {
 # Accept a system Node only when its companion npm also satisfies the same
 # range used to provision the Hermes-managed tree. Keeping this probe separate
 # lets the initial PATH check and the post-winget check share one authority.
+function Test-NodeMeetsMinimumMajor {
+    param(
+        [string]$Version,
+        [int]$MinimumMajor = 0
+    )
+    if ($MinimumMajor -le 0) { return $true }
+    try {
+        return ([version]($Version -replace '^v', '')).Major -ge $MinimumMajor
+    } catch {
+        return $false
+    }
+}
+
 function Test-SystemNodeReady {
+    param([int]$MinimumMajor = 0)
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) { return $false }
 
     $version = node --version
     if (-not (Test-NodeVersionOk $version)) {
         Write-Warn "Node.js $version is unsupported (Hermes requires Node 22.22+, 24.11+, or 26+)"
+        return $false
+    }
+    if (-not (Test-NodeMeetsMinimumMajor $version $MinimumMajor)) {
+        Write-Warn "Node.js $version is too old for this dependency (requires Node.js $MinimumMajor+)"
         return $false
     }
 
@@ -1760,9 +1778,10 @@ function Test-SystemNodeReady {
 }
 
 function Test-Node {
+    param([int]$MinimumMajor = 0)
     Write-Info "Checking Node.js (for browser tools)..."
 
-    if (Test-SystemNodeReady) {
+    if (Test-SystemNodeReady -MinimumMajor $MinimumMajor) {
         $script:HasNode = $true
         return $true
     }
@@ -1771,8 +1790,9 @@ function Test-Node {
 
     # Prefer a Hermes-managed Node from a previous run over a too-old system one.
     $managedNode = "$HermesHome\node\node.exe"
-    if ((Test-Path $managedNode) -and (Test-NodeVersionOk (& $managedNode --version))) {
-        $version = & $managedNode --version
+    $managedVersion = if (Test-Path $managedNode) { & $managedNode --version } else { "" }
+    if ((Test-Path $managedNode) -and (Test-NodeVersionOk $managedVersion) -and (Test-NodeMeetsMinimumMajor $managedVersion $MinimumMajor)) {
+        $version = $managedVersion
         $env:Path = "$HermesHome\node;$env:Path"
         Set-ManagedNodeFirstOnUserPath "$HermesHome\node"
         Write-Success "Node.js $version found (Hermes-managed)"
@@ -1784,7 +1804,15 @@ function Test-Node {
         return $true
     }
 
-    Write-Info "Installing Hermes-managed Node.js $NodeVersion LTS..."
+    # Keep Hermes' normal Node 22 provisioning contract intact. A dependency
+    # can request a higher runtime (agent-browser v0.36 needs Node 24+) without
+    # changing the whole product's engine range or replacing a user-managed
+    # system Node installation.
+    # Use script scope explicitly. Callers can legitimately have a local
+    # ``$NodeVersion`` probe variable (the installer compatibility harness
+    # does), which must not change what the installer provisions.
+    $targetNodeVersion = [Math]::Max([int]$script:NodeVersion, $MinimumMajor)
+    Write-Info "Installing Hermes-managed Node.js $targetNodeVersion LTS..."
 
     # Try the portable-zip path FIRST -- no UAC, no admin, no winget MSI.
     # winget install OpenJS.NodeJS.LTS triggers a system-wide MSI install
@@ -1794,13 +1822,13 @@ function Test-Node {
     # which is user-scoped and identical to how Install-Git handles
     # PortableGit.  Same UX guarantee: works on locked-down enterprise
     # machines with no admin rights.
-    Write-Info "Downloading portable Node.js $NodeVersion to $HermesHome\node\ ..."
+    Write-Info "Downloading portable Node.js $targetNodeVersion to $HermesHome\node\ ..."
     Write-Info "(no admin rights required; isolated from any system Node install)"
     try {
         $arch = Get-WindowsArch
-        $indexUrl = "https://nodejs.org/dist/latest-v${NodeVersion}.x/"
+        $indexUrl = "https://nodejs.org/dist/latest-v${targetNodeVersion}.x/"
         $indexPage = Invoke-WebRequest -Uri $indexUrl -UseBasicParsing
-        $zipName = ($indexPage.Content | Select-String -Pattern "node-v${NodeVersion}\.\d+\.\d+-win-${arch}\.zip" -AllMatches).Matches[0].Value
+        $zipName = ($indexPage.Content | Select-String -Pattern "node-v${targetNodeVersion}\.\d+\.\d+-win-${arch}\.zip" -AllMatches).Matches[0].Value
 
         if ($zipName) {
             $downloadUrl = "${indexUrl}${zipName}"
@@ -1942,7 +1970,7 @@ function Test-Node {
             $ErrorActionPreference = $prevEAP
             # Refresh PATH
             $env:Path = [Environment]::GetEnvironmentVariable("Path", "User") + ";" + [Environment]::GetEnvironmentVariable("Path", "Machine")
-            if (Test-SystemNodeReady) {
+            if (Test-SystemNodeReady -MinimumMajor $MinimumMajor) {
                 $script:HasNode = $true
                 return $true
             }
@@ -4925,6 +4953,18 @@ function Invoke-EnsureMode {
             }
             "browser" {
                 [void](Test-Node)
+                if ($script:HasNode) {
+                    Install-AgentBrowser
+                } else {
+                    Write-Err "Node.js is required for browser tools but could not be installed"
+                    exit 1
+                }
+            }
+            "agent_browser" {
+                # agent-browser v0.36.0 requires Node >=24. This upgrades
+                # only Hermes' managed browser runtime when necessary; the
+                # broader Hermes/desktop Node 22.22+ compatibility remains.
+                [void](Test-Node -MinimumMajor 24)
                 if ($script:HasNode) {
                     Install-AgentBrowser
                 } else {

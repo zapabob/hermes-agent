@@ -92,7 +92,8 @@ LEGACY_RAW_ENV_RATIONALE = (
 APPROVED_IMPLICIT_SPAWN_BASELINES = {
     "agent": ("d782f1f78702bebfba47c9f3bf8e0e6756358f63747f609022eb650e6a8ff36f", LEGACY_IMPLICIT_RATIONALE),
     "apps/desktop/electron": (
-        "e2843b40227c5b1e3c87d83d8b334bd32497bf5f488959b10527849ebb394f3a",
+        # Audited reduction: link-title fetching no longer spawns curl.
+        "60f4332f15f4af885771753792fb58715e72c2a7fa28a4ab7c7dd5cdecd47d02",
         LEGACY_IMPLICIT_RATIONALE,
     ),
     "apps/desktop/scripts": (
@@ -103,7 +104,8 @@ APPROVED_IMPLICIT_SPAWN_BASELINES = {
     "cron": ("e3b322c51645ed1dab6a817a4c24bc210b7ebeb5a32edfc726f55ebfc9c86ce9", LEGACY_IMPLICIT_RATIONALE),
     "downstream": ("8eb57e2d493e19d6e0e0b9c91627d3980693c6a4ec5a5dea503c3441ef139551", LEGACY_IMPLICIT_RATIONALE),
     "gateway": ("7c888db74531e5ade41e806eb9ae704b5657b00c27fbe36a00e547d5f7ca6c78", LEGACY_IMPLICIT_RATIONALE),
-    "hermes_cli": ("3d5db8d5e73c9688dfed76be9c0364bdc792dcf9397c42c37515d068c1ca74c2", LEGACY_IMPLICIT_RATIONALE),
+    # Audited reduction: browser post-setup now supplies the scrubbed child env.
+    "hermes_cli": ("419ba0ac6735ada971064664ea37f1956debd7b9e5ec6d11d9445f6de530b26f", LEGACY_IMPLICIT_RATIONALE),
     "hermes_constants.py": (
         "5b23578a51cafa9b8233e03e7bdddf96a68954014b2cfeae2b1da311ee734704",
         LEGACY_IMPLICIT_RATIONALE,
@@ -116,7 +118,8 @@ APPROVED_IMPLICIT_SPAWN_BASELINES = {
 }
 APPROVED_RAW_ENV_BASELINES = {
     "apps/desktop/electron": (
-        "b35badc6fb2cc744846fd845c94cf9bfd359133e504404bf1fed46668c9b1e13",
+        # Audited reduction: runGit now uses the central Desktop env allowlist.
+        "5e99cfb9d36be7b76902fd9649b00b45acb299ac3b821e89f9670a7e67087afc",
         LEGACY_RAW_ENV_RATIONALE,
     ),
     "apps/desktop/scripts": (

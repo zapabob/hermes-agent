@@ -38,6 +38,49 @@ function Write-Step([string]$Message) {
     Write-Host ("[{0}] {1}" -f (Get-Date -Format "HH:mm:ss"), $Message) -ForegroundColor Cyan
 }
 
+function Test-SamePath([string]$Left, [string]$Right) {
+    if ([string]::IsNullOrWhiteSpace($Left) -or [string]::IsNullOrWhiteSpace($Right)) { return $false }
+    try {
+        return [System.IO.Path]::GetFullPath($Left).TrimEnd('\') -ieq [System.IO.Path]::GetFullPath($Right).TrimEnd('\')
+    } catch {
+        return $false
+    }
+}
+
+function Test-PathUnder([string]$Candidate, [string]$Root) {
+    if ([string]::IsNullOrWhiteSpace($Candidate) -or [string]::IsNullOrWhiteSpace($Root)) { return $false }
+    try {
+        $fullCandidate = [System.IO.Path]::GetFullPath($Candidate)
+        $fullRoot = [System.IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+        return $fullCandidate.StartsWith($fullRoot, [StringComparison]::OrdinalIgnoreCase)
+    } catch {
+        return $false
+    }
+}
+
+function Stop-OwnedDesktop {
+    $desktopExe = Join-Path $RepoRoot "apps\desktop\release\win-unpacked\Hermes.exe"
+    foreach ($candidate in @(Get-CimInstance Win32_Process -Filter "Name='Hermes.exe'" -ErrorAction SilentlyContinue)) {
+        if (-not (Test-SamePath ([string]$candidate.ExecutablePath) $desktopExe)) {
+            Write-Step ("Preserving foreign Hermes.exe PID {0}: executable path is not the configured Desktop" -f $candidate.ProcessId)
+            continue
+        }
+        $current = Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f [int]$candidate.ProcessId) -ErrorAction SilentlyContinue
+        if (-not $current -or -not (Test-SamePath ([string]$current.ExecutablePath) $desktopExe) -or $current.CreationDate -ne $candidate.CreationDate) {
+            Write-Warning ("Desktop PID {0} changed identity; refusing to stop it" -f $candidate.ProcessId)
+            continue
+        }
+        Stop-Process -Id ([int]$candidate.ProcessId) -Force -ErrorAction Stop
+    }
+}
+
+function Stop-OwnedGoWatchdog {
+    $launcher = Join-Path $PSScriptRoot "Start-HermesGoWatchdog.ps1"
+    if (-not (Test-Path -LiteralPath $launcher)) { throw "Go watchdog lifecycle launcher is missing: $launcher" }
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $launcher -HermesRoot $RepoRoot -HermesHome $HermesHome -Stop
+    if ($LASTEXITCODE -ne 0) { throw "Go watchdog refused the stop request (exit $LASTEXITCODE)" }
+}
+
 if (-not (Test-Path -LiteralPath $RepoRoot)) {
     $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 }
@@ -85,52 +128,50 @@ function Stop-PortListener {
     }
 
     if ($ownerPid -le 0) { return }
-    $proc = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
-    if (-not $proc) { return }
-    if ($proc.Name -match "python|hermes|llama|node|electron|memory-graph" -or $proc.ProcessName -match "python|hermes|llama|node|electron|memory-graph") {
-        Write-Step ("Stopping listener on port {0} (PID {1}: {2})" -f $Port, $proc.Id, $proc.Name)
-        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 1
+    $candidate = Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f $ownerPid) -ErrorAction SilentlyContinue
+    if (-not $candidate -or -not $candidate.ExecutablePath -or -not $candidate.CommandLine) { return }
+    if ([string]$candidate.CommandLine -notmatch $NamePattern) {
+        Write-Warning ("Port {0} PID {1} command does not match the expected service; preserving it" -f $Port, $ownerPid)
+        return
     }
+    $allowedRoots = @($RepoRoot, $HermesHome, $PSScriptRoot, $A2ARoot, (Split-Path -Parent $LlamaServerExe), (Join-Path $env:LOCALAPPDATA "HermesWebUI"))
+    if (-not ($allowedRoots | Where-Object { Test-PathUnder ([string]$candidate.ExecutablePath) $_ } | Select-Object -First 1)) {
+        Write-Warning ("Port {0} PID {1} is outside configured stack roots; preserving it" -f $Port, $ownerPid)
+        return
+    }
+    $current = Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f $ownerPid) -ErrorAction SilentlyContinue
+    if (-not $current -or $current.CreationDate -ne $candidate.CreationDate -or -not (Test-SamePath ([string]$current.ExecutablePath) ([string]$candidate.ExecutablePath))) {
+        Write-Warning ("Port {0} PID {1} changed identity; refusing to stop it" -f $Port, $ownerPid)
+        return
+    }
+    Write-Step ("Stopping owned listener on port {0} (PID {1})" -f $Port, $ownerPid)
+    Stop-Process -Id $ownerPid -Force -ErrorAction Stop
+    Start-Sleep -Seconds 1
 }
 
 # --- Step 1: Stop Existing Processes ---
 Write-Step "Stopping all Hermes, Desktop, Go Watchdog, and WebUI processes..."
 
-# Stop Go watchdog and remove locks
-$goLock = Join-Path $env:LOCALAPPDATA "HermesWatchdog\watchdog.lock"
-if (Test-Path -LiteralPath $goLock) {
-    try {
-        $obj = Get-Content -LiteralPath $goLock -Raw | ConvertFrom-Json
-        if ($obj.pid) { Stop-Process -Id ([int]$obj.pid) -Force -ErrorAction SilentlyContinue }
-    }
-    catch {}
-    Remove-Item -LiteralPath $goLock -Force -ErrorAction SilentlyContinue
-}
-Get-Process -Name hermes-watchdog -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Remove-Item (Join-Path $HermesHome "logs\desktop-backend-watchdog.lock") -Force -ErrorAction SilentlyContinue
-
-# Stop Go A2A servers
-Get-Process -Name "go-a2a-hub", "go-a2a-roundrobin" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-
-# Stop Desktop App / Electron
-Get-Process Hermes, electron, hermes -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+# Stop only identities owned by this configured stack. The Go launcher validates
+# PID, executable path, repository root and creation time before it acts.
+Stop-OwnedGoWatchdog
+Stop-OwnedDesktop
 
 # Stop CLI services
 try { & $PythonExe -m hermes_cli.main gateway stop --all 2>$null } catch {}
 try { & $PythonExe -m hermes_cli.main harness stop 2>$null } catch {}
 
 # Stop port listeners
-Stop-PortListener -Port 8787 # WebUI
-Stop-PortListener -Port 9120 # Dashboard
-Stop-PortListener -Port 9920 # Go Watchdog ops
-Stop-PortListener -Port 9119 # Managed backend
-Stop-PortListener -Port 9123 # Go A2A Hub
-Stop-PortListener -Port 8765 # Memory Graph / API
+Stop-PortListener -Port 8787 -NamePattern "hermes|server\.py" # WebUI
+Stop-PortListener -Port 9120 -NamePattern "hermes_cli.*dashboard|dashboard" # Dashboard
+Stop-PortListener -Port 9920 -NamePattern "hermes-watchdog" # Go Watchdog ops
+Stop-PortListener -Port 9119 -NamePattern "hermes_cli.*serve|hermes.*serve" # Managed backend
+Stop-PortListener -Port 9123 -NamePattern "go-a2a-hub" # Go A2A Hub
+Stop-PortListener -Port 9124 -NamePattern "go-a2a-roundrobin" # Go A2A Round-Robin
+Stop-PortListener -Port 8765 -NamePattern "memory-graph|obsidian" # Memory Graph / API
 
 if (-not $SkipLlama) {
-    Stop-PortListener -Port $LlamaPort
-    Get-Process -Name "llama-server" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Stop-PortListener -Port $LlamaPort -NamePattern "llama-server"
 }
 
 Start-Sleep -Seconds 2

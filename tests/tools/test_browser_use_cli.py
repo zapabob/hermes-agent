@@ -20,7 +20,6 @@ import pytest
 
 import tools.browser_use_cli as bu_cli
 
-
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     monkeypatch.delenv("BU_NAME", raising=False)
@@ -541,10 +540,11 @@ class TestOwnTabPreamble:
         # model code still present, after the preamble
         assert result["output"].index("_hermes_ensure_own_tab") < result["output"].index("print('payload')")
 
-    def test_unnamed_session_gets_no_preamble(self, tmp_path, monkeypatch):
+    def test_unnamed_session_gets_no_own_tab_preamble(self, tmp_path, monkeypatch):
         result = self._run(tmp_path, monkeypatch, session="")
         assert result["success"] is True
         assert "_hermes_ensure_own_tab" not in result["output"]
+        assert "print('payload')" in result["output"]
 
     def test_named_provider_browser_skips_preamble(self, tmp_path, monkeypatch):
         """Per-name provider browsers are private — preamble would leak a tab."""
@@ -572,6 +572,31 @@ class TestOwnTabPreamble:
         ast.parse(bu_cli._OWN_TAB_PREAMBLE)
         # and composes with model code
         ast.parse(bu_cli._OWN_TAB_PREAMBLE + "print('x')")
+
+
+class TestBrowserExecNamespaceBoundary:
+    @pytest.mark.parametrize(
+        "code",
+        (
+            "import browser_harness.helpers",
+            "cdp('Network.disable')",
+            "print(goto_url.__closure__)",
+            "globals()['cdp']('Network.disable')",
+            "os.system('browser-use open https://x.com')",
+        ),
+    )
+    def test_namespace_escape_hatches_are_rejected_before_execution(
+        self, code, monkeypatch
+    ):
+        monkeypatch.setattr(
+            bu_cli,
+            "_find_cli",
+            lambda: (_ for _ in ()).throw(AssertionError("CLI must not run")),
+        )
+
+        result = json.loads(bu_cli.browser_exec(code))
+
+        assert "Blocked: browser_exec" in result["error"]
 
 
 class TestProviderPickerIntegration:
@@ -831,9 +856,17 @@ class TestSkillTextDescription:
         assert overrides["description"].endswith(bu_cli._HELPERS_DIGEST)
 
     def test_digest_names_core_helpers(self):
-        for helper in ("new_tab(", "page_info()", "js(", "fill_input(",
-                       "click_at_xy(", "capture_screenshot()", "cdp("):
+        for helper in (
+            "new_tab(",
+            "page_info()",
+            "js(",
+            "fill_input(",
+            "click_at_xy(",
+            "capture_screenshot()",
+        ):
             assert helper in bu_cli._HELPERS_DIGEST
+        assert "raw CDP" in bu_cli._HELPERS_DIGEST
+        assert "cdp('" not in bu_cli._HELPERS_DIGEST
 
     def test_static_fallback_carries_digest_and_install_hint(self):
         desc = bu_cli.BROWSER_EXEC_SCHEMA["description"]
@@ -857,7 +890,7 @@ class TestBrowserExec:
         result = json.loads(bu_cli.browser_exec('print("hi")'))
         assert result["success"] is True
         assert result["exit_code"] == 0
-        assert 'got:print("hi")' in result["output"]
+        assert 'print("hi")' in result["output"]
         assert "session" not in result
 
     def test_session_sets_bu_name(self, tmp_path, monkeypatch):

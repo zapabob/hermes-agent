@@ -122,6 +122,9 @@ func (w *Watchdog) ensureEmbeddingHealthy() (string, uint32) {
 	if !w.cfg.EmbeddingEnabled {
 		return "disabled", 0
 	}
+	if w.maintenanceSuspended() {
+		return "maintenance", 0
+	}
 	endpoint, _, port, err := parseEmbeddingEndpoint(w.cfg.EmbeddingEndpoint)
 	if err != nil {
 		w.logger.Infof("embedding configuration: %v", err)
@@ -138,6 +141,9 @@ func (w *Watchdog) ensureEmbeddingHealthy() (string, uint32) {
 
 	w.embeddingMu.Lock()
 	defer w.embeddingMu.Unlock()
+	if w.maintenanceSuspended() {
+		return "maintenance", 0
+	}
 	if embeddingEndpointHealthy(endpoint) {
 		return "up", firstListenerPID(port)
 	}
@@ -146,8 +152,12 @@ func (w *Watchdog) ensureEmbeddingHealthy() (string, uint32) {
 			return "starting", uint32(w.embeddingPID)
 		}
 		w.logger.Infof("embedding server pid=%d exceeded startup timeout; restarting owned process", w.embeddingPID)
-		stopProcessPID(uint32(w.embeddingPID))
+		if w.embeddingProcess != nil {
+			_ = w.embeddingProcess.Kill()
+			_, _ = w.embeddingProcess.Wait()
+		}
 		w.embeddingPID = 0
+		w.embeddingProcess = nil
 		w.embeddingStartedAt = time.Time{}
 	}
 	if listeners := listeningPIDsOnPort(port); len(listeners) > 0 {
@@ -163,6 +173,7 @@ func (w *Watchdog) ensureEmbeddingHealthy() (string, uint32) {
 		return "start_failed", 0
 	}
 	w.embeddingPID = cmd.Process.Pid
+	w.embeddingProcess = cmd.Process
 	w.embeddingStartedAt = time.Now()
 	w.logger.Infof("embedding server starting pid=%d endpoint=%s", w.embeddingPID, endpoint)
 	return "starting", uint32(w.embeddingPID)

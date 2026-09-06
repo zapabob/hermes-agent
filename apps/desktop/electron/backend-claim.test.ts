@@ -7,8 +7,6 @@ import {
   claimDecision,
   createBackendOutputTail,
   DEFAULT_OUTPUT_TAIL_LIMIT,
-  isPidOnlyStartMarker,
-  pidOnlyStartMarker,
   probeStartMarker,
   processStartMarker
 } from './backend-claim'
@@ -28,10 +26,10 @@ test('probe success claims even when the child already exited (ownership records
   assert.deepEqual(decision, { action: 'claim', startMarker: 'win:99' })
 })
 
-test('probe failure on a LIVE child degrades to PID-only identity — never kills a healthy backend (#93608)', () => {
+test('probe failure on a LIVE child fails closed while its exact handle is retained', () => {
   const decision = claimDecision(true, { ok: false, reason: 'powershell.exe timed out after 30000ms' })
 
-  assert.equal(decision.action, 'degrade')
+  assert.equal(decision.action, 'fail')
   assert.match((decision as { reason: string }).reason, /timed out/)
 })
 
@@ -82,17 +80,6 @@ test(
   },
   REAL_PROBE_TEST_TIMEOUT_MS
 )
-
-// --- PID-only marker helpers --------------------------------------------------
-
-test('pidOnlyStartMarker round-trips through isPidOnlyStartMarker', () => {
-  const marker = pidOnlyStartMarker(4242)
-
-  assert.equal(marker, 'pid-only:4242')
-  assert.equal(isPidOnlyStartMarker(marker), true)
-  assert.equal(isPidOnlyStartMarker('linux:12345'), false)
-  assert.equal(isPidOnlyStartMarker(undefined), false)
-})
 
 // --- output tail ring buffer ----------------------------------------------------
 

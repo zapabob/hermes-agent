@@ -366,7 +366,8 @@ class TestAgentBrowserPostSetup:
         Chromium-branch tests never bootstrap uv / hit the network, and so
         their print/subprocess assertions stay scoped to the agent-browser
         logic under test."""
-        with patch("hermes_cli.tools_config._ensure_browser_use_cli") as stub:
+        with patch("hermes_cli.tools_config._ensure_browser_use_cli") as stub, \
+             patch("tools.browser_tool._ensure_agent_browser_runtime", return_value=True):
             yield stub
 
     def test_warns_when_neither_npx_nor_agent_browser_on_path(self):
@@ -475,6 +476,7 @@ class TestAgentBrowserPostSetup:
         assert run.call_args.args[0] == [
             "/usr/bin/npx", "--ignore-scripts", "-y", AGENT_BROWSER_NPX_SPEC, "install", "--with-deps",
         ]
+        assert run.call_args.kwargs["env"]["AGENT_BROWSER_NO_WEBMCP"] == "1"
 
     def test_installs_chromium_via_npx_resolved_only_through_extended_path(self):
         """Hermes-managed-Node-only setups: npx resolves via

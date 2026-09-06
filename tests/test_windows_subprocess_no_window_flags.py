@@ -217,6 +217,7 @@ def test_agent_browser_npx_warmup_hides_npx_window(monkeypatch):
         lambda name, path=None: "/usr/bin/npx",
     )
     monkeypatch.setattr(browser_tool, "node_tool_runnable", lambda p: True)
+    monkeypatch.setattr(browser_tool, "_ensure_agent_browser_runtime", lambda _cmd: True)
     monkeypatch.setattr(browser_tool, "windows_hide_flags", lambda: _CREATE_NO_WINDOW)
     monkeypatch.setattr(browser_tool.subprocess, "Popen", _FakePopen)
 

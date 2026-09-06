@@ -107,6 +107,7 @@ class TestCommandTimeoutRecovery:
         supervisor_events = []
 
         monkeypatch.setattr(bt, "_find_agent_browser", lambda: "agent-browser")
+        monkeypatch.setattr(bt, "_ensure_agent_browser_runtime", lambda _cmd: True)
         monkeypatch.setattr(bt, "_requires_real_termux_browser_install", lambda _cmd: False)
         monkeypatch.setattr(bt, "_start_browser_cleanup_thread", lambda: None)
         monkeypatch.setattr(bt, "_ensure_cdp_supervisor", lambda _: supervisor_events.append("ensure"))

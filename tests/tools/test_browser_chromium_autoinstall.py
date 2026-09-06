@@ -42,6 +42,7 @@ class TestInstall:
         monkeypatch.setattr(bt, "_running_in_docker", lambda: False)
         monkeypatch.setattr("tools.lazy_deps._allow_lazy_installs", lambda: True)
         monkeypatch.setattr(bt, "_find_agent_browser", lambda: "/x/agent-browser")
+        monkeypatch.setattr(bt, "_ensure_agent_browser_runtime", lambda _cmd: True)
         monkeypatch.setattr(bt, "_build_browser_env", lambda: {})
         monkeypatch.setattr(bt, "_chromium_installed", lambda: True)
 
@@ -65,6 +66,7 @@ class TestInstall:
         monkeypatch.setattr(bt, "_chromium_installed", lambda: True)
         monkeypatch.setattr(bt.shutil, "which", lambda _, path=None: "/usr/bin/npx")
         monkeypatch.setattr(bt, "node_tool_runnable", lambda p: True)
+        monkeypatch.setattr(bt, "_ensure_agent_browser_runtime", lambda _cmd: True)
 
         captured = {}
         monkeypatch.setattr(
@@ -82,6 +84,7 @@ class TestInstall:
         monkeypatch.setattr(bt, "_running_in_docker", lambda: False)
         monkeypatch.setattr("tools.lazy_deps._allow_lazy_installs", lambda: True)
         monkeypatch.setattr(bt, "_find_agent_browser", lambda: "/x/agent-browser")
+        monkeypatch.setattr(bt, "_ensure_agent_browser_runtime", lambda _cmd: True)
         monkeypatch.setattr(bt, "_build_browser_env", lambda: {})
         monkeypatch.setattr(
             bt.subprocess, "run",
@@ -95,6 +98,7 @@ class TestOneShot:
         monkeypatch.setattr(bt, "_running_in_docker", lambda: False)
         monkeypatch.setattr("tools.lazy_deps._allow_lazy_installs", lambda: True)
         monkeypatch.setattr(bt, "_find_agent_browser", lambda: "/x/agent-browser")
+        monkeypatch.setattr(bt, "_ensure_agent_browser_runtime", lambda _cmd: True)
         monkeypatch.setattr(bt, "_build_browser_env", lambda: {})
         monkeypatch.setattr(bt, "_chromium_installed", lambda: True)
 

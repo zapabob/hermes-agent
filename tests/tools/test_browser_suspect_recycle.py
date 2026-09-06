@@ -38,6 +38,7 @@ def _local_session(name="stuck-session"):
 def _install_command_stubs(monkeypatch, tmp_path, process):
     """Common _run_browser_command environment with a fake daemon layer."""
     monkeypatch.setattr(bt, "_find_agent_browser", lambda: "agent-browser")
+    monkeypatch.setattr(bt, "_ensure_agent_browser_runtime", lambda _cmd: True)
     monkeypatch.setattr(bt, "_requires_real_termux_browser_install", lambda _cmd: False)
     monkeypatch.setattr(bt, "_chromium_installed", lambda: True)
     monkeypatch.setattr(bt, "_start_browser_cleanup_thread", lambda: None)

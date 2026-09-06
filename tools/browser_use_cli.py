@@ -4,6 +4,7 @@ When browser.backend is "browser-use", the model gets ``browser_exec`` tool
 instead of default browser tools
 """
 
+import ast
 import json
 import logging
 import os
@@ -91,6 +92,151 @@ _IMAGE_PATH_RE = re.compile(
 
 # http(s) URL literals in exec code checked against browser_navigate's policy
 _URL_RE = re.compile(r"https?://[^\s'\"\\)]+", re.IGNORECASE)
+
+_SAFE_EXEC_CALLS = frozenset(
+    {
+        "abs",
+        "all",
+        "any",
+        "bool",
+        "capture_screenshot",
+        "click_at_xy",
+        "current_tab",
+        "dict",
+        "dispatch_key",
+        "enumerate",
+        "fill_input",
+        "float",
+        "goto_url",
+        "iframe_target",
+        "int",
+        "isinstance",
+        "js",
+        "len",
+        "list",
+        "max",
+        "min",
+        "new_tab",
+        "page_info",
+        "press_key",
+        "print",
+        "range",
+        "round",
+        "scroll",
+        "set",
+        "sorted",
+        "str",
+        "sum",
+        "switch_tab",
+        "tuple",
+        "type_text",
+        "upload_file",
+        "wait",
+        "wait_for_element",
+        "wait_for_load",
+        "wait_for_network_idle",
+        "zip",
+    }
+)
+_SAFE_EXEC_METHODS = frozenset(
+    {
+        "append",
+        "capitalize",
+        "casefold",
+        "clear",
+        "copy",
+        "count",
+        "endswith",
+        "extend",
+        "find",
+        "format",
+        "get",
+        "index",
+        "insert",
+        "items",
+        "join",
+        "keys",
+        "lower",
+        "lstrip",
+        "pop",
+        "remove",
+        "replace",
+        "reverse",
+        "rstrip",
+        "setdefault",
+        "sort",
+        "split",
+        "splitlines",
+        "startswith",
+        "strip",
+        "title",
+        "update",
+        "upper",
+        "values",
+    }
+)
+_FORBIDDEN_EXEC_GLOBALS = frozenset(
+    {
+        "auth",
+        "builtins",
+        "compile",
+        "daemon_alive",
+        "ensure_daemon",
+        "eval",
+        "exec",
+        "globals",
+        "help",
+        "input",
+        "locals",
+        "open",
+        "os",
+        "recorder",
+        "restart_daemon",
+        "start_remote_daemon",
+        "stop_remote_daemon",
+        "subprocess",
+        "sys",
+        "telemetry",
+        "urllib",
+        "vars",
+    }
+)
+
+
+def _validate_browser_exec_code(code: str) -> Optional[str]:
+    """Restrict model code to the guarded Browser Harness helper surface.
+
+    Browser Harness executes input as Python in a privileged module namespace.
+    Without a structural gate, an import or dunder traversal can recover the
+    unwrapped CDP callable. Keep ordinary data manipulation, loops, and guarded
+    browser helpers while rejecting namespace escape hatches and raw CDP.
+    """
+    try:
+        tree = ast.parse(code or "", mode="exec")
+    except SyntaxError as exc:
+        return f"Invalid browser_exec Python: {exc.msg}"
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            return "Blocked: browser_exec imports are disabled by the browser authority policy."
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            return "Blocked: browser_exec dynamic callables are disabled by the browser authority policy."
+        if isinstance(node, ast.Name):
+            if node.id.startswith("_") or node.id in _FORBIDDEN_EXEC_GLOBALS:
+                return f"Blocked: browser_exec cannot access {node.id!r}."
+        if isinstance(node, ast.Attribute):
+            if node.attr.startswith("_"):
+                return "Blocked: browser_exec cannot access private or dunder attributes."
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name):
+                if node.func.id not in _SAFE_EXEC_CALLS:
+                    return f"Blocked: browser_exec call {node.func.id!r} is outside the guarded helper surface."
+            elif isinstance(node.func, ast.Attribute):
+                if node.func.attr not in _SAFE_EXEC_METHODS:
+                    return f"Blocked: browser_exec method {node.func.attr!r} is outside the guarded data surface."
+            else:
+                return "Blocked: browser_exec indirect calls are disabled by the browser authority policy."
+    return None
 
 
 def _blocked_url_in_code(code: str) -> Optional[str]:
@@ -687,6 +833,10 @@ def browser_exec(
     if not code or not code.strip():
         return tool_error("No code provided. Pass Python that uses the pre-imported helpers, e.g. new_tab(\"https://example.com\") then print(page_info()).")
 
+    validation_error = _validate_browser_exec_code(code)
+    if validation_error:
+        return tool_error(validation_error)
+
     blocked = _blocked_url_in_code(code)
     if blocked:
         return tool_error(blocked)
@@ -746,7 +896,6 @@ def browser_exec(
     private_browser = env.pop(_PRIVATE_BROWSER_SENTINEL, None)
     if session and not private_browser:
         code = _OWN_TAB_PREAMBLE + code
-
     workspace = _workspace_dir(task_id)
     if workspace:
         env["BH_AGENT_WORKSPACE"] = workspace
@@ -898,12 +1047,10 @@ _HELPERS_DIGEST = (
     "a bare '() => {...}' returns the function itself, uncalled), "
     "fill_input(selector, text) types into inputs, click_at_xy(x, y) clicks "
     "viewport coordinates, capture_screenshot() saves and prints a "
-    "screenshot path, cdp('Domain.method', **kwargs) is raw CDP — "
-    "cdp('Accessibility.getFullAXTree')['nodes'] lists every element's "
-    "role/name/backendDOMNodeId (filter in Python before printing; it is "
-    "thousands of nodes), then cdp('DOM.getBoxModel', backendNodeId=n) gives "
-    "click coordinates. ensure_real_tab() recovers from a stale/internal "
-    "tab. Login walls: stop and ask the user; never guess credentials."
+    "screenshot path. Code is restricted to these guarded helpers and plain "
+    "data operations; imports, raw CDP, private attributes, and indirect "
+    "calls are refused. Login walls: stop and ask the user; never guess "
+    "credentials."
 )
 
 

@@ -3,7 +3,6 @@
 import json
 from unittest.mock import MagicMock, patch
 
-
 from tools.browser_camofox import (
     camofox_back,
     camofox_click,
@@ -360,5 +359,3 @@ class TestBrowserToolRouting:
         monkeypatch.setenv("CAMOFOX_URL", "http://localhost:9377")
         from tools.browser_tool import check_browser_requirements
         assert check_browser_requirements() is True
-
-
