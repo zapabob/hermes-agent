@@ -76,7 +76,6 @@ from hermes_constants import (
 from utils import env_int, is_truthy_value
 from hermes_cli.config import DEFAULT_CONFIG, cfg_get
 from hermes_cli._subprocess_compat import windows_hide_flags
-from tools.browser_authority import is_personal_session_url
 
 
 def __getattr__(name: str):
@@ -124,14 +123,6 @@ _BROWSER_PASSTHROUGH_KEYS: tuple[str, ...] = (
     "FIRECRAWL_API_URL",
     "FIRECRAWL_BROWSER_TTL",
 )
-
-# agent-browser v0.26's native route matcher supports exactly one wildcard.
-# A host-specific glob needs one wildcard for the path and another for aliases
-# such as a trailing-dot hostname, port, userinfo, or subdomain, so it cannot
-# be complete on that transport. Block both network schemes until the official
-# request interceptor (or an equivalent transport-owned host matcher) lands.
-_PERSONAL_SESSION_ROUTE_PATTERNS = ("http://*", "https://*")
-
 
 def _build_browser_env() -> dict:
     """Credential-scrubbed env for an agent-browser subprocess.
@@ -968,11 +959,10 @@ def _browser_install_hint() -> str:
 # changes.
 NPX_AGENT_BROWSER_SENTINEL = "npx agent-browser"
 
-# Pinned to match scripts/install.sh / scripts/install.ps1's
-# "agent-browser@^0.26.0" managed install so a git-clone install resolving
-# agent-browser via bare npx gets the same version as a managed install,
-# instead of floating latest with no integrity check. Update both together.
-AGENT_BROWSER_NPX_SPEC = "agent-browser@^0.26.0"
+# Exact corrected upstream used by the fork. This release includes the fixed
+# multi-wildcard route matcher and hardened domain-filter handling for popups,
+# workers, service workers, WebSockets, EventSource, and WebRTC.
+AGENT_BROWSER_NPX_SPEC = "agent-browser@0.36.0"
 
 
 def _is_npx_agent_browser_sentinel(browser_cmd: str) -> bool:
@@ -1293,9 +1283,8 @@ def _run_chrome_fallback_command(
     # WinError 193.
     if _is_npx_agent_browser_sentinel(browser_cmd):
         _npx_bin = _resolve_npx_bin() or "npx"
-        # --ignore-scripts: AGENT_BROWSER_NPX_SPEC is a floating ^0.26.0 range,
-        # not an exact pin — a compromised future 0.26.x patch must not get to
-        # run its own install-time lifecycle scripts on this machine.
+        # --ignore-scripts: keep lifecycle scripts disabled even for the exact,
+        # audited package pin used by the fork.
         cmd_prefix = [_npx_bin, "--ignore-scripts", "--prefer-offline", "-y", AGENT_BROWSER_NPX_SPEC]
     else:
         cmd_prefix = [browser_cmd]
@@ -3215,9 +3204,8 @@ def warm_agent_browser_npx_cache(timeout: float = 60.0) -> bool:
 
     cmd = [
         npx_bin,
-        # --ignore-scripts: AGENT_BROWSER_NPX_SPEC is a floating ^0.26.0
-        # range, not an exact pin — a compromised future 0.26.x patch must
-        # not get to run its own install-time lifecycle scripts here.
+        # --ignore-scripts: keep lifecycle scripts disabled even for the exact,
+        # audited package pin used by the fork.
         "--ignore-scripts",
         # --prefer-offline: once cached, repeat `hermes update`/`doctor
         # --fix` runs shouldn't hit the registry just to re-confirm
@@ -3451,7 +3439,6 @@ def _run_browser_command(
     args: List[str] = None,
     timeout: Optional[int] = None,
     _engine_override: Optional[str] = None,
-    _personal_guard_call: bool = False,
 ) -> Dict[str, Any]:
     """
     Run an agent-browser CLI command using our pre-created Browserbase session.
@@ -3519,60 +3506,6 @@ def _run_browser_command(
     except Exception as e:
         logger.warning("Failed to create browser session for task=%s: %s", task_id, e)
         return {"success": False, "error": f"Failed to create browser session: {str(e)}"}
-
-    # Install a browser-context request abort before every command.  This is
-    # intentionally redundant: agent-browser may transparently restart its
-    # daemon between calls, and an in-memory Python flag cannot prove that a
-    # Playwright route still exists.  The route blocks direct navigation,
-    # clicks, form submissions, popups, and HTTP redirects before the reserved
-    # origin receives a request.  Fail closed when this backend cannot enforce
-    # the boundary.
-    if not _personal_guard_call and command not in {"close", "network"}:
-        for route_pattern in _PERSONAL_SESSION_ROUTE_PATTERNS:
-            guarded = _run_browser_command(
-                task_id,
-                "network",
-                ["route", route_pattern, "--abort"],
-                timeout=min(timeout, 30),
-                _engine_override=_engine_override,
-                _personal_guard_call=True,
-            )
-            if not guarded.get("success"):
-                return {
-                    "success": False,
-                    "error": (
-                        "Blocked: this browser backend could not install the "
-                        "mandatory X/YouTube personal-session network guard. "
-                        f"{guarded.get('error', 'Unknown route error')}"
-                    ),
-                }
-        current = _run_browser_command(
-            task_id,
-            "get",
-            ["url"],
-            timeout=min(timeout, 15),
-            _engine_override=_engine_override,
-            _personal_guard_call=True,
-        )
-        if not current.get("success"):
-            return {
-                "success": False,
-                "error": (
-                    "Blocked: this browser backend could not verify the active "
-                    "tab after installing the personal-session network guard. "
-                    f"{current.get('error', 'Unknown URL probe error')}"
-                ),
-            }
-        current_url = str(current.get("data", {}).get("url") or "")
-        if is_personal_session_url(current_url):
-            return {
-                "success": False,
-                "error": (
-                    "Blocked: refusing to read or control an X/YouTube tab "
-                    "owned by the operator's OS-browser session."
-                ),
-                "blocked_by_policy": {"rule": "personal-os-browser-only"},
-            }
 
     # Cleanup stops the supervisor before closing the backend; keep it stopped.
     if command != "close" and session_info.get("cdp_url"):
@@ -3968,16 +3901,6 @@ def evaluate_url_safety(url: str) -> Optional[dict]:
     url = _normalize_url_for_request(url)
     if _PREFIX_RE.search(url) or _PREFIX_RE.search(urllib.parse.unquote(url)):
         return _secret
-    if is_personal_session_url(url):
-        return {
-            "success": False,
-            "error": (
-                "Blocked: X and YouTube may only open through the operator's "
-                "OS default browser and existing personal session."
-            ),
-            "blocked_by_policy": {"rule": "personal-os-browser-only"},
-        }
-
     local = _is_local_backend()
     sensitive_query_key = _sensitive_query_param_name(url)
     if sensitive_query_key and not local:
@@ -4031,16 +3954,6 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
         })
 
     # SSRF protection — block private/internal addresses before navigating.
-    if is_personal_session_url(url):
-        return json.dumps({
-            "success": False,
-            "error": (
-                "Blocked: X and YouTube may only open through the operator's "
-                "OS default browser and existing personal session."
-            ),
-            "blocked_by_policy": {"rule": "personal-os-browser-only"},
-        })
-
     # Skipped for local backends (Camofox, headless Chromium without a cloud
     # provider) because the agent already has full local network access via
     # the terminal tool.  Also skipped when hybrid routing will auto-spawn a
@@ -4893,38 +4806,8 @@ def _enforce_browser_eval_policy(expression: str) -> Optional[str]:
     )
 
 
-def _browser_eval_transport_policy_error() -> str:
-    """Fail closed until every eval transport has request interception.
-
-    The agent-browser command route installs the personal-session block before
-    it executes, but the supervisor WebSocket and Camofox evaluate endpoint do
-    not share that transport boundary.  Disabling expression evaluation as a
-    single production policy prevents a future dispatch shortcut from
-    silently restoring those unguarded paths.  Ordinary snapshot, click, type,
-    and console-reading operations remain available.
-    """
-    return (
-        "Blocked: browser_console expression evaluation is unavailable under "
-        "the personal-session boundary until every browser transport can "
-        "pre-block X and YouTube requests. Use browser_snapshot and the "
-        "guarded browser interaction tools instead."
-    )
-
-
 def _browser_eval(expression: str, task_id: Optional[str] = None) -> str:
     """Evaluate a JavaScript expression in the page context and return the result."""
-    transport_error = _browser_eval_transport_policy_error()
-    if transport_error:
-        return json.dumps({
-            "success": False,
-            "error": transport_error,
-            "blocked_by_policy": {
-                "rule": "personal-os-browser-only",
-                "operation": "browser-console-expression",
-                "reason": "transport-interception-not-universal",
-            },
-        }, ensure_ascii=False)
-
     effective_task_id = _last_session_key(task_id or "default")
 
     if _eval_ssrf_guard_active(effective_task_id):

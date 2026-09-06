@@ -19,7 +19,6 @@
   "include": [
     "electron",
     "../shared/src/data-url-read-max.ts",
-    "../shared/src/personal-session-url.ts",
     "../shared/src/translucency.ts"
   ],
   "exclude": ["src", "electron/**/*.e2e.mts"]

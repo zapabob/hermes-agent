@@ -233,21 +233,6 @@ def _browser_cdp_private_guard(
     return None
 
 
-def _browser_cdp_transport_policy_error() -> str:
-    """Refuse raw CDP until its transport owns the personal-host boundary."""
-    return tool_error(
-        "Blocked: browser_cdp is unavailable under the personal-session "
-        "boundary because raw CDP can navigate, evaluate, and recover targets "
-        "outside the guarded browser route. Use the guarded browser tools "
-        "instead.",
-        blocked_by_policy={
-            "rule": "personal-os-browser-only",
-            "operation": "raw-cdp",
-            "reason": "transport-interception-unavailable",
-        },
-    )
-
-
 # ---------------------------------------------------------------------------
 # Core CDP call
 # ---------------------------------------------------------------------------
@@ -498,10 +483,6 @@ def browser_cdp(
 
     if _is_sensitive_cdp_method(method) and not _cdp_sensitive_methods_allowed():
         return _sensitive_cdp_error(method)
-
-    transport_error = _browser_cdp_transport_policy_error()
-    if transport_error:
-        return transport_error
 
     effective_task_id = task_id or "default"
 

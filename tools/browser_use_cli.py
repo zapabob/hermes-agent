@@ -73,91 +73,6 @@ _hermes_ensure_own_tab()
 del _hermes_ensure_own_tab
 """
 
-# Runtime enforcement for the operator-owned X/YouTube session boundary.
-# Literal scanning alone cannot catch concatenated URLs, link clicks, or HTTP
-# redirects.  The harness preamble therefore installs Chromium's request
-# blocker on the attached target before model code runs and keeps it installed
-# across tab switches.  Direct Page.navigate/Target.createTarget calls are
-# checked as well, so dynamically assembled URLs fail before a request starts.
-_PERSONAL_SESSION_PREAMBLE = """\
-# hermes: X and YouTube are reserved for the operator's OS-browser session
-def _hermes_install_personal_session_guard():
-    from urllib.parse import urlsplit as _urlsplit
-    import browser_harness.helpers as _bh
-
-    _reserved_hosts = ("twitter.com", "x.com", "youtu.be", "youtube.com")
-    _blocked_patterns = tuple(
-        pattern
-        for host in _reserved_hosts
-        for pattern in ("*://%s/*" % host, "*://*.%s/*" % host)
-    )
-    _raw_cdp = _bh.cdp
-    _original_goto = _bh.goto_url
-    _raw_switch_tab = _bh.switch_tab
-
-    def _reserved(raw):
-        try:
-            parsed = _urlsplit(str(raw or ""))
-        except ValueError:
-            return False
-        hostname = (parsed.hostname or "").lower().rstrip(".")
-        return parsed.scheme.lower() in ("http", "https") and any(
-            hostname == host or hostname.endswith("." + host)
-            for host in _reserved_hosts
-        )
-
-    def _install_network_floor():
-        _raw_cdp("Network.enable")
-        _raw_cdp("Network.setBlockedURLs", urls=list(_blocked_patterns))
-
-    # Never adopt an already-open personal tab from the operator's profile.
-    _current = _bh.current_tab()
-    if _reserved(_current.get("url")):
-        _blank = _raw_cdp("Target.createTarget", url="about:blank", background=True)["targetId"]
-        _raw_switch_tab(_blank)
-
-    def _guarded_cdp(method, session_id=None, **params):
-        if method in ("Page.navigate", "Target.createTarget") and _reserved(params.get("url")):
-            raise RuntimeError(
-                "Blocked: X and YouTube may only open through the operator's "
-                "OS default browser and existing personal session."
-            )
-        if method == "Network.disable":
-            raise RuntimeError("Blocked: the personal-session network guard is mandatory.")
-        if method == "Network.setBlockedURLs":
-            supplied = tuple(params.get("urls") or ())
-            params["urls"] = list(dict.fromkeys(supplied + _blocked_patterns))
-        return _raw_cdp(method, session_id=session_id, **params)
-
-    def _guarded_goto(url):
-        if _reserved(url):
-            raise RuntimeError(
-                "Blocked: X and YouTube may only open through the operator's "
-                "OS default browser and existing personal session."
-            )
-        return _original_goto(url)
-
-    def _guarded_switch(target, activate=False):
-        target_id = _bh._target_id(target)
-        info = _raw_cdp("Target.getTargetInfo", targetId=target_id).get("targetInfo", {})
-        if _reserved(info.get("url")):
-            raise RuntimeError("Blocked: refusing to attach to the operator's personal-session tab.")
-        result = _raw_switch_tab(target, activate=activate)
-        _install_network_floor()
-        return result
-
-    _bh.cdp = _guarded_cdp
-    _bh.goto_url = _guarded_goto
-    _bh.switch_tab = _guarded_switch
-    globals()["cdp"] = _guarded_cdp
-    globals()["goto_url"] = _guarded_goto
-    globals()["switch_tab"] = _guarded_switch
-    _install_network_floor()
-
-_hermes_install_personal_session_guard()
-del _hermes_install_personal_session_guard
-"""
-
 _DEFAULT_TIMEOUT_S = 300
 _MIN_TIMEOUT_S = 5
 _MAX_TIMEOUT_S = 1800
@@ -293,9 +208,8 @@ def _validate_browser_exec_code(code: str) -> Optional[str]:
 
     Browser Harness executes input as Python in a privileged module namespace.
     Without a structural gate, an import or dunder traversal can recover the
-    unwrapped CDP callable and remove the mandatory personal-session network
-    floor.  Keep ordinary data manipulation, loops, and guarded browser helpers
-    while rejecting namespace escape hatches and raw CDP.
+    unwrapped CDP callable. Keep ordinary data manipulation, loops, and guarded
+    browser helpers while rejecting namespace escape hatches and raw CDP.
     """
     try:
         tree = ast.parse(code or "", mode="exec")
@@ -906,21 +820,6 @@ def _resolve_real_profile_cdp(env: dict, force_local: bool) -> Optional[str]:
     return None
 
 
-def _browser_exec_transport_policy_error() -> str:
-    """Refuse privileged Browser Harness code without a universal route guard.
-
-    Browser Harness exposes a privileged Python namespace.  A preamble and AST
-    validator cannot prove that every present and future CDP recovery path,
-    popup, or newly-created target inherits the personal-session block.  Keep
-    the backend unavailable until the transport itself owns that invariant.
-    """
-    return (
-        "Blocked: browser_exec is unavailable under the personal-session "
-        "boundary until Browser Use enforces X and YouTube blocking at the "
-        "transport layer. Select the local agent-browser backend instead."
-    )
-
-
 def browser_exec(
     code: str,
     session: str = "",
@@ -930,10 +829,6 @@ def browser_exec(
 ):
     """Run Python code through the browser-use CLI, and return its output"""
     from tools.registry import tool_error, tool_result
-
-    transport_error = _browser_exec_transport_policy_error()
-    if transport_error:
-        return tool_error(transport_error)
 
     if not code or not code.strip():
         return tool_error("No code provided. Pass Python that uses the pre-imported helpers, e.g. new_tab(\"https://example.com\") then print(page_info()).")
@@ -1001,8 +896,6 @@ def browser_exec(
     private_browser = env.pop(_PRIVATE_BROWSER_SENTINEL, None)
     if session and not private_browser:
         code = _OWN_TAB_PREAMBLE + code
-    code = _PERSONAL_SESSION_PREAMBLE + code
-
     workspace = _workspace_dir(task_id)
     if workspace:
         env["BH_AGENT_WORKSPACE"] = workspace

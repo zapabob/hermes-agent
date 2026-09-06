@@ -63,20 +63,6 @@ describe('preview store', () => {
     expect($previewTarget.get()?.path).toBe('/work/demo.html')
   })
 
-  it('refuses personal-session services in the app-owned browser', () => {
-    for (const url of [
-      'https://x.com/hermes/status/123',
-      'https://mobile.twitter.com/hermes/status/123',
-      'https://www.youtube.com/watch?v=abc',
-      'https://music.youtube.com/watch?v=abc',
-      'https://youtu.be/abc'
-    ]) {
-      openPreview(urlTarget(url), 'explicit-link')
-    }
-
-    expect($previewTabs.get()).toHaveLength(0)
-  })
-
   it('gives every kind of target its own tab, side by side', () => {
     openPreview(fileTarget('/work/demo.html'), 'file-browser')
     openPreview(urlTarget('http://localhost:5174'), 'tool-result')

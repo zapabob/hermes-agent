@@ -7,10 +7,6 @@ import os from 'node:os'
 import path from 'node:path'
 import tls from 'node:tls'
 import { pathToFileURL } from 'node:url'
-import {
-  isPersonalSessionTransportUrl,
-  isPersonalSessionUrl
-} from '../../shared/src/personal-session-url'
 
 import {
   app,
@@ -168,7 +164,6 @@ import { adoptServedDashboardToken } from './dashboard-token'
 import { loadOrCreateInstallationId, sshOwnershipId } from './desktop-installation'
 import { formatDesktopLogLine } from './desktop-log-line'
 import { resolveDesktopRemoteRoute } from './desktop-remote-route'
-import { installPersonalSessionRequestGuard } from './personal-session-request-guard'
 import {
   buildPosixCleanupScript,
   buildWindowsCleanupScript,
@@ -237,7 +232,12 @@ import { snapHudBounds } from './hud-snap'
 import { createHudSnapShortcut } from './hud-snap-shortcut'
 import { buildHudWindowUrl } from './hud-url'
 import { resolveHudWindowing } from './hud-windowing'
-import { createLinkTitleWindow, guardLinkTitleSession, readLinkTitleWindowTitle } from './link-title-window'
+import {
+  createLinkTitleWindow,
+  guardLinkTitleSession,
+  installLinkTitleRequestGuard,
+  readLinkTitleWindowTitle
+} from './link-title-window'
 import { ensureMainWindow } from './main-window-lifecycle'
 import {
   assertManagedUpdatePreflightClear,
@@ -289,6 +289,7 @@ import { selectPoolEvictions } from './pool-eviction'
 import { createPoolStopper } from './pool-stop'
 import { poolTouchKeys } from './pool-touch-scope'
 import { createKeepAwake } from './power-save'
+import { configuredStartupExternalUrls } from './startup-external-urls'
 import { PreviewReachRegistry } from './preview-reach'
 import {
   createPrimaryRemoteConnection,
@@ -1751,43 +1752,6 @@ function openExternalUrl(rawUrl) {
 
   return true
 }
-
-// A guest webview can navigate itself through redirects or in-page links,
-// bypassing the renderer's openPreview gate. Keep the personal-session policy
-// at the Electron navigation boundary too: X and YouTube leave the guest and
-// open only in the operator's OS browser.
-app.on('web-contents-created', (_event, contents) => {
-  if (contents.getType() !== 'webview') {
-    return
-  }
-
-  const handOffPersonalSessionUrl = (event, url) => {
-    if (!isPersonalSessionUrl(url)) {
-      return
-    }
-
-    event.preventDefault()
-    openExternalUrl(url)
-  }
-
-  contents.on('will-navigate', handOffPersonalSessionUrl)
-  contents.on('will-redirect', handOffPersonalSessionUrl)
-  contents.setWindowOpenHandler(({ url }) => {
-    if (isPersonalSessionUrl(url)) {
-      openExternalUrl(url)
-    }
-
-    return { action: 'deny' }
-  })
-})
-
-// Cover session traffic that navigation events never see: subframes,
-// subresources, fetch/XHR, service workers, and redirect targets. Newly created
-// app-owned partitions inherit the same boundary; the already-existing default
-// session is installed explicitly in whenReady below.
-app.on('session-created', createdSession => {
-  installPersonalSessionRequestGuard(createdSession)
-})
 
 async function openPreviewInBrowser(rawUrl) {
   const raw = String(rawUrl || '').trim()
@@ -5317,13 +5281,10 @@ function filenameFromUrl(rawUrl, fallback = 'image') {
   }
 }
 
-// Link title resolution — curl (tier 1) → hidden BrowserWindow (tier 2).
+// Link title resolution through one isolated, request-guarded BrowserWindow.
 const titleCache = new Map()
 const titleInflight = new Map()
 const TITLE_CACHE_LIMIT = 500
-const TITLE_BYTE_BUDGET = 96 * 1024
-const TITLE_TIMEOUT_MS = 5000
-const TITLE_MAX_REDIRECTS = 3
 
 // Browser-shaped UA — many bot-walled sites (GetYourGuide, Cloudflare-protected
 // pages) refuse anything that doesn't look like a real Chrome.
@@ -5333,10 +5294,8 @@ const TITLE_USER_AGENT =
 const TITLE_ERROR_RE =
   /\b(access denied|attention required|captcha|error|forbidden|just a moment|request blocked|too many requests)\b/i
 
-const HTML_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'" }
-
-// Tier-2 renderer fallback config. Only invoked when curl came back empty or
-// matched TITLE_ERROR_RE — keeps cold/CDN-cached pages on the cheap path.
+// Renderer fetch config. The dedicated partition isolates title resolution
+// from the primary Desktop session.
 const RENDER_TITLE_MAX_CONCURRENT = 2
 const RENDER_TITLE_TIMEOUT_MS = 8000
 const RENDER_TITLE_GRACE_MS = 700
@@ -5384,90 +5343,19 @@ function cacheTitle(key, title) {
   titleCache.set(key, title)
 }
 
-function decodeHtmlEntities(value) {
-  return value
-    .replace(/&(amp|lt|gt|quot|apos|nbsp|#39);/gi, (_, k) => HTML_ENTITIES[k.toLowerCase()] ?? '')
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16) || 32))
-    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10) || 32))
-}
-
-function parseHtmlTitle(html) {
-  const raw = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]
-
-  return raw ? decodeHtmlEntities(raw).replace(/\s+/g, ' ').trim() : ''
-}
-
-function fetchHtmlTitleWithCurl(rawUrl: string): Promise<string> {
-  return new Promise(resolve => {
-    const url = String(rawUrl || '').trim()
-
-    if (!url) {
-      return resolve('')
-    }
-
-    const args = [
-      '--silent',
-      '--show-error',
-      '--location',
-      '--max-redirs',
-      String(TITLE_MAX_REDIRECTS),
-      '--max-time',
-      String(Math.max(2, Math.ceil(TITLE_TIMEOUT_MS / 1000))),
-      '--connect-timeout',
-      '4',
-      '--user-agent',
-      TITLE_USER_AGENT,
-      '--header',
-      'Accept: text/html,application/xhtml+xml;q=0.9,*/*;q=0.5',
-      '--header',
-      'Accept-Language: en-US,en;q=0.7',
-      '--header',
-      'Accept-Encoding: identity',
-      '--raw',
-      url
-    ]
-
-    const child = spawn('curl', args, hiddenWindowsChildOptions({ stdio: ['ignore', 'pipe', 'ignore'] }))
-    const chunks = []
-    let bytes = 0
-
-    child.stdout.on('data', chunk => {
-      if (bytes >= TITLE_BYTE_BUDGET) {
-        return
-      }
-
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-      const remaining = TITLE_BYTE_BUDGET - bytes
-      const next = buffer.length > remaining ? buffer.subarray(0, remaining) : buffer
-      chunks.push(next)
-      bytes += next.length
-    })
-
-    child.on('error', () => resolve(''))
-    child.on('close', () => {
-      if (!chunks.length) {
-        return resolve('')
-      }
-
-      resolve(parseHtmlTitle(Buffer.concat(chunks).toString('utf8')))
-    })
-  })
-}
-
 function getLinkTitleSession() {
   if (linkTitleSession || !app.isReady()) {
     return linkTitleSession
   }
 
-  linkTitleSession = session.fromPartition('hermes:link-titles', { cache: false })
-  linkTitleSession.webRequest.onBeforeRequest((details, callback) => {
-    callback({
-      cancel:
-        isPersonalSessionTransportUrl(details.url) ||
-        RENDER_TITLE_BLOCKED_RESOURCES.has(details.resourceType)
-    })
-  })
-  guardLinkTitleSession(linkTitleSession)
+  const candidate = session.fromPartition('hermes:link-titles', { cache: false })
+
+  if (!installLinkTitleRequestGuard(candidate, RENDER_TITLE_BLOCKED_RESOURCES)) {
+    return null
+  }
+
+  guardLinkTitleSession(candidate)
+  linkTitleSession = candidate
 
   return linkTitleSession
 }
@@ -5579,21 +5467,14 @@ function usableTitle(value: string): string {
 }
 
 function linkTitleTransportAllowsRemoteFetch() {
-  // Both curl --location and the hidden renderer can cross an HTTP redirect
-  // before JavaScript sees the destination. Keep remote title resolution off
-  // until every redirect hop is validated before the request is emitted.
-  return false
+  // Creating the isolated partition installs its onBeforeRequest guard before
+  // any BrowserWindow or loadURL exists. Failure leaves remote title fetching
+  // unavailable instead of falling back to an unguarded transport.
+  return Boolean(getLinkTitleSession())
 }
 
 function fetchLinkTitle(rawUrl) {
   const url = String(rawUrl || '').trim()
-
-  // This is an IPC boundary, not merely a renderer convenience.  A forged
-  // renderer invocation must not make Electron fetch a page that belongs in
-  // the operator's existing OS-browser session.
-  if (isPersonalSessionUrl(url)) {
-    return Promise.resolve('')
-  }
 
   const key = canonicalTitleCacheKey(url)
 
@@ -5613,12 +5494,9 @@ function fetchLinkTitle(rawUrl) {
     return titleInflight.get(key)
   }
 
-  const pending = fetchHtmlTitleWithCurl(url)
+  const pending = fetchHtmlTitleWithRenderer(url)
     .catch(() => '')
     .then(value => usableTitle((value || '').slice(0, 240)))
-    .then(
-      async value => value || usableTitle(((await fetchHtmlTitleWithRenderer(url).catch(() => '')) || '').slice(0, 240))
-    )
     .then(clean => {
       cacheTitle(key, clean)
       titleInflight.delete(key)
@@ -5646,6 +5524,7 @@ const FAVICON_TTL_MS = 30 * 24 * 60 * 60 * 1000
 const FAVICON_MISS_TTL_MS = 12 * 60 * 60 * 1000
 const FAVICON_TIMEOUT_MS = 6000
 const FAVICON_MAX_BYTES = 256 * 1024
+const FAVICON_MAX_TEXT_CHARS = 192 * 1024
 const FAVICON_WRITE_DEBOUNCE_MS = 3000
 
 let faviconCache: Map<string, { at: number; icon: string }> | null = null
@@ -5741,7 +5620,7 @@ const faviconIo: FaviconIo = {
   fetchText: async url => {
     const response = await faviconFetch(url, 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.5')
 
-    return response.ok ? (await response.text()).slice(0, TITLE_BYTE_BUDGET * 2) : ''
+    return response.ok ? (await response.text()).slice(0, FAVICON_MAX_TEXT_CHARS) : ''
   }
 }
 
@@ -17401,9 +17280,6 @@ app.on('open-url', (event, url) => {
 })
 
 app.whenReady().then(() => {
-  installPersonalSessionRequestGuard(session.defaultSession)
-  installPersonalSessionRequestGuard(session.fromPartition('persist:hermes-preview'))
-
   // Warm the login-shell PATH resolution immediately so it usually completes
   // before the backend start path awaits the same single-flight promise.
   void ensureLoginShellPath()
@@ -17479,6 +17355,13 @@ app.whenReady().then(() => {
   // captured by the original transaction before removing the journal entry.
   void resumeManagedSshRecoveries()
   createWindow()
+
+  // Personal services are an operator-owned startup convenience, not an
+  // app-wide browser policy. Public builds carry no account URL; each valid
+  // environment value opens once in the existing OS-browser session.
+  for (const url of configuredStartupExternalUrls(process.env)) {
+    openExternalUrl(url)
+  }
 
   // Win/Linux cold start: the launching hermes:// URL is in our own argv.
   const _coldStartLink = _extractDeepLink(process.argv)

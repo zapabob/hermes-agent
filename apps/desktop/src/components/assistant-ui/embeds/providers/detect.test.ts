@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { FrameEmbed } from './types'
+import type { FrameEmbed, TweetEmbed } from './types'
 
 import { detectEmbed, isEmbeddableUrl } from './index'
 
@@ -22,13 +22,17 @@ describe('detectEmbed — YouTube', () => {
     'https://m.youtube.com/watch?v=dQw4w9WgXcQ',
     'https://www.youtube.com/embed/dQw4w9WgXcQ',
     'https://www.youtube.com/live/dQw4w9WgXcQ'
-  ])('refuses an in-app embed for personal-session URL %s', url => {
-    expect(detectEmbed(url)).toBeNull()
+  ])('resolves %s to the privacy-enhanced embed of the same id', url => {
+    const embed = frame(url)
+
+    expect(embed.provider).toBe('youtube')
+    expect(embed.id).toBe('youtube:dQw4w9WgXcQ')
+    expect(embed.embedUrl).toContain('youtube-nocookie.com/embed/dQw4w9WgXcQ')
   })
 
-  it('refuses timestamped YouTube embeds too', () => {
-    expect(detectEmbed('https://youtu.be/dQw4w9WgXcQ?t=90')).toBeNull()
-    expect(detectEmbed('https://youtu.be/dQw4w9WgXcQ?t=1m30s')).toBeNull()
+  it('carries a start time from t/start through to the embed', () => {
+    expect(frame('https://youtu.be/dQw4w9WgXcQ?t=90').embedUrl).toContain('start=90')
+    expect(frame('https://youtu.be/dQw4w9WgXcQ?t=1m30s').embedUrl).toContain('start=90')
   })
 
   it('rejects ids that are not 11 chars', () => {
@@ -100,13 +104,12 @@ describe('detectEmbed — maps', () => {
 })
 
 describe('detectEmbed — Twitter/X', () => {
-  it('refuses in-app widgets for twitter.com, x.com, and their subdomains', () => {
-    for (const url of [
-      'https://twitter.com/jack/status/20',
-      'https://mobile.twitter.com/jack/status/20',
-      'https://x.com/jack/status/20'
-    ]) {
-      expect(detectEmbed(url)).toBeNull()
+  it('resolves twitter.com and x.com status urls to a tweet descriptor', () => {
+    for (const url of ['https://twitter.com/jack/status/20', 'https://x.com/jack/status/20']) {
+      const descriptor = detectEmbed(url)
+
+      expect(descriptor?.renderer).toBe('tweet')
+      expect((descriptor as TweetEmbed).tweetId).toBe('20')
     }
   })
 })

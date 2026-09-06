@@ -5,6 +5,7 @@ import { test } from 'vitest'
 import {
   createLinkTitleWindow,
   guardLinkTitleSession,
+  installLinkTitleRequestGuard,
   linkTitleWindowOptions,
   readLinkTitleWindowTitle
 } from './link-title-window'
@@ -117,6 +118,77 @@ test('guardLinkTitleSession is a no-op when session.on throws', () => {
         throw new Error()
       }
     })
+  )
+})
+
+test('title request guard allows ordinary HTTPS and preserves title reads', () => {
+  let beforeRequest
+  const installed = installLinkTitleRequestGuard({
+    webRequest: {
+      onBeforeRequest(handler) {
+        beforeRequest = handler
+      }
+    }
+  })
+  let decision
+
+  beforeRequest(
+    { resourceType: 'mainFrame', url: 'https://example.com/docs' },
+    value => {
+      decision = value
+    }
+  )
+
+  assert.equal(installed, true)
+  assert.deepEqual(decision, { cancel: false })
+  assert.equal(
+    readLinkTitleWindowTitle({
+      isDestroyed: () => false,
+      webContents: {
+        isDestroyed: () => false,
+        getTitle: () => 'Example Domain'
+      }
+    }),
+    'Example Domain'
+  )
+})
+
+test.each([
+  'https://x.com/owner',
+  'https://sub.twitter.com./owner',
+  'https://youtu.be/video',
+  'wss://music.youtube.com./socket'
+])('title request guard does not treat a startup-owned URL as a network policy: %s', url => {
+  let beforeRequest
+  assert.equal(
+    installLinkTitleRequestGuard({
+      webRequest: {
+        onBeforeRequest(handler) {
+          beforeRequest = handler
+        }
+      }
+    }),
+    true
+  )
+  let decision
+
+  beforeRequest({ resourceType: 'mainFrame', url }, value => {
+    decision = value
+  })
+
+  assert.deepEqual(decision, { cancel: false })
+})
+
+test('title request guard fails closed when Electron interception is unavailable', () => {
+  assert.equal(
+    installLinkTitleRequestGuard({
+      webRequest: {
+        onBeforeRequest() {
+          throw new Error('unavailable')
+        }
+      }
+    }),
+    false
   )
 })
 

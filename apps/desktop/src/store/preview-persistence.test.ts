@@ -3,19 +3,6 @@ import { describe, expect, it } from 'vitest'
 import { decodePreviewTabs } from './preview'
 
 describe('persisted preview migration', () => {
-  it('drops historical personal-session browser tabs during restore', () => {
-    const restored = decodePreviewTabs(
-      JSON.stringify(
-        ['https://x.com', 'https://www.youtube.com'].map(url => ({
-          id: `url:${url}`,
-          target: { kind: 'url', label: url, source: url, url }
-        }))
-      )
-    )
-
-    expect(restored).toEqual([])
-  })
-
   it('upgrades a pre-PDF remote tab from binary to pdf', () => {
     const source = '/remote/.hermes/desktop-attachments/spec.pdf'
 

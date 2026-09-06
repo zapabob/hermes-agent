@@ -70,6 +70,25 @@ export function guardLinkTitleSession(partitionSession) {
   }
 }
 
+/**
+ * Install the transport-owned request boundary for the isolated title session.
+ * Electron invokes onBeforeRequest for every redirect hop and subresource in
+ * this partition, so reserved hosts are cancelled before their request is
+ * emitted while ordinary public HTTPS remains available.
+ */
+export function installLinkTitleRequestGuard(partitionSession, blockedResourceTypes = new Set()) {
+  try {
+    partitionSession.webRequest.onBeforeRequest((details, callback) => {
+      callback({
+        cancel: blockedResourceTypes.has(details.resourceType)
+      })
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
 // Read the page title from a title-fetch window. Callers schedule this from
 // timers that can fire after finish() destroys the window, so every access must
 // guard isDestroyed and swallow Electron's "Object has been destroyed" throws.

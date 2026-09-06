@@ -160,54 +160,16 @@ test('origin discovery for passive probes ignores repository and credential envi
   assert.match(helper, /cwd: updateRoot/)
 })
 
-test('Electron guest navigation enforces the personal OS-browser boundary', () => {
-  const mainSource = fs.readFileSync(new URL('./main.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
-  const policyStart = mainSource.indexOf("app.on('web-contents-created'")
-  const policyEnd = mainSource.indexOf('\n})', policyStart)
-  const policy = mainSource.slice(policyStart, policyEnd)
-
-  assert.notEqual(policyStart, -1)
-  assert.match(policy, /contents\.getType\(\) !== 'webview'/)
-  assert.match(policy, /contents\.on\('will-navigate', handOffPersonalSessionUrl\)/)
-  assert.match(policy, /contents\.on\('will-redirect', handOffPersonalSessionUrl\)/)
-  assert.match(policy, /isPersonalSessionUrl\(url\)/)
-  assert.match(policy, /openExternalUrl\(url\)/)
-  assert.match(policy, /return \{ action: 'deny' \}/)
-})
-
-test('Electron sessions enforce the personal boundary before preview guests can load', () => {
-  const mainSource = fs.readFileSync(new URL('./main.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
-  const sessionCreated = mainSource.indexOf("app.on('session-created'")
-  const ready = mainSource.indexOf('app.whenReady().then(() => {')
-  const firstWindow = mainSource.indexOf('createWindow()', ready)
-  const readyPolicy = mainSource.slice(ready, firstWindow)
-
-  assert.notEqual(sessionCreated, -1)
-  assert.match(
-    mainSource.slice(sessionCreated, mainSource.indexOf('\n})', sessionCreated)),
-    /installPersonalSessionRequestGuard\(createdSession\)/
-  )
-  assert.notEqual(ready, -1)
-  assert.notEqual(firstWindow, -1)
-  assert.match(readyPolicy, /installPersonalSessionRequestGuard\(session\.defaultSession\)/)
-  assert.match(
-    readyPolicy,
-    /installPersonalSessionRequestGuard\(session\.fromPartition\('persist:hermes-preview'\)\)/
-  )
-})
-
-test('main-process title fetching cannot bypass the personal OS-browser boundary', () => {
+test('main-process title fetching uses only the guarded renderer transport', () => {
   const mainSource = fs.readFileSync(new URL('./main.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
   const start = mainSource.indexOf('function fetchLinkTitle(rawUrl)')
   const end = mainSource.indexOf('\n}\n\n// ─── Favicon resolution', start) + 2
   const fetcher = mainSource.slice(start, end)
 
   assert.notEqual(start, -1)
-  assert.match(fetcher, /isPersonalSessionUrl\(url\)/)
-  assert.match(fetcher, /return Promise\.resolve\(''\)/)
   assert.match(fetcher, /!linkTitleTransportAllowsRemoteFetch\(\)/)
-  assert.ok(fetcher.indexOf('isPersonalSessionUrl(url)') < fetcher.indexOf('fetchHtmlTitleWithCurl(url)'))
-  assert.ok(fetcher.indexOf('!linkTitleTransportAllowsRemoteFetch()') < fetcher.indexOf('fetchHtmlTitleWithCurl(url)'))
+  assert.doesNotMatch(fetcher, /fetchHtmlTitleWithCurl/)
+  assert.ok(fetcher.indexOf('!linkTitleTransportAllowsRemoteFetch()') < fetcher.indexOf('fetchHtmlTitleWithRenderer(url)'))
 })
 
 test('no-credential Git mode suppresses helpers, GCM, askpass, and repository inheritance', () => {

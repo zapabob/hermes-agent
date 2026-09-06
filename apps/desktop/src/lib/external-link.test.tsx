@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { IS_MAC } from '@/lib/keybinds/combo'
 import { $previewTabs, closeRightRail } from '@/store/preview'
 
 import {
@@ -71,8 +72,6 @@ describe('external link helpers', () => {
     expect(isTitleFetchable('http://localhost:5174')).toBe(false)
     expect(isTitleFetchable('file:///tmp/demo.html')).toBe(false)
     expect(isTitleFetchable('mailto:hello@example.com')).toBe(false)
-    expect(isTitleFetchable('https://x.com/hermes/status/123')).toBe(false)
-    expect(isTitleFetchable('https://www.youtube.com/watch?v=abc')).toBe(false)
   })
 
   it('deduplicates in-flight title fetches and caches results', async () => {
@@ -124,15 +123,13 @@ describe('external link helpers', () => {
 
   // Platform-specific on purpose (same rule as terminal links / middle-click):
   // ⌘ on macOS, Ctrl elsewhere. The suite runs as non-mac.
-  it('opens personal-session services only in the OS browser after an explicit click', () => {
+  it('opens X and YouTube in the OS browser only after an explicit open-elsewhere click', () => {
     const openExternal = vi.fn().mockResolvedValue(undefined)
     installDesktopBridge({ openExternal: openExternal as unknown as Window['hermesDesktop']['openExternal'] })
 
     const targets = [
       ['X post', 'https://x.com/hermes/status/123'],
-      ['Twitter post', 'https://mobile.twitter.com/hermes/status/123'],
-      ['YouTube video', 'https://www.youtube.com/watch?v=explicit-click-only'],
-      ['Short YouTube link', 'https://youtu.be/explicit-click-only']
+      ['YouTube video', 'https://www.youtube.com/watch?v=explicit-click-only']
     ] as const
 
     render(
@@ -148,7 +145,7 @@ describe('external link helpers', () => {
     expect(openExternal).not.toHaveBeenCalled()
 
     for (const [label, href] of targets) {
-      fireEvent.click(screen.getByRole('link', { name: label }))
+      fireEvent.click(screen.getByRole('link', { name: label }), IS_MAC ? { metaKey: true } : { ctrlKey: true })
       expect(openExternal).toHaveBeenLastCalledWith(href)
     }
 

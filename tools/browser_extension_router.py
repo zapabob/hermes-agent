@@ -45,54 +45,6 @@ from typing import Any, Callable, Dict, Optional
 logger = logging.getLogger(__name__)
 
 
-def _extension_transport_policy_error(action: str) -> str:
-    """Refuse extension control until requests are blocked in its transport."""
-    return json.dumps(
-        {
-            "success": False,
-            "error": (
-                "Blocked: browser extension control is unavailable under the "
-                "personal-session boundary because its controller transport "
-                "cannot prove X and YouTube requests are pre-blocked."
-            ),
-            "blocked_by_policy": {
-                "rule": "personal-os-browser-only",
-                "backend": "browser-extension",
-                "operation": action,
-                "reason": "transport-interception-unavailable",
-            },
-        },
-        ensure_ascii=False,
-    )
-
-
-def _legacy_browser_transport_policy_error(action: str) -> str:
-    """Refuse legacy content until every target and socket is guarded.
-
-    agent-browser v0.26 applies HTTP Fetch routes only to the active target.
-    Popups, workers, service workers, and WebSocket handshakes do not share a
-    provable pre-request host boundary. Registry dispatch therefore fails
-    closed instead of relying on page-level checks that can run too late.
-    """
-    return json.dumps(
-        {
-            "success": False,
-            "error": (
-                "Blocked: legacy browser content control is unavailable under "
-                "the personal-session boundary because its transport cannot "
-                "pre-block X and YouTube across every target and WebSocket."
-            ),
-            "blocked_by_policy": {
-                "rule": "personal-os-browser-only",
-                "backend": "legacy-browser",
-                "operation": action,
-                "reason": "universal-transport-interception-unavailable",
-            },
-        },
-        ensure_ascii=False,
-    )
-
-
 def extension_controller_available(action: str) -> bool:
     """Whether this request owns one exact controller capable of ``action``.
 
@@ -224,10 +176,6 @@ def route_browser_tool(
             f"bound browser controller cannot execute {action}"
         )
 
-    transport_error = _extension_transport_policy_error(action)
-    if transport_error:
-        return transport_error
-
     # A controller was selected: it is authoritative. Never retry through the
     # existing backend, whatever happens here. Registry handlers must return a
     # string (or the dedicated multimodal envelope), while controller transports
@@ -276,10 +224,6 @@ def routed_browser_handler(
     gateway. When the gateway cannot be imported or the feature is off, the
     legacy handler runs unchanged.
     """
-    transport_error = _legacy_browser_transport_policy_error(action)
-    if transport_error:
-        return transport_error
-
     try:
         from gateway.browser_control_broker import (
             browser_control_enabled,

@@ -126,23 +126,6 @@ def browser_vault_fill(handle: str, task_id: Optional[str] = None) -> str:
     The secret is resolved server-side and injected via in-page JS; the
     result reports only counts and metadata.
     """
-    from tools.browser_tool import _browser_eval_transport_policy_error
-
-    transport_error = _browser_eval_transport_policy_error()
-    if transport_error:
-        return json.dumps(
-            {
-                "success": False,
-                "error": transport_error,
-                "blocked_by_policy": {
-                    "rule": "personal-os-browser-only",
-                    "backend": "browser-vault-fill",
-                    "reason": "transport-interception-unavailable",
-                },
-            },
-            ensure_ascii=False,
-        )
-
     from agent.vault_login_classifier import (
         LOGIN_CONTROL_INSPECTION_JS,
         ClassifiedLoginControl,

@@ -59,7 +59,6 @@ export {
   type WebSocketLike
 } from './json-rpc-gateway'
 export { skillInvocationText } from './skill-scaffold'
-export { isPersonalSessionTransportUrl, isPersonalSessionUrl } from './personal-session-url'
 export {
   type HermesSkin,
   SKIN_BRANDING_TOKENS,

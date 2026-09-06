@@ -25,15 +25,6 @@ from tools.registry import registry
 logger = logging.getLogger(__name__)
 
 
-def _browser_dialog_transport_policy_error() -> str:
-    """Refuse dialog actions that can resume unguarded browser navigation."""
-    return (
-        "Blocked: browser dialog control is unavailable under the personal-session "
-        "boundary because accepting a beforeunload dialog can resume navigation "
-        "without universal X/YouTube transport interception."
-    )
-
-
 BROWSER_DIALOG_SCHEMA: Dict[str, Any] = {
     "name": "browser_dialog",
     "description": (
@@ -95,21 +86,6 @@ def browser_dialog(
     task_id: Optional[str] = None,
 ) -> str:
     """Respond to a pending dialog on the active task's CDP supervisor."""
-    transport_error = _browser_dialog_transport_policy_error()
-    if transport_error:
-        return json.dumps(
-            {
-                "success": False,
-                "error": transport_error,
-                "blocked_by_policy": {
-                    "rule": "personal-os-browser-only",
-                    "backend": "browser-dialog",
-                    "reason": "transport-interception-unavailable",
-                },
-            },
-            ensure_ascii=False,
-        )
-
     effective_task_id = task_id or "default"
     supervisor = SUPERVISOR_REGISTRY.get(effective_task_id)
     if supervisor is None:
