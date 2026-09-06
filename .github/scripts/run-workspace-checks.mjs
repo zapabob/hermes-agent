@@ -91,9 +91,13 @@ async function main() {
   }
 
   const flagIdx = argv.indexOf('--concurrency')
+  const envConcurrency = Number(process.env.WORKSPACE_CHECK_CONCURRENCY)
+  const defaultConcurrency = Number.isInteger(envConcurrency) && envConcurrency > 0
+    ? envConcurrency
+    : Math.min(units.length, availableParallelism())
   const concurrency = Math.max(
     1,
-    flagIdx !== -1 ? Number(argv[flagIdx + 1]) : Math.min(units.length, availableParallelism()),
+    flagIdx !== -1 ? Number(argv[flagIdx + 1]) : defaultConcurrency,
   )
 
   console.log(`running ${units.length} checks, up to ${concurrency} at a time:`)

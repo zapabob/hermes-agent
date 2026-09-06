@@ -18,8 +18,9 @@ jobs:
     timeout-minutes: ${{ github.repository == 'NousResearch/hermes-agent' && 30 || 60 }}
     env:
       # The fork falls back to a 4-core hosted runner. Bound each Vitest pool
-      # while workspace checks run concurrently to bound peak memory pressure.
+      # and the outer workspace scheduler to bound peak process pressure.
       VITEST_MAX_WORKERS: ${{ github.repository != 'NousResearch/hermes-agent' && '2' || '' }}
+      WORKSPACE_CHECK_CONCURRENCY: ${{ github.repository != 'NousResearch/hermes-agent' && '2' || '' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
