@@ -52,9 +52,9 @@ Local-only refactor campaign: freeze Windows contracts with characterization tes
 
 ## Next safe / stop decisions
 
-1. **Done this follow-up:** adjacent MSYS local-env regression cases (test-only) if still missing `/mnt`/`/cygdrive` in `test_local_env_windows_msys.py`
-2. **Stop extracts:** LF-COND-1 (cli worktree) and LF-COND-4 (kanban paths) until re-export + state/monkeypatch identity plans are written and char-gated
-3. **LF-COND-3:** only if a pure sibling chunk is identified without SessionDB method coupling — not claimed this turn
+1. **Done:** adjacent MSYS local-env cases (`test_local_env_windows_msys.py`, 29 passed / 4 skipped)
+2. **Stop extracts this turn:** LF-COND-1 (`cli.py` + `_active_worktree` state sharing unproven), LF-COND-4 (`kanban_home` impact 70 / monkeypatch surface), LF-COND-3 (no newly proven pure SessionDB chunk beyond existing siblings)
+3. **Wave2 flags / process-stdio / three-core size splits:** still OUT_OF_SCOPE
 
 ## Residual risk
 
