@@ -1,9 +1,26 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 
-import { test } from 'vitest'
+import { afterEach, test } from 'vitest'
 
 import { configuredStartupExternalUrlsFromYaml, startupExternalUrlsConfigPath } from './startup-external-urls'
+
+const tempRoots: string[] = []
+
+function makeHermesHome(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-startup-urls-'))
+
+  tempRoots.push(root)
+  return root
+}
+
+afterEach(() => {
+  for (const root of tempRoots.splice(0)) {
+    fs.rmSync(root, { force: true, recursive: true })
+  }
+})
 
 test('public build opens no personal service when profile settings are absent', () => {
   assert.deepEqual(configuredStartupExternalUrlsFromYaml('desktop: {}'), [])
@@ -62,7 +79,7 @@ test('malformed YAML fails closed without delaying Desktop startup', () => {
 })
 
 test('config path follows the active Desktop profile', () => {
-  const hermesHome = path.join('home', 'owner', '.hermes')
+  const hermesHome = makeHermesHome()
 
   assert.equal(startupExternalUrlsConfigPath(hermesHome, null), path.join(hermesHome, 'config.yaml'))
   assert.equal(startupExternalUrlsConfigPath(hermesHome, 'default'), path.join(hermesHome, 'config.yaml'))
@@ -70,4 +87,36 @@ test('config path follows the active Desktop profile', () => {
     startupExternalUrlsConfigPath(hermesHome, 'work'),
     path.join(hermesHome, 'profiles', 'work', 'config.yaml')
   )
+})
+
+test('an unset Desktop profile follows the validated sticky active profile', () => {
+  const hermesHome = makeHermesHome()
+
+  fs.writeFileSync(path.join(hermesHome, 'active_profile'), 'work\n', 'utf8')
+
+  assert.equal(
+    startupExternalUrlsConfigPath(hermesHome, null),
+    path.join(hermesHome, 'profiles', 'work', 'config.yaml')
+  )
+})
+
+test('an explicit Desktop profile wins over sticky profile state', () => {
+  const hermesHome = makeHermesHome()
+
+  fs.writeFileSync(path.join(hermesHome, 'active_profile'), 'work\n', 'utf8')
+
+  assert.equal(startupExternalUrlsConfigPath(hermesHome, 'default'), path.join(hermesHome, 'config.yaml'))
+  assert.equal(
+    startupExternalUrlsConfigPath(hermesHome, 'personal'),
+    path.join(hermesHome, 'profiles', 'personal', 'config.yaml')
+  )
+})
+
+test('invalid explicit or sticky profiles cannot escape HERMES_HOME', () => {
+  const hermesHome = makeHermesHome()
+
+  fs.writeFileSync(path.join(hermesHome, 'active_profile'), '../outside\n', 'utf8')
+
+  assert.equal(startupExternalUrlsConfigPath(hermesHome, null), path.join(hermesHome, 'config.yaml'))
+  assert.equal(startupExternalUrlsConfigPath(hermesHome, '../outside'), path.join(hermesHome, 'config.yaml'))
 })

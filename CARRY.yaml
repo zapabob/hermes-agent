@@ -58,7 +58,7 @@ carry:
     upstream_paths: [hermes_cli/config_defaults.py, apps/desktop/electron/main.ts, apps/desktop/electron/startup-external-urls.ts]
     current_upstream_owner: desktop profile configuration and OS external URL handoff
     downstream_reason: let an operator open private-session X and YouTube pages at Desktop startup without shipping account URLs or restricting browser automation
-    invariants: [public defaults contain no destination, values are profile-scoped config not environment variables, only validated service hosts open once through the OS browser]
+    invariants: [public defaults contain no destination, values are profile-scoped config not environment variables, only credential-free HTTPS URLs on validated service hosts open once through the OS browser]
     tests: [apps/desktop/electron/startup-external-urls.test.ts]
     integration_policy: COMPOSE
     removal_condition: upstream provides an equivalent profile-scoped startup-page configuration with no account-specific defaults
