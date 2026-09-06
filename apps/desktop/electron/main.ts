@@ -422,6 +422,7 @@ import {
   buildPathExtCandidates,
   chooseUpdaterArgs,
   getVenvSitePackagesEntries,
+  isWindowsVenvHermesExeShim,
   resolveVenvHermesCommand
 } from './windows-hermes-path'
 import {
@@ -4683,6 +4684,15 @@ function resolveHermesBackend(backendArgs) {
         return unwrapped
       }
 
+      // Never spawn the venv console-script Hermes.exe from Electron: under a
+      // GUI parent, windowsHide cannot suppress the allocated console, and the
+      // user sees stacked blank windows titled Scripts\Hermes.exe. Unwrap above
+      // is the only allowed path for that shim; refuse the fall-through.
+      if (isWindowsVenvHermesExeShim(hermesCommand)) {
+        rememberLog(
+          `Ignoring venv Hermes console shim at ${hermesCommand}: refuse direct spawn (console flash); falling through.`
+        )
+      } else {
       // Smoke-test the candidate before trusting it. A `hermes` shim
       // left behind by a half-uninstalled pip install (or a venv
       // entry-point pointing at a deleted interpreter) still resolves
@@ -4716,6 +4726,7 @@ function resolveHermesBackend(backendArgs) {
       rememberLog(
         `Ignoring existing Hermes CLI at ${hermesCommand}: --version probe failed; falling through to bootstrap.`
       )
+      }
     }
   }
 

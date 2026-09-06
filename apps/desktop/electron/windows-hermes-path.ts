@@ -206,6 +206,44 @@ export interface ResolveVenvHermesCommandDeps {
  * python doesn't exist, or the import probe fails. Otherwise returns the
  * resolved backend descriptor.
  */
+/**
+ * True when `command` is a Windows venv console-script shim
+ * (`.../Scripts/hermes` or `.../Scripts/hermes.exe`).
+ *
+ * Directly spawning that shim from a GUI parent (Electron) allocates a
+ * *visible* console whose title is the shim path — the stacked blank
+ * `Scripts\Hermes.exe` windows. `windowsHide` alone does not stop that
+ * for a console-subsystem image under a console-less parent. Callers must
+ * unwrap to `python -m hermes_cli.main` (see resolveVenvHermesCommand)
+ * and never fall through to spawning the shim itself.
+ */
+export function isWindowsVenvHermesExeShim(
+  command: string,
+  opts: {
+    isWindows?: boolean
+    basename?: (p: string) => string
+    dirname?: (p: string) => string
+    resolvePath?: (...segments: string[]) => string
+  } = {}
+): boolean {
+  const isWindows = opts.isWindows ?? process.platform === 'win32'
+
+  if (!isWindows || !command) {
+    return false
+  }
+
+  const basename = opts.basename ?? path.basename
+  const dirname = opts.dirname ?? path.dirname
+  const resolvePath = opts.resolvePath ?? path.resolve
+  const resolved = resolvePath(String(command))
+
+  if (!/^hermes(?:\.exe)?$/i.test(basename(resolved))) {
+    return false
+  }
+
+  return basename(dirname(resolved)).toLowerCase() === 'scripts'
+}
+
 export function resolveVenvHermesCommand(
   command: string,
   backendArgs: string[],

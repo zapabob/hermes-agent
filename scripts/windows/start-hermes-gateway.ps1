@@ -15,7 +15,7 @@ if (-not (Test-Path -LiteralPath $PythonExe) -or -not (Test-Path -LiteralPath (J
 }
 
 $DelaySeconds = 30
-$WindowStyle = "Normal"
+$WindowStyle = "Hidden"
 if ($env:HERMES_STARTUP_DELAY_SECONDS -and $env:HERMES_STARTUP_DELAY_SECONDS.Trim()) {
     $parsedDelay = 0
     if ([int]::TryParse($env:HERMES_STARTUP_DELAY_SECONDS, [ref]$parsedDelay) -and $parsedDelay -ge 0) {

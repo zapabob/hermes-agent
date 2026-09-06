@@ -21,6 +21,7 @@ import {
   buildPathExtCandidates,
   chooseUpdaterArgs,
   getVenvSitePackagesEntries,
+  isWindowsVenvHermesExeShim,
   resolveVenvHermesCommand
 } from './windows-hermes-path'
 
@@ -237,4 +238,17 @@ test('getVenvSitePackagesEntries: returns empty for a falsy venvRoot', () => {
   assert.deepEqual(getVenvSitePackagesEntries('', { isWindows: true, directoryExists: () => true }), [])
   assert.deepEqual(getVenvSitePackagesEntries(null, { isWindows: true, directoryExists: () => true }), [])
   assert.deepEqual(getVenvSitePackagesEntries(undefined, { isWindows: true, directoryExists: () => true }), [])
+})
+
+test('isWindowsVenvHermesExeShim: true for Scripts/hermes.exe on Windows', () => {
+  assert.equal(
+    isWindowsVenvHermesExeShim('C:\\root\\venv\\Scripts\\hermes.exe', { isWindows: true }),
+    true
+  )
+})
+
+test('isWindowsVenvHermesExeShim: false off Windows and for non-Scripts paths', () => {
+  assert.equal(isWindowsVenvHermesExeShim('C:\\root\\venv\\Scripts\\hermes.exe', { isWindows: false }), false)
+  assert.equal(isWindowsVenvHermesExeShim('C:\\root\\bin\\hermes.exe', { isWindows: true }), false)
+  assert.equal(isWindowsVenvHermesExeShim('C:\\root\\venv\\Scripts\\python.exe', { isWindows: true }), false)
 })
