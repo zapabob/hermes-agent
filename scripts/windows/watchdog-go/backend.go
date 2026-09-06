@@ -233,7 +233,11 @@ func (bm *BackendManager) currentHealthy() *backendInfo {
 
 func (bm *BackendManager) stopLocked() {
 	if bm.cmd != nil && bm.cmd.Process != nil {
-		stopProcessPID(uint32(bm.cmd.Process.Pid))
+		// os.Process retains the Windows process handle opened by Start. Killing
+		// through that handle cannot be redirected to a later process that reused
+		// the same numeric PID.
+		_ = bm.cmd.Process.Kill()
+		_ = bm.cmd.Wait()
 	}
 	bm.cmd = nil
 	bm.pid = 0
@@ -361,6 +365,10 @@ func (bm *BackendManager) EnsureHealthy() (*backendInfo, error) {
 		bm.clearManifest()
 		return nil, err
 	}
+	bm.cmd = cmd
+	bm.pid = cmd.Process.Pid
+	bm.port = port
+	bm.token = token
 	go io.Copy(io.Discard, stdout)
 
 	if err := bm.waitForReadyPort(port, time.Duration(bm.cfg.BackendStartTimeoutSec)*time.Second); err != nil {
@@ -376,15 +384,6 @@ func (bm *BackendManager) EnsureHealthy() (*backendInfo, error) {
 			return nil, err2
 		}
 	}
-
-	bm.cmd = cmd
-	if cmd.Process != nil {
-		bm.pid = cmd.Process.Pid
-	} else {
-		bm.pid = 0
-	}
-	bm.port = port
-	bm.token = token
 
 	// Refuse to publish a token that does not authenticate (squatter race).
 	if !testBackendAuth(port, token) {

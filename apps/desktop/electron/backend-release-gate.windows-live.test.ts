@@ -2,20 +2,20 @@
  * backend-release-gate.windows-live.test.ts
  *
  * LIVE Windows E2E for the #74805 unlock gate: real spawned processes, the
- * REAL isPidAliveWindows probe against the live process table, real
- * taskkill — no fake clocks, no fake tables. Runs only on win32 (the
+ * REAL isPidAliveWindows probe against the live process table, and the exact
+ * ChildProcess handle returned by spawn. Runs only on win32 (the
  * ephemeral wine2e lane); skipped everywhere else.
  *
  * This is the platform half of the proof: the unit suite pins the gate's
  * decision logic on a fake table; this file proves the two real-world
  * premises the fix rests on:
- *   1. taskkill /T /F returns while the killed process is still enumerable
+ *   1. handle-bound termination can return while the process is enumerable
  *      (the race window exists), and
  *   2. the gate, wired to the real probes, dwells through that window and
  *      only passes once the PID has genuinely left the table.
  */
 
-import { execFileSync, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 
 import { describe, expect, it } from 'vitest'
 
@@ -35,19 +35,11 @@ function spawnSleeper(): { pid: number; kill: () => void } {
     pid: child.pid,
     kill: () => {
       try {
-        child.kill()
+        child.kill('SIGKILL')
       } catch {
         /* already gone */
       }
     }
-  }
-}
-
-function taskkillTree(pid: number): void {
-  try {
-    execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
-  } catch {
-    /* already gone */
   }
 }
 
@@ -57,7 +49,7 @@ describe.skipIf(!isWindows)('waitForBackendRelease — live Windows (#74805)', (
 
     expect(isPidAliveWindows(sleeper.pid)).toBe(true)
 
-    taskkillTree(sleeper.pid)
+    sleeper.kill()
 
     // Poll until the table retires the PID (bounded).
     const deadline = Date.now() + 10000
@@ -74,10 +66,10 @@ describe.skipIf(!isWindows)('waitForBackendRelease — live Windows (#74805)', (
     const logs: string[] = []
     let firstAliveCheck: boolean | null = null
 
-    // Fire the real taskkill and IMMEDIATELY enter the gate — the #74805
+    // Signal through the retained handle and IMMEDIATELY enter the gate — the #74805
     // shape. The shim probe reads unlocked throughout (the serve backend
     // never held it); only the PID exit-wait can hold the gate closed.
-    taskkillTree(sleeper.pid)
+    sleeper.kill()
 
     const result = await waitForBackendRelease(
       [sleeper.pid],
@@ -93,7 +85,11 @@ describe.skipIf(!isWindows)('waitForBackendRelease — live Windows (#74805)', (
           return alive
         },
         collectStragglerPids: () => [],
-        killProcessTree: taskkillTree,
+        stopManagedChild: pid => {
+          if (pid === sleeper.pid) {
+            sleeper.kill()
+          }
+        },
         sleep: ms => new Promise(r => setTimeout(r, ms)),
         now: () => Date.now(),
         log: line => logs.push(line)
@@ -126,7 +122,7 @@ describe.skipIf(!isWindows)('waitForBackendRelease — live Windows (#74805)', (
           isShimLocked: () => true,
           isPidAlive: isPidAliveWindows,
           collectStragglerPids: () => [],
-          killProcessTree: () => {
+          stopManagedChild: () => {
             /* nothing else to kill */
           },
           sleep: ms => new Promise(r => setTimeout(r, ms)),
@@ -140,7 +136,7 @@ describe.skipIf(!isWindows)('waitForBackendRelease — live Windows (#74805)', (
       expect(result.unlocked).toBe(false)
       expect(result.lingeringPids).toEqual([holder.pid])
     } finally {
-      taskkillTree(holder.pid)
+      holder.kill()
     }
   })
 })

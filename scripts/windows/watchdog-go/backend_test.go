@@ -1,6 +1,9 @@
 package main
 
 import (
+	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -183,11 +186,32 @@ func TestBackendManagerWriteReadManifest(t *testing.T) {
 	}
 }
 
-
 func TestWaitManagedPortClearedEmptyPort(t *testing.T) {
 	if !waitManagedPortCleared(0, time.Second, nil) {
 		t.Fatal("port 0 should be treated as cleared")
 	}
+}
+
+func TestWaitManagedPortClearedPreservesForeignListener(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})}
+	defer server.Close()
+	go func() { _ = server.Serve(listener) }()
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	if waitManagedPortCleared(port, 150*time.Millisecond, nil) {
+		t.Fatal("foreign listener must remain occupied")
+	}
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/", port))
+	if err != nil {
+		t.Fatalf("foreign listener was terminated: %v", err)
+	}
+	resp.Body.Close()
 }
 
 func TestReadManifestToleratesNumericUpdatedAtAndURLAlias(t *testing.T) {

@@ -29,6 +29,7 @@ def _watchdog_uninstall_fence(project_root: Path, *, reason: str):
 
     lease = watchdog_maintenance.acquire(project_root, reason=reason)
     try:
+        watchdog_maintenance.wait_for_acknowledgement(lease)
         watchdog_maintenance.transition(
             lease,
             watchdog_maintenance.UPSTREAM_DRAIN,

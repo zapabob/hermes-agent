@@ -96,6 +96,7 @@ $WatchdogMaintenancePath = Join-Path $WatchdogDataDir "maintenance.json"
 $script:WatchdogMaintenanceOwner = "desktop-update:$PID"
 $script:WatchdogMaintenanceNonce = [Guid]::NewGuid().ToString("N")
 $script:WatchdogMaintenanceEpoch = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+$script:WatchdogMaintenanceTimestamp = $null
 $script:WatchdogMaintenanceHeld = $false
 $script:Ui = $null
 $script:UiStage = "Hermes will open once done."   # until the first gate; matches ui.html
@@ -762,6 +763,7 @@ function Set-WatchdogMaintenanceState([string]$State, [string]$Reason) {
         } else {
             [System.IO.File]::Move($tmp, $WatchdogMaintenancePath)
         }
+        $script:WatchdogMaintenanceTimestamp = [string]$payload.timestamp
         $script:WatchdogMaintenanceHeld = $State -ne "NORMAL"
         $env:HERMES_WATCHDOG_MAINTENANCE_OWNER = $script:WatchdogMaintenanceOwner
         $env:HERMES_WATCHDOG_MAINTENANCE_NONCE = $script:WatchdogMaintenanceNonce
@@ -777,27 +779,104 @@ function Set-WatchdogMaintenanceState([string]$State, [string]$Reason) {
     }
 }
 
+function Get-HandoffNormalizedPath([string]$Value) {
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
+    try {
+        return [System.IO.Path]::GetFullPath($Value).TrimEnd('\', '/')
+    } catch {
+        return $null
+    }
+}
+
+function Test-HandoffSamePath([string]$Left, [string]$Right) {
+    $leftPath = Get-HandoffNormalizedPath $Left
+    $rightPath = Get-HandoffNormalizedPath $Right
+    if (-not $leftPath -or -not $rightPath) { return $false }
+    return [string]::Equals(
+        $leftPath,
+        $rightPath,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )
+}
+
 function Wait-WatchdogMaintenanceAcknowledge {
     $lockPath = Join-Path $WatchdogDataDir "watchdog.lock"
     $statePath = Join-Path $WatchdogDataDir "watchdog.state.json"
     if (-not (Test-Path -LiteralPath $lockPath)) { return }
+
     try {
-        $lockState = Get-Content -LiteralPath $lockPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $lockState = Get-Content -LiteralPath $lockPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
         $watchdogPid = [int]$lockState.pid
-        if ($watchdogPid -le 0 -or -not (Get-Process -Id $watchdogPid -ErrorAction SilentlyContinue)) {
-            return
-        }
     } catch {
-        # An unreadable or stale lock cannot prove a live watchdog.
+        throw "Cannot verify watchdog lock before Desktop update: $($_.Exception.Message)"
+    }
+    if ($watchdogPid -le 0) {
+        throw "Cannot verify watchdog lock before Desktop update: invalid PID"
+    }
+
+    $watchdogProcess = Get-Process -Id $watchdogPid -ErrorAction SilentlyContinue
+    if (-not $watchdogProcess) {
+        # A fully parsed lock whose process has exited cannot acknowledge and
+        # cannot race the handoff.  The launcher will reclaim it later.
         return
+    }
+    try {
+        $actualExecutable = [string]$watchdogProcess.Path
+        $actualCreated = [uint64]$watchdogProcess.StartTime.ToUniversalTime().ToFileTimeUtc()
+    } catch {
+        throw "Cannot verify live watchdog process identity before Desktop update: $($_.Exception.Message)"
+    }
+
+    $expectedExecutable = Join-Path $InstallRoot "scripts\windows\watchdog-go\dist\hermes-watchdog.exe"
+    if (
+        -not $lockState.processCreated -or
+        -not $lockState.executablePath -or
+        -not $lockState.repoRoot -or
+        -not (Test-HandoffSamePath ([string]$lockState.executablePath) $actualExecutable) -or
+        -not (Test-HandoffSamePath $actualExecutable $expectedExecutable) -or
+        -not (Test-HandoffSamePath ([string]$lockState.repoRoot) $InstallRoot)
+    ) {
+        throw "Cannot verify live watchdog process identity before Desktop update: executable mismatch"
+    }
+    try {
+        $creationMatches = [uint64]$lockState.processCreated -eq $actualCreated
+    } catch {
+        throw "Cannot verify live watchdog process identity before Desktop update: invalid creation time"
+    }
+    if (-not $creationMatches) {
+        throw "Cannot verify live watchdog process identity before Desktop update: creation time mismatch"
+    }
+    if ([string]::IsNullOrWhiteSpace($script:WatchdogMaintenanceTimestamp)) {
+        throw "Cannot verify watchdog maintenance request timestamp before Desktop update"
     }
 
     $deadline = (Get-Date).AddSeconds(35)
     while ((Get-Date) -lt $deadline) {
         try {
             if (Test-Path -LiteralPath $statePath) {
-                $watchdogState = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
-                if ($watchdogState.maintenanceOwner -eq $script:WatchdogMaintenanceOwner -and $watchdogState.maintenanceState -ne "NORMAL") {
+                $watchdogState = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+                $stateUpdatedAt = [DateTimeOffset]::MinValue
+                $requestAt = [DateTimeOffset]::Parse(
+                    $script:WatchdogMaintenanceTimestamp,
+                    [Globalization.CultureInfo]::InvariantCulture,
+                    [Globalization.DateTimeStyles]::RoundtripKind
+                )
+                $updatedAtValid = [DateTimeOffset]::TryParse(
+                    [string]$watchdogState.updatedAt,
+                    [Globalization.CultureInfo]::InvariantCulture,
+                    [Globalization.DateTimeStyles]::RoundtripKind,
+                    [ref]$stateUpdatedAt
+                )
+                if (
+                    [int]$watchdogState.watchdogPid -eq $watchdogPid -and
+                    $watchdogState.maintenanceOwner -eq $script:WatchdogMaintenanceOwner -and
+                    $watchdogState.maintenanceNonce -eq $script:WatchdogMaintenanceNonce -and
+                    [int64]$watchdogState.maintenanceEpoch -eq $script:WatchdogMaintenanceEpoch -and
+                    $watchdogState.maintenanceTimestamp -eq $script:WatchdogMaintenanceTimestamp -and
+                    $watchdogState.maintenanceState -eq "UPDATE_PREPARE" -and
+                    $updatedAtValid -and
+                    $stateUpdatedAt -ge $requestAt
+                ) {
                     Write-HandoffLog "watchdog acknowledged maintenance ownership"
                     return
                 }

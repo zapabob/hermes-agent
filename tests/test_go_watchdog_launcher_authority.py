@@ -82,7 +82,8 @@ def test_launcher_requires_full_process_identity_before_claiming_a_lock() -> Non
     assert "processCreated" in launcher
     assert "executablePath" in launcher
     assert "repoRoot" in launcher
-    assert "ToFileTimeUtc()" in launcher
+    assert "GetProcessTimes" in launcher
+    assert "ProcessCreated = [uint64]$created" in launcher
     assert 'Status = "owned"' in launcher
     assert 'Status = "foreign"' in launcher
 
@@ -92,7 +93,16 @@ def test_launcher_never_stops_watchdogs_by_image_name() -> None:
 
     assert "Get-Process -Name hermes-watchdog" not in launcher
     assert "taskkill /IM hermes-watchdog" not in launcher
-    assert "Stop-Process -Id $state.Pid" in launcher
+    assert "Stop-Process -Id $state.Pid" not in launcher
+    assert "Get-WindowsProcessIdentityFromHandle -Handle $handle" in launcher
+    assert "TerminateProcess($handle, 1)" in launcher
+
+
+def test_build_timeout_never_scans_or_kills_processes_by_command_line() -> None:
+    launcher = _launcher()
+
+    assert "Get-CimInstance Win32_Process" not in launcher
+    assert "CommandLine -and" not in launcher
 
 
 def test_launcher_requires_an_elevated_operator_before_any_side_effect() -> None:
@@ -133,13 +143,17 @@ def test_explicit_stop_runs_before_binary_availability_checks() -> None:
     assert stop_dispatch < missing_binary
 
 
-def test_legacy_watchdog_stop_is_bound_to_the_exact_script_path() -> None:
+def test_legacy_watchdog_shim_is_never_stopped_by_command_line() -> None:
     launcher = _launcher()
+    start = launcher.index("function Stop-PsDesktopBackendWatchdog")
+    end = launcher.index("\nif ($Stop) {", start)
+    legacy_body = launcher[start:end]
 
-    assert "$LegacyWatchdogScript" in launcher
-    assert "[regex]::Escape($LegacyWatchdogScript)" in launcher
-    assert "-match $legacyScriptPattern" in launcher
-    assert "-match 'Start-HermesDesktopBackendWatchdog\\.ps1'" not in launcher
+    assert "has no restart authority" in legacy_body
+    assert "Get-CimInstance" not in legacy_body
+    assert "CommandLine" not in legacy_body
+    assert "Stop-Process" not in legacy_body
+    assert "Remove-Item" not in legacy_body
 
 
 def test_foreign_live_lock_is_preserved() -> None:

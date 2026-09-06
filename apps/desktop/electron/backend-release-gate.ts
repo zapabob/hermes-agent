@@ -1,11 +1,11 @@
 /**
  * backend-release-gate.ts
  *
- * The Windows pre-update unlock gate: after the desktop tree-kills its own
+ * The Windows pre-update unlock gate: after the desktop stops its own
  * backends, decide when it is actually safe to hand off to the updater.
  *
- * Why this exists (#74805): `taskkill /T /F` returns once termination is
- * INITIATED, not completed. A dying `python.exe -m hermes_cli.main serve`
+ * Why this exists (#74805): a termination request returns before process exit
+ * is necessarily complete. A dying `python.exe -m hermes_cli.main serve`
  * stays in the process table while it unmaps .pyd files (AV / NTFS filter
  * drivers stretch this out), and it need not hold the venv `hermes.exe` shim
  * at all — so a gate that only probes the shim can pass on its very first
@@ -35,8 +35,8 @@ export interface ReleaseGateDeps {
    * the supervised primary backend and pool entries. Called every pass.
    */
   collectStragglerPids: () => number[]
-  /** Tree-kill (real: taskkill /PID n /T /F). */
-  killProcessTree: (pid: number) => void
+  /** Stop only a process still backed by this Desktop's ChildProcess handle. */
+  stopManagedChild: (pid: number) => void
   /** Async sleep; injectable so tests run on a fake clock. */
   sleep: (ms: number) => Promise<void>
   /** Monotonic-enough clock; injectable for tests. */
@@ -60,7 +60,7 @@ export const RELEASE_GATE_POLL_MS = 300
  *
  * `initialPids` are the PIDs the caller already signalled (primary backend +
  * pool) before invoking the gate; stragglers collected on each pass are
- * killed and added to the same watch set.
+ * stopped through retained child handles and added to the same watch set.
  */
 export async function waitForBackendRelease(
   initialPids: number[],
@@ -87,26 +87,17 @@ export async function waitForBackendRelease(
     for (const pid of deps.collectStragglerPids()) {
       if (Number.isInteger(pid) && pid > 0) {
         killedPids.add(pid)
-        deps.killProcessTree(pid)
+        deps.stopManagedChild(pid)
       }
     }
 
     await deps.sleep(RELEASE_GATE_POLL_MS)
   }
 
-  // Deadline reached. Keep the pre-#74805 success criterion — an unlocked
-  // shim — rather than inventing a new failure mode for PIDs that linger
-  // past the deadline; the venv-blocker re-scan downstream covers that
-  // residue (and a REAL foreign holder still fails the shim probe).
+  // Deadline reached. A still-live PID may have been reused after the exact
+  // child handle exited, so never authorize another signal from its number
+  // and never hand an updater a knowingly mixed process state.
   const lingering = [...killedPids].filter(pid => deps.isPidAlive(pid))
-
-  if (!deps.isShimLocked()) {
-    deps.log(
-      `[${tag}] proceeding after deadline: venv shim unlocked, but ${lingering.length} signalled PID(s) still enumerable`
-    )
-
-    return { unlocked: true, lingeringPids: lingering }
-  }
 
   return { unlocked: false, lingeringPids: lingering }
 }

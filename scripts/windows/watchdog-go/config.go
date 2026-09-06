@@ -33,6 +33,7 @@ type Config struct {
 	LockPath                 string
 	StatePath                string
 	MaintenancePath          string
+	RecoveryPath             string
 	TsAuthKey                string
 }
 

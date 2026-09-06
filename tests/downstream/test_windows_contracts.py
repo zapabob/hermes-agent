@@ -221,10 +221,43 @@ def test_windows_restart_scripts_fall_back_to_netstat_for_listener_discovery(
 
 
 @pytest.mark.parametrize(
+    "script_name",
+    ["Restart-HermesFullStack.ps1", "restart-hermes-stack.ps1"],
+)
+def test_windows_restart_scripts_never_kill_by_image_or_unverified_lock_pid(
+    script_name: str,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = (root / "scripts" / "windows" / script_name).read_text(encoding="utf-8")
+
+    assert "taskkill /IM" not in script
+    assert "Get-Process -Name Hermes" not in script
+    assert "Get-Process Hermes, electron, hermes" not in script
+    assert "Get-Process -Name hermes-watchdog" not in script
+    assert "ConvertFrom-Json" not in script[script.find("watchdog.lock") : script.find("watchdog.lock") + 500]
+    assert "Start-HermesGoWatchdog.ps1" in script
+    assert "-Stop" in script
+
+
+def test_legacy_watchdog_is_a_non_destructive_go_bootstrap_shim() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = (root / "scripts" / "windows" / "Start-HermesDesktopBackendWatchdog.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Start-HermesGoWatchdog.ps1" in script
+    assert "legacy PowerShell watchdog delegated" in script
+    assert "BuildIfMissing" in script
+    assert "Stop-Process" not in script
+    assert "taskkill" not in script
+    assert "Get-CimInstance" not in script
+    assert "Get-Process" not in script
+
+
+@pytest.mark.parametrize(
     ("script_name", "root_variable"),
     [
         ("start-hermes-desktop.ps1", "$HermesRoot"),
-        ("Start-HermesDesktopBackendWatchdog.ps1", "$RepoRoot"),
     ],
 )
 def test_windows_desktop_launchers_prefer_canonical_repo_package(

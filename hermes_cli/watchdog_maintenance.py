@@ -114,6 +114,97 @@ def _process_start_time(pid: int) -> float | None:
         return None
 
 
+def _live_process_identity(pid: int) -> tuple[float, str] | None:
+    try:
+        import psutil
+
+        process = psutil.Process(pid)
+        return float(process.create_time()), str(process.exe())
+    except psutil.NoSuchProcess:
+        return None
+    except Exception as exc:
+        raise RuntimeError(
+            f"Cannot verify live watchdog process identity for pid {pid}"
+        ) from exc
+
+
+def _windows_filetime_from_unix(timestamp: float) -> int:
+    return int((timestamp + 11_644_473_600) * 10_000_000)
+
+
+def _exact_live_process_identity(pid: int) -> tuple[int, str] | None:
+    """Return the kernel creation FILETIME and executable for one live PID."""
+    if os.name != "nt":
+        identity = _live_process_identity(pid)
+        if identity is None:
+            return None
+        started, executable = identity
+        return _windows_filetime_from_unix(started), executable
+
+    import ctypes
+    from ctypes import wintypes
+
+    class FILETIME(ctypes.Structure):
+        _fields_ = (("dwLowDateTime", wintypes.DWORD), ("dwHighDateTime", wintypes.DWORD))
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.GetProcessTimes.argtypes = (
+        wintypes.HANDLE,
+        ctypes.POINTER(FILETIME),
+        ctypes.POINTER(FILETIME),
+        ctypes.POINTER(FILETIME),
+        ctypes.POINTER(FILETIME),
+    )
+    kernel32.GetProcessTimes.restype = wintypes.BOOL
+    kernel32.QueryFullProcessImageNameW.argtypes = (
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.LPWSTR,
+        ctypes.POINTER(wintypes.DWORD),
+    )
+    kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    handle = kernel32.OpenProcess(0x1000, False, pid)
+    if not handle:
+        error = ctypes.get_last_error()
+        if error in (87, 1168):
+            return None
+        raise RuntimeError(f"Cannot open live watchdog process {pid}: winerror {error}")
+    try:
+        created = FILETIME()
+        exited = FILETIME()
+        kernel = FILETIME()
+        user = FILETIME()
+        if not kernel32.GetProcessTimes(
+            handle,
+            ctypes.byref(created),
+            ctypes.byref(exited),
+            ctypes.byref(kernel),
+            ctypes.byref(user),
+        ):
+            raise RuntimeError(
+                f"Cannot read watchdog creation time for pid {pid}: "
+                f"winerror {ctypes.get_last_error()}"
+            )
+        size = wintypes.DWORD(32768)
+        path_buffer = ctypes.create_unicode_buffer(size.value)
+        if not kernel32.QueryFullProcessImageNameW(
+            handle, 0, path_buffer, ctypes.byref(size)
+        ):
+            raise RuntimeError(
+                f"Cannot read watchdog executable for pid {pid}: "
+                f"winerror {ctypes.get_last_error()}"
+            )
+        creation_value = (int(created.dwHighDateTime) << 32) | int(created.dwLowDateTime)
+        return creation_value, path_buffer.value
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def _owner_is_alive(payload: Mapping[str, object]) -> bool:
     try:
         pid = int(payload.get("pid") or 0)
@@ -148,6 +239,80 @@ def _atomic_write(path: Path, payload: Mapping[str, object]) -> None:
             tmp.unlink()
         except FileNotFoundError:
             pass
+
+
+def wait_for_acknowledgement(
+    lease: WatchdogMaintenanceLease,
+    *,
+    timeout_seconds: float = 35.0,
+    poll_seconds: float = 0.2,
+) -> None:
+    """Wait until a live Go watchdog records this maintenance owner.
+
+    An absent or dead watchdog needs no handoff. A demonstrably live watchdog
+    must acknowledge the lease before the updater begins process quiescence;
+    otherwise the updater fails closed and leaves the expiring fence in place.
+    """
+    lock_path = lease.path.with_name("watchdog.lock")
+    state_path = lease.path.with_name("watchdog.state.json")
+    try:
+        lock_payload = _read_state(lock_path)
+    except (OSError, RuntimeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Cannot verify watchdog lock: {lock_path}") from exc
+    if lock_payload is None:
+        return
+    try:
+        watchdog_pid = int(lock_payload.get("pid") or 0)
+        recorded_created = int(lock_payload.get("processCreated") or 0)
+        recorded_executable = str(lock_payload.get("executablePath") or "")
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"Invalid watchdog lock identity: {lock_path}") from exc
+    if watchdog_pid <= 0 or recorded_created <= 0 or not recorded_executable:
+        raise RuntimeError(f"Incomplete watchdog lock identity: {lock_path}")
+
+    process_identity = _exact_live_process_identity(watchdog_pid)
+    if process_identity is None:
+        return
+    actual_created, process_executable = process_identity
+    if (
+        actual_created != recorded_created
+        or os.path.normcase(os.path.abspath(process_executable))
+        != os.path.normcase(os.path.abspath(recorded_executable))
+        or os.path.normcase(os.path.abspath(str(lock_payload.get("repoRoot") or "")))
+        != os.path.normcase(os.path.abspath(lease.repo_root))
+    ):
+        raise RuntimeError(f"Watchdog lock process identity mismatch: {lock_path}")
+
+    request = _read_state(lease.path)
+    if request is None:
+        raise RuntimeError(f"Watchdog maintenance request disappeared: {lease.path}")
+    request_timestamp = _parse_timestamp(request.get("timestamp"))
+    if request_timestamp is None:
+        raise RuntimeError(f"Invalid watchdog maintenance timestamp: {lease.path}")
+
+    deadline = time.monotonic() + max(0.0, timeout_seconds)
+    while time.monotonic() < deadline:
+        try:
+            state = _read_state(state_path)
+        except (OSError, RuntimeError, json.JSONDecodeError):
+            state = None
+        if (
+            state is not None
+            and state.get("watchdogPid") == watchdog_pid
+            and state.get("maintenanceOwner") == lease.owner
+            and state.get("maintenanceNonce") == lease.nonce
+            and state.get("maintenanceEpoch") == lease.epoch
+            and state.get("maintenanceTimestamp") == request.get("timestamp")
+            and state.get("maintenanceState") == UPDATE_PREPARE
+            and (_parse_timestamp(state.get("updatedAt")) or datetime.min.replace(tzinfo=UTC))
+            >= request_timestamp
+        ):
+            return
+        time.sleep(max(0.01, poll_seconds))
+    raise RuntimeError(
+        "Live Go watchdog did not acknowledge update maintenance within "
+        f"{timeout_seconds:g}s"
+    )
 
 
 def _payload(

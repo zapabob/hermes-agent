@@ -41,7 +41,7 @@ function makeDeps(overrides: Partial<ReleaseGateDeps> = {}): ReleaseGateDeps & {
     isShimLocked: () => false,
     isPidAlive: () => false,
     collectStragglerPids: () => [],
-    killProcessTree: pid => kills.push(pid),
+    stopManagedChild: pid => kills.push(pid),
     sleep: clock.sleep,
     now: clock.now,
     log: line => logs.push(line),
@@ -91,14 +91,12 @@ describe('waitForBackendRelease (#74805 first-attempt race)', () => {
     expect(result.unlocked).toBe(false)
   })
 
-  it('proceeds at the deadline when the shim is unlocked but PIDs still linger (pre-#74805 escape hatch)', async () => {
-    // Lingering PIDs past the deadline are the venv-blocker re-scan's job —
-    // the gate must not invent a new failure mode for them.
+  it('fails closed at the deadline when a signalled PID still lingers', async () => {
     const deps = makeDeps({ isPidAlive: () => true })
 
     const result = await waitForBackendRelease([4021], deps, 'test', 3 * RELEASE_GATE_POLL_MS)
 
-    expect(result.unlocked).toBe(true)
+    expect(result.unlocked).toBe(false)
     expect(result.lingeringPids).toEqual([4021])
   })
 
@@ -122,7 +120,7 @@ describe('waitForBackendRelease (#74805 first-attempt race)', () => {
 
         return []
       },
-      killProcessTree: pid => {
+      stopManagedChild: pid => {
         stragglerKilledAt = clock.now()
         kills.push(pid)
       },

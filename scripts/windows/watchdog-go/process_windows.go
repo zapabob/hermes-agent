@@ -20,12 +20,23 @@ import (
 )
 
 type win32Process struct {
-	ProcessID   uint32
-	Name        string
-	CommandLine string
+	ProcessID      uint32
+	CreationTime   uint64
+	Name           string
+	CommandLine    string
+	ExecutablePath string
 }
 
-func getDesktopProcesses() ([]win32Process, error) {
+func isOwnedDesktopExecutable(cfg Config, executablePath string) bool {
+	expected := strings.TrimSpace(cfg.PackagedExe)
+	actual := strings.TrimSpace(executablePath)
+	if expected == "" || actual == "" {
+		return false
+	}
+	return strings.EqualFold(filepath.Clean(expected), filepath.Clean(actual))
+}
+
+func getDesktopProcesses(cfg Config) ([]win32Process, error) {
 	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
 	if err != nil {
 		return nil, fmt.Errorf("create process snapshot: %w", err)
@@ -41,7 +52,13 @@ func getDesktopProcesses() ([]win32Process, error) {
 	for {
 		name := windows.UTF16ToString(entry.ExeFile[:])
 		if strings.EqualFold(name, "Hermes.exe") {
-			procs = append(procs, win32Process{ProcessID: entry.ProcessID, Name: name})
+			identity, ok := readProcessIdentity(int(entry.ProcessID))
+			if ok && isOwnedDesktopExecutable(cfg, identity.ExecutablePath) {
+				procs = append(procs, win32Process{
+					ProcessID: entry.ProcessID, CreationTime: identity.CreationTime,
+					Name: name, ExecutablePath: identity.ExecutablePath,
+				})
+			}
 		}
 		if err := windows.Process32Next(snapshot, &entry); err != nil {
 			if err == syscall.ERROR_NO_MORE_FILES {
@@ -96,7 +113,24 @@ func isDesktopBackendCommandLine(cl string) bool {
 	return false
 }
 
-func getDesktopBackendCandidates() ([]win32Process, error) {
+func pathWithin(candidate, root string) bool {
+	if strings.TrimSpace(candidate) == "" || strings.TrimSpace(root) == "" {
+		return false
+	}
+	candidate = filepath.Clean(candidate)
+	root = filepath.Clean(root)
+	rel, err := filepath.Rel(root, candidate)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func isOwnedDesktopBackendProcess(cfg Config, proc win32Process) bool {
+	if !isDesktopBackendCommandLine(proc.CommandLine) {
+		return false
+	}
+	return pathWithin(proc.ExecutablePath, cfg.HermesRoot) || pathWithin(proc.ExecutablePath, cfg.HermesHome)
+}
+
+func getDesktopBackendCandidates(cfg Config) ([]win32Process, error) {
 	type result struct {
 		procs []win32Process
 		err   error
@@ -105,14 +139,14 @@ func getDesktopBackendCandidates() ([]win32Process, error) {
 	go func() {
 		var all []win32Process
 		// Full Win32_Process+CommandLine can hang when a process is wedged.
-		err := wmi.Query("SELECT ProcessId, Name, CommandLine FROM Win32_Process", &all)
+		err := wmi.Query("SELECT ProcessId, Name, CommandLine, ExecutablePath FROM Win32_Process", &all)
 		if err != nil {
 			ch <- result{nil, err}
 			return
 		}
 		out := make([]win32Process, 0, 4)
 		for _, p := range all {
-			if isDesktopBackendCommandLine(p.CommandLine) {
+			if isOwnedDesktopBackendProcess(cfg, p) {
 				out = append(out, p)
 			}
 		}
@@ -267,9 +301,10 @@ func testBackendAuth(port int, token string) bool {
 	return resp.StatusCode == http.StatusOK
 }
 
-// stopListenersOnPort kills process trees holding LocalPort==port.
-// waitManagedPortCleared kills listeners and waits until /api/status is gone
-// so a replacement serve is not racing a wedged occupant (token-drift loops).
+// waitManagedPortCleared is deliberately observational. A port number alone is
+// never authority to terminate its owner; an unrelated process may legitimately
+// hold the configured port. Callers may stop an in-memory child they launched,
+// then use this helper to prove the port became free.
 func waitManagedPortCleared(port int, timeout time.Duration, logger *Logger) bool {
 	if port <= 0 {
 		return true
@@ -279,14 +314,14 @@ func waitManagedPortCleared(port int, timeout time.Duration, logger *Logger) boo
 	}
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		_ = stopListenersOnPort(port, logger)
-		time.Sleep(400 * time.Millisecond)
 		if testBackendStatus(port) {
+			time.Sleep(400 * time.Millisecond)
 			continue
 		}
 		if len(listeningPIDsOnPort(port)) == 0 {
 			return true
 		}
+		time.Sleep(400 * time.Millisecond)
 	}
 	cleared := !testBackendStatus(port) && len(listeningPIDsOnPort(port)) == 0
 	if !cleared && logger != nil {
@@ -295,64 +330,14 @@ func waitManagedPortCleared(port int, timeout time.Duration, logger *Logger) boo
 	return cleared
 }
 
-func stopListenersOnPort(port int, logger *Logger) int {
-	if port <= 0 {
-		return 0
-	}
-	n := 0
-	seen := map[uint32]struct{}{}
-	candidates, err := getDesktopBackendCandidates()
-	if err != nil && logger != nil {
-		logger.Infof("WMI backend candidate scan failed: %v; falling back to netstat", err)
-	}
-	for _, proc := range candidates {
-		if _, ok := seen[proc.ProcessID]; ok {
-			continue
-		}
-		ports, perr := getListeningPorts(proc.ProcessID)
-		if perr != nil {
-			continue
-		}
-		holds := false
-		for _, p := range ports {
-			if p == port {
-				holds = true
-				break
-			}
-		}
-		if !holds {
-			continue
-		}
-		seen[proc.ProcessID] = struct{}{}
-		if logger != nil {
-			logger.Infof("killing token-drift backend pid=%d on port %d", proc.ProcessID, port)
-		}
-		stopProcessPID(proc.ProcessID)
-		n++
-	}
-	// WMI full-scan can time out while a wedged occupant still holds the port.
-	for _, pid := range listeningPIDsOnPort(port) {
-		if _, ok := seen[pid]; ok {
-			continue
-		}
-		seen[pid] = struct{}{}
-		if logger != nil {
-			logger.Infof("killing netstat listener pid=%d on port %d", pid, port)
-		}
-		stopProcessPID(pid)
-		n++
-	}
-	return n
-}
-
 type backendInfo struct {
 	PID  uint32 `json:"pid"`
 	Port int    `json:"port"`
 	Cmd  string `json:"cmd,omitempty"`
 }
 
-func findHealthyDesktopBackend() *backendInfo {
-	candidates, err := getDesktopBackendCandidates()
+func findHealthyDesktopBackend(cfg Config) *backendInfo {
+	candidates, err := getDesktopBackendCandidates(cfg)
 	if err != nil {
 		return nil
 	}
@@ -377,26 +362,43 @@ func findHealthyDesktopBackend() *backendInfo {
 	return nil
 }
 
-func stopProcessPID(pid uint32) {
-	// /T reaps the process tree. Plain /F leaves Electron grandchildren and
-	// desktop-spawned hermes serve orphans (before-quit never runs on force kill).
-	// Bound taskkill: a wedged target can hang the watchdog probe loop forever.
-	cmd := exec.Command("taskkill", "/PID", fmt.Sprintf("%d", pid), "/T", "/F")
-	if err := cmd.Start(); err != nil {
-		return
+func stopProcessTreeIfIdentityMatches(expected win32Process, logger *Logger) bool {
+	// Keep the queried kernel handle through termination. Resolving the numeric
+	// PID again after validation can target a foreign process if the original
+	// exits and Windows reuses the number.
+	handle, err := windows.OpenProcess(
+		windows.PROCESS_QUERY_LIMITED_INFORMATION|windows.PROCESS_TERMINATE|windows.SYNCHRONIZE,
+		false,
+		expected.ProcessID,
+	)
+	if err != nil {
+		if logger != nil {
+			logger.Infof("refusing Desktop stop pid=%d: cannot open exact process handle", expected.ProcessID)
+		}
+		return false
 	}
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	select {
-	case <-done:
-		return
-	case <-time.After(5 * time.Second):
-		_ = cmd.Process.Kill()
+	defer windows.CloseHandle(handle)
+
+	identity, ok := readProcessIdentityFromHandle(handle, int(expected.ProcessID))
+	if !ok || identity.CreationTime != expected.CreationTime ||
+		!sameExecutablePath(identity.ExecutablePath, expected.ExecutablePath) {
+		if logger != nil {
+			logger.Infof("refusing Desktop stop pid=%d: process identity changed", expected.ProcessID)
+		}
+		return false
 	}
+	if err := windows.TerminateProcess(handle, 1); err != nil {
+		if logger != nil {
+			logger.Infof("Desktop stop pid=%d failed on exact process handle: %v", expected.ProcessID, err)
+		}
+		return false
+	}
+	_, _ = windows.WaitForSingleObject(handle, 5_000)
+	return true
 }
 
-func stopAllDesktopProcessTrees(logger *Logger) {
-	desktop, err := getDesktopProcesses()
+func stopAllDesktopProcessTrees(logger *Logger, cfg Config) {
+	desktop, err := getDesktopProcesses(cfg)
 	if err != nil {
 		logger.Infof("enumerate Hermes.exe for tree-kill: %v", err)
 	}
@@ -406,77 +408,20 @@ func stopAllDesktopProcessTrees(logger *Logger) {
 			continue
 		}
 		seen[p.ProcessID] = struct{}{}
-		logger.Infof("tree-killing Hermes.exe pid=%d", p.ProcessID)
-		stopProcessPID(p.ProcessID)
+		logger.Infof("stopping exact owned Hermes.exe process pid=%d", p.ProcessID)
+		stopProcessTreeIfIdentityMatches(p, logger)
 	}
-	// Catch any helper that WMI missed under the packaged image name.
-	_ = exec.Command("taskkill", "/IM", "Hermes.exe", "/T", "/F").Run()
 }
 
 func stopOrphanDesktopBackends(logger *Logger, cfg Config, skipPIDs ...uint32) int {
-	desktop, err := getDesktopProcesses()
-	if err == nil && len(desktop) > 0 {
-		return 0
+	// Process name, path, command line, and listening port establish only that a
+	// process resembles a Desktop backend. They do not prove that this watchdog
+	// launched it. Preserve every candidate and let the watchdog stop only the
+	// exact child handle held by BackendManager.
+	if logger != nil {
+		logger.Infof("orphan backend reap skipped: no watchdog-owned child identity")
 	}
-	skipPort := cfg.ManagedBackendPort
-	if skipPort <= 0 {
-		skipPort = DefaultManagedBackendPort
-	}
-	// If the managed serve is healthy, never reap backend candidates.
-	// Candidates often include a non-listening python/hermes wrapper; taskkill
-	// /T on that wrapper kills the child that still holds :9119 and produces
-	// the Desktop↔backend flap (ECONNRESET → Desktop DOWN → relaunch loop).
-	if testBackendStatus(skipPort) {
-		if logger != nil {
-			logger.Infof("skip orphan reap; managed port %d is healthy", skipPort)
-		}
-		return 0
-	}
-	skip := make(map[uint32]struct{}, len(skipPIDs)+4)
-	for _, pid := range skipPIDs {
-		if pid > 0 {
-			skip[pid] = struct{}{}
-		}
-	}
-	for _, pid := range listeningPIDsOnPort(skipPort) {
-		skip[pid] = struct{}{}
-	}
-	candidates, err := getDesktopBackendCandidates()
-	if err != nil {
-		return 0
-	}
-	n := 0
-	for _, proc := range candidates {
-		if _, keep := skip[proc.ProcessID]; keep {
-			logger.Infof("skip reap pid=%d (managed backend)", proc.ProcessID)
-			continue
-		}
-		ports, perr := getListeningPorts(proc.ProcessID)
-		if perr != nil || len(ports) == 0 {
-			logger.Infof("skip reap pid=%d (listening ports unknown)", proc.ProcessID)
-			continue
-		}
-		skipProc := false
-		for _, port := range ports {
-			if port == skipPort {
-				logger.Infof("skip reap pid=%d (managed port %d)", proc.ProcessID, port)
-				skipProc = true
-				break
-			}
-			if isReservedOpsPort(port) {
-				logger.Infof("skip reap pid=%d (ops port %d)", proc.ProcessID, port)
-				skipProc = true
-				break
-			}
-		}
-		if skipProc {
-			continue
-		}
-		logger.Infof("reaping orphan backend pid=%d", proc.ProcessID)
-		stopProcessPID(proc.ProcessID)
-		n++
-	}
-	return n
+	return 0
 }
 
 func readLaunchManifest(cfg Config, bm *BackendManager) *DesktopBackendManifest {
@@ -500,7 +445,7 @@ func readLaunchManifest(cfg Config, bm *BackendManager) *DesktopBackendManifest 
 	return &manifest
 }
 
-func startPackagedDesktop(cfg Config, logger *Logger, bm *BackendManager) bool {
+func startPackagedDesktop(cfg Config, logger *Logger, bm *BackendManager, mutationAllowed func() bool) bool {
 	if !fileExists(cfg.PackagedExe) {
 		logger.Infof("Hermes.exe missing at %s", cfg.PackagedExe)
 		return false
@@ -511,6 +456,10 @@ func startPackagedDesktop(cfg Config, logger *Logger, bm *BackendManager) bool {
 	manifest := readLaunchManifest(cfg, bm)
 	cmd.Env = append(stripInheritedDesktopRemotes(os.Environ()), desktopLaunchEnv(cfg, manifest)...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	if mutationAllowed != nil && !mutationAllowed() {
+		logger.Infof("Desktop launch revoked by maintenance fence")
+		return false
+	}
 	if err := cmd.Start(); err != nil {
 		logger.Infof("failed to launch Desktop: %v", err)
 		return false
@@ -523,10 +472,18 @@ func startPackagedDesktop(cfg Config, logger *Logger, bm *BackendManager) bool {
 	return true
 }
 
-func restartPackagedDesktop(cfg Config, logger *Logger, bm *BackendManager) bool {
+func restartPackagedDesktop(cfg Config, logger *Logger, bm *BackendManager, mutationAllowed func() bool) bool {
+	if mutationAllowed != nil && !mutationAllowed() {
+		logger.Infof("Desktop restart revoked before stop")
+		return false
+	}
 	logger.Infof("restarting Desktop (force backend respawn)")
-	stopAllDesktopProcessTrees(logger)
+	stopAllDesktopProcessTrees(logger, cfg)
 	time.Sleep(2 * time.Second)
+	if mutationAllowed != nil && !mutationAllowed() {
+		logger.Infof("Desktop restart revoked after stop")
+		return false
+	}
 	var skipPID uint32
 	if bm != nil {
 		if managed := bm.currentHealthy(); managed != nil {
@@ -536,10 +493,14 @@ func restartPackagedDesktop(cfg Config, logger *Logger, bm *BackendManager) bool
 	// Desktop is gone — reap leftover ephemeral serves (managed :9119 is skipped).
 	stopOrphanDesktopBackends(logger, cfg, skipPID)
 	time.Sleep(1 * time.Second)
+	if mutationAllowed != nil && !mutationAllowed() {
+		logger.Infof("Desktop restart revoked before backend recovery")
+		return false
+	}
 	if bm != nil {
 		if _, err := bm.EnsureHealthy(); err != nil {
 			logger.Infof("pre-restart managed backend: %v", err)
 		}
 	}
-	return startPackagedDesktop(cfg, logger, bm)
+	return startPackagedDesktop(cfg, logger, bm, mutationAllowed)
 }

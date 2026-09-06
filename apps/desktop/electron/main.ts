@@ -43,8 +43,6 @@ import {
   claimDecision,
   createBackendOutputTail,
   execText,
-  isPidOnlyStartMarker,
-  pidOnlyStartMarker,
   probeStartMarker,
   processStartMarker
 } from './backend-claim'
@@ -63,7 +61,12 @@ import {
   makeUnsignedOauthError,
   waitForHermesReady
 } from './backend-health'
-import { backendCommandMatches, createBackendOwnership, createBackendShutdownCoordinator } from './backend-ownership'
+import {
+  type BackendIdentity,
+  backendCommandMatches,
+  createBackendOwnership,
+  createBackendShutdownCoordinator
+} from './backend-ownership'
 import {
   canImportHermesCli,
   execProbeSync,
@@ -374,6 +377,12 @@ import { compareApiUrl, parseCompareUpdate } from './update-count'
 import { waitForUpdateClearance } from './update-gate'
 import { readLiveUpdateMarker, updateHandoffConflict, writeUpdateMarker } from './update-marker'
 import { passiveGitArgs, passiveGitEnvironment, resolvePassiveUpdateRemote } from './update-remote'
+import {
+  clearDesktopStopFence,
+  waitForDesktopStopFenceAck,
+  watchdogMaintenancePath,
+  writeDesktopStopFence
+} from './watchdog-stop-fence'
 import {
   collectRelaunchArgs,
   observeUpdaterHandoff,
@@ -3132,6 +3141,8 @@ let updateInFlight = false
 // set, window-all-closed calls app.quit() on every platform so the process
 // actually dies and the hand-off script can proceed immediately.
 let isQuittingForHandoff = false
+let desktopStopFenceAckDone = false
+let desktopStopFenceAckWait: Promise<void> | null = null
 
 // Quit-guard latches: one while the confirmation is on screen (a second
 // Cmd-Q must not stack dialogs), one after the user has said "quit anyway"
@@ -3216,31 +3227,6 @@ function isShimLocked(shimPath) {
   }
 }
 
-// Force-kill the entire process TREE rooted at each PID. Node's child.kill()
-// only signals the direct child, so on Windows a backend `hermes.exe` that
-// spawned its own grandchildren (a `hermes` REPL, a pty terminal session, the
-// gateway) would survive and keep the venv shim locked. taskkill /T /F reaps
-// the whole tree synchronously. Windows-only: this is called solely from the
-// Windows shim-unlock path, and the backend is NOT spawned detached (so it's
-// not a process-group leader — a POSIX negative-pgid kill would be meaningless
-// here anyway). POSIX teardown stays with the existing before-quit SIGTERM.
-function forceKillProcessTree(pid) {
-  if (!IS_WINDOWS) {
-    return
-  }
-
-  if (!Number.isInteger(pid) || pid <= 0) {
-    return
-  }
-
-  try {
-    execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], hiddenWindowsChildOptions({ stdio: 'ignore' }))
-  } catch {
-    // Already gone, or no permission — best effort; the unlock wait below is
-    // the real gate.
-  }
-}
-
 function writeBackendOwnership(contents) {
   fs.mkdirSync(path.dirname(DESKTOP_BACKEND_OWNERSHIP_PATH), { recursive: true })
   const tempPath = `${DESKTOP_BACKEND_OWNERSHIP_PATH}.${process.pid}.tmp`
@@ -3281,20 +3267,10 @@ async function backendCommandForPid(pid) {
 }
 
 async function processIdentityMatches(identity) {
-  // Degraded PID-only identity (#93608): the start-marker probe failed while
-  // the child was verifiably alive, so only PID liveness can be checked here.
-  // backendIdentityMatches layers the command-line check on top before
-  // anything destructive relies on the answer.
-  if (isPidOnlyStartMarker(identity.startMarker)) {
-    try {
-      process.kill(identity.pid, 0)
-
-      return true
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException | null)?.code
-
-      return code === 'ESRCH' || code === 'ENOENT' ? false : code === 'EPERM' ? true : undefined
-    }
+  // Legacy PID-only records are non-authoritative. Preserve them for manual
+  // inspection, but never use them to authorize a signal.
+  if (String(identity.startMarker || '').startsWith('pid-only:')) {
+    return undefined
   }
 
   try {
@@ -3338,7 +3314,19 @@ async function stopOwnedBackend(identity) {
   }
 
   if (IS_WINDOWS) {
-    forceKillProcessTree(identity.pid)
+    const child = managedBackendChildren.get(identity.pid)
+    const childIdentity = child?.hermesBackendIdentity
+
+    if (
+      !child ||
+      childIdentity?.nonce !== identity.nonce ||
+      childIdentity?.startMarker !== identity.startMarker
+    ) {
+      throw new Error(`No live ChildProcess handle authorizes stopping backend PID ${identity.pid}.`)
+    }
+
+    child.kill('SIGTERM')
+    await waitForBackendExit(child)
   } else {
     try {
       process.kill(-identity.pid, 'SIGTERM')
@@ -3378,6 +3366,10 @@ async function stopOwnedBackend(identity) {
     throw new Error(`Backend PID ${identity.pid} did not stop cleanly.`)
   }
 }
+
+type ManagedBackendChild = ReturnType<typeof spawn> & { hermesBackendIdentity?: BackendIdentity }
+
+const managedBackendChildren = new Map<number, ManagedBackendChild>()
 
 const backendOwnership = createBackendOwnership({
   matchesIdentity: backendIdentityMatches,
@@ -3436,17 +3428,7 @@ async function claimBackendChild(child, command, profile, nonce, outputTail: Bac
     )
   }
 
-  let startMarker
-
-  if (decision.action === 'degrade') {
-    startMarker = pidOnlyStartMarker(child.pid)
-    rememberLog(
-      `WARNING: process start marker probe failed for live Hermes backend PID ${child.pid}; ` +
-        `claiming with PID-only identity instead of stopping it: ${decision.reason}`
-    )
-  } else {
-    startMarker = decision.startMarker
-  }
+  const startMarker = decision.startMarker
 
   try {
     const identity = await backendOwnership.claim({
@@ -3463,6 +3445,7 @@ async function claimBackendChild(child, command, profile, nonce, outputTail: Bac
     })
 
     child.hermesBackendIdentity = identity
+    managedBackendChildren.set(identity.pid, child)
 
     return identity
   } catch (error) {
@@ -3483,6 +3466,9 @@ function releaseBackendChild(child) {
 
   try {
     backendOwnership.release(identity)
+    if (managedBackendChildren.get(identity.pid) === child) {
+      managedBackendChildren.delete(identity.pid)
+    }
   } catch (error) {
     rememberLog(`Could not release backend ownership for PID ${identity.pid}: ${error.message}`)
   }
@@ -3562,7 +3548,6 @@ async function releaseBackendLock(updateRoot, tag) {
   }
 
   stopBackendTreesForUpdate(hermesProcess, {
-    forceKillProcessTree,
     stopAllPoolBackends
   })
 
@@ -3590,7 +3575,21 @@ async function releaseBackendLock(updateRoot, tag) {
 
         return stragglers
       },
-      killProcessTree: forceKillProcessTree,
+      stopManagedChild: pid => {
+        const current = backendConnectionState.getProcess()
+        if (current?.pid === pid) {
+          stopBackendChild(current)
+
+          return
+        }
+        for (const entry of backendPool.values()) {
+          if (entry.process?.pid === pid) {
+            stopBackendChild(entry.process)
+
+            return
+          }
+        }
+      },
       sleep: (ms: number) => new Promise(r => setTimeout(r, ms)),
       now: () => Date.now(),
       log: rememberLog
@@ -6404,6 +6403,7 @@ function sendPowerResume() {
 }
 
 let powerResumeRegistered = false
+let systemShutdownInProgress = false
 
 // Mirror of powerMonitor's AC/battery state, broadcast to every window so
 // renderer backstop polls can slow down on battery (see store/power.ts).
@@ -6442,6 +6442,9 @@ function registerPowerResumeListeners() {
     // full suspend. Either can drop an idle socket.
     powerMonitor.on('resume', sendPowerResume)
     powerMonitor.on('unlock-screen', sendPowerResume)
+    powerMonitor.on('shutdown', () => {
+      systemShutdownInProgress = true
+    })
     powerMonitor.on('on-battery', () => broadcastBatteryState(true))
     powerMonitor.on('on-ac', () => broadcastBatteryState(false))
     onBatteryPower = powerMonitor.isOnBatteryPower()
@@ -10850,7 +10853,7 @@ function resetBootProgressForReconnect() {
 }
 
 function stopBackendChild(child) {
-  stopBackendChildImpl(child, { forceKillProcessTree, isWindows: IS_WINDOWS })
+  stopBackendChildImpl(child, { isWindows: IS_WINDOWS })
 }
 
 // Soft gateway-mode apply: tear down the primary without resetting boot UI or
@@ -10950,8 +10953,8 @@ async function waitForBackendExit(child, timeoutMs = 5000) {
   }
 
   try {
-    if (IS_WINDOWS && Number.isInteger(child.pid)) {
-      forceKillProcessTree(child.pid)
+    if (IS_WINDOWS) {
+      child.kill('SIGKILL')
     } else if (Number.isInteger(child.pid)) {
       try {
         process.kill(-child.pid, 'SIGKILL')
@@ -17362,6 +17365,17 @@ if (!isPrimaryInstance) {
   // routes into the running window and never touches backend machinery.
   app.exit(0)
 } else {
+  if (IS_WINDOWS) {
+    try {
+      clearDesktopStopFence({
+        filePath: watchdogMaintenancePath(),
+        repoRoot: ACTIVE_HERMES_ROOT
+      })
+    } catch (error) {
+      rememberLog(`[watchdog] could not clear intentional Desktop stop fence: ${error.message}`)
+    }
+  }
+
   app.on('second-instance', (_event, argv) => {
     const url = _extractDeepLink(argv)
 
@@ -17581,6 +17595,38 @@ app.on('before-quit', event => {
         managedUpdateQuitWaitDone = true
         app.quit()
       })
+    }
+
+    return
+  }
+
+  if (IS_WINDOWS && !isQuittingForHandoff && !systemShutdownInProgress && !desktopStopFenceAckDone) {
+    event.preventDefault()
+
+    if (!desktopStopFenceAckWait) {
+      const filePath = watchdogMaintenancePath()
+
+      try {
+        const result = writeDesktopStopFence({
+          filePath,
+          repoRoot: ACTIVE_HERMES_ROOT
+        })
+        desktopStopFenceAckWait = (result.preserved
+          ? Promise.resolve(true)
+          : waitForDesktopStopFenceAck({ filePath, fence: result.fence })
+        ).then(acknowledged => {
+          desktopStopFenceAckWait = null
+          if (!acknowledged) {
+            rememberLog('[watchdog] intentional Desktop stop was not acknowledged; quit remains cancelled')
+
+            return
+          }
+          desktopStopFenceAckDone = true
+          app.quit()
+        })
+      } catch (error) {
+        rememberLog(`[watchdog] could not record intentional Desktop stop fence; quit cancelled: ${error.message}`)
+      }
     }
 
     return

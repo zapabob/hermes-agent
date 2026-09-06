@@ -80,9 +80,10 @@ HTTP は読み取り専用です。pause、resume、cycle、stop、restart、for
 1. **起動時 prewarm（非同期）** — HTTP / RunLoop 起動後に goroutine で managed `hermes serve --skip-build`（既定 `:9119`）を立ち上げ、`%LOCALAPPDATA%\HermesWatchdog\desktop-backend.json` に URL/token/port を公開。cold start で制御プレーンをブロックしない
 2. `Hermes.exe` 不在 → 管理 backend は reaping しない → Desktop 起動（manifest があれば `HERMES_DESKTOP_REMOTE_*` も注入）
 3. Desktop 生存 + backend 不在 → **Electron 再起動の前に** managed serve を起動/復旧
-4. 連続失敗が `-FailThreshold` 以上 → Desktop 強制再起動
-5. 予約 ops ポート (9120/8787/9920/…) は backend 判定・reap 対象外（従来どおり）
-6. A2A Hub (`:9123`) と A2A Round-Robin (`:9124`) は別系統のバックグラウンドサービスであり、watchdog の直接監視・reap 対象外
+4. 連続失敗が `-FailThreshold` 以上 → Desktop の制御された再起動を要求
+5. 復旧操作は `%LOCALAPPDATA%\HermesWatchdog\recovery-budget.json` に予約時点で永続化し、30 秒から最大 5 分の指数バックオフ、10 分間に 3 回の予算、15 分の circuit-break を適用。watchdog 自身が再起動しても予算は失われない
+6. 予約 ops ポート (9120/8787/9920/…) は backend 判定・reap 対象外（従来どおり）
+7. A2A Hub (`:9123`) と A2A Round-Robin (`:9124`) は別系統のバックグラウンドサービスであり、watchdog の直接監視・reap 対象外
 
 ### Desktop ショートカット
 
@@ -116,7 +117,7 @@ watchdog は有効な fence が存在する間、Desktop、backend、embedding �
 
 ## スタック再起動との関係
 
-`restart-hermes-stack.ps1 -StartGoWatchdog` で**明示指定時のみ**起動（既定 OFF）。  
+通常起動は登録済みの `HermesGoWatchdogBootAutoStart` Scheduled Task が担います。`restart-hermes-stack.ps1 -StartGoWatchdog` は保守時に同じ正規 launcher を明示的に再起動する経路です。
 既存 `dist/hermes-watchdog.exe` があれば rebuild しない。欠落時のみ `BuildIfMissing`（SkipTest・180s タイムアウト）。失敗時はスタック全体を止めず watchdog 起動をスキップ。  
 Hermes Agent から launcher の直接実行と変更操作は到達不可です。状態と PID、直近結果
 だけを読み取れます。

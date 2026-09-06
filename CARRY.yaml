@@ -54,3 +54,18 @@ carry:
     tests: [apps/desktop/electron/link-title-window.test.ts]
     integration_policy: COMPOSE
     removal_condition: upstream independently fails closed when setWindowOpenHandler cannot be installed
+  - id: personal-session-os-browser-boundary
+    upstream_paths: [tools/browser_tool.py, tools/browser_use_cli.py, tools/browser_camofox.py, tools/browser_extension_router.py, tools/browser_vault_tool.py, tools/browser_dialog_tool.py, apps/desktop/electron/main.ts, apps/desktop/electron/personal-session-request-guard.ts, apps/desktop/src/lib/external-link.tsx]
+    current_upstream_owner: browser transport request interception
+    downstream_reason: keep X and YouTube exclusively in the operator OS browser and existing personal session
+    invariants: [personal hosts never load in embedded or automation browsers over HTTP or WebSocket, all legacy content control fails closed without interception across every target and worker]
+    tests: [tests/tools/test_browser_hardening.py, tests/tools/test_browser_console.py, tests/tools/test_browser_use_cli.py, tests/tools/test_browser_camofox.py, tests/tools/test_browser_extension_router.py, tests/test_browser_vault.py, apps/desktop/electron/personal-session-request-guard.test.ts, apps/desktop/src/lib/external-link.test.tsx]
+    integration_policy: COMPOSE
+    removal_condition: official PR 89461 or an equivalent transport-owned request boundary lands and passes the fork personal-host contracts
+  - id: windows-desktop-handle-bound-teardown
+    upstream_paths: [apps/desktop/electron/backend-child.ts, apps/desktop/electron/backend-claim.ts, apps/desktop/electron/backend-release-gate.ts, apps/desktop/electron/main.ts]
+    downstream_reason: authorize Windows Desktop backend termination only through retained ChildProcess handles
+    invariants: [no PID-only destructive claim, no taskkill in Desktop backend ownership, update aborts while managed processes linger]
+    tests: [apps/desktop/electron/backend-claim.test.ts, apps/desktop/electron/windows-child-options.test.ts, apps/desktop/electron/backend-release-gate.test.ts]
+    integration_policy: COMPOSE
+    removal_condition: upstream Desktop backend ownership uses an equivalent non-reopenable kernel-handle authority contract
