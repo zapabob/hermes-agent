@@ -58,8 +58,8 @@ import {
   waitForHermesReady
 } from './backend-health'
 import {
-  type BackendIdentity,
   backendCommandMatches,
+  type BackendIdentity,
   createBackendOwnership,
   createBackendShutdownCoordinator
 } from './backend-ownership'
@@ -289,7 +289,6 @@ import { selectPoolEvictions } from './pool-eviction'
 import { createPoolStopper } from './pool-stop'
 import { poolTouchKeys } from './pool-touch-scope'
 import { createKeepAwake } from './power-save'
-import { configuredStartupExternalUrlsFromYaml, startupExternalUrlsConfigPath } from './startup-external-urls'
 import { PreviewReachRegistry } from './preview-reach'
 import {
   createPrimaryRemoteConnection,
@@ -358,6 +357,7 @@ import { ensureLoginShellPath } from './shell-path'
 import { createBootstrapCoordinator, sshConfigFingerprint } from './ssh-bootstrap-coordinator'
 import { collectSshConfigHosts, parseSshGOutput } from './ssh-config'
 import { createSshProbeConnection, pickLocalPort, redactSecrets, SshConnection } from './ssh-connection'
+import { configuredStartupExternalUrlsFromYaml, startupExternalUrlsConfigPath } from './startup-external-urls'
 import { createStreamThrottle } from './stream-throttle'
 import { registerTerminalIpc } from './terminal-ipc'
 import { nativeOverlayWidth as computeNativeOverlayWidth, macTitleBarOverlayHeight } from './titlebar-overlay-width'
@@ -379,12 +379,6 @@ import { waitForUpdateClearance } from './update-gate'
 import { readLiveUpdateMarker, updateHandoffConflict, writeUpdateMarker } from './update-marker'
 import { passiveGitArgs, passiveGitEnvironment, resolvePassiveUpdateRemote } from './update-remote'
 import {
-  clearDesktopStopFence,
-  waitForDesktopStopFenceAck,
-  watchdogMaintenancePath,
-  writeDesktopStopFence
-} from './watchdog-stop-fence'
-import {
   collectRelaunchArgs,
   observeUpdaterHandoff,
   resolvePosixScriptHandoff,
@@ -404,6 +398,12 @@ import {
 import { fetchMarketplaceThemes, searchMarketplaceThemes } from './vscode-marketplace'
 import { createWakeIndicatorWindowController } from './wake-indicator-window'
 import { resolveWatchdogPrewarmedBackend } from './watchdog-backend'
+import {
+  clearDesktopStopFence,
+  waitForDesktopStopFenceAck,
+  watchdogMaintenancePath,
+  writeDesktopStopFence
+} from './watchdog-stop-fence'
 import { enumerateWindowsFrontToBack, enumerationFailed, readWindowBelow } from './window-below'
 import { registrySshScopeForWindowRoute, WindowConnectionRouteRegistry } from './window-connection-route'
 import { createWindowOpenHandler } from './window-open-policy'
