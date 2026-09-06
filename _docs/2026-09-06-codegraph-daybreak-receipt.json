@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "captured_at": "2026-09-06T16:00:00+09:00",
-  "status": "PENDING_POST_MERGE_CI",
+  "captured_at": "2026-09-06T17:13:05+09:00",
+  "status": "READY_FOR_MERGE",
   "DOWNSTREAM_START": "e8a7d7a6a52a8e6ae1defbe07bdee92472be1b2b",
   "UPSTREAM_TARGET": "b51c055a12220f8c7c18660e8599365012e19532",
   "PREVIOUS_UPSTREAM_BASE": "5a8e8a6b87487c0e0785cd9eb561cc6a96c64f5e",
@@ -37,13 +37,13 @@
     "WATCHDOG_ROOT_CAUSE": "recovery-budget.json had a NUL/partial document, so recovery decisions failed closed while Desktop also remained hidden after renderer startup",
     "WATCHDOG_CANONICAL_OWNER": "scripts/windows/watchdog-go and Start-HermesGoWatchdog.ps1",
     "WATCHDOG_NEW_STARTUP_PATH": "HermesGoWatchdogBootAutoStart -> Start-HermesGoWatchdog.ps1 -> hermes-watchdog.exe with backend prewarm",
-    "DESKTOP_LIVENESS_PROBE": "PASS locally: PID 22660, title Hermes, visible native window, Responding=true",
-    "BACKEND_LIVENESS_PROBE": "PASS locally: managed manifest port 9119 and /api/status HTTP 200",
+    "DESKTOP_LIVENESS_PROBE": "PASS locally after canonical stack restart: PID 20432, title Hermes, visible native window, Responding=true",
+    "BACKEND_LIVENESS_PROBE": "PASS locally after canonical stack restart: managed manifest pid 2892 on port 9119 and /api/status HTTP 200",
     "PROCESS_IDENTITY_SEMANTICS": "exact executable path plus PID/parent/start identity checks; no PID-only destructive action",
     "RESTART_AUTHORITY": "Go Watchdog is the sole outer automatic restart authority by source contract; competing legacy shim has no restart authority",
     "STOP_UPDATE_FENCE": "PASS locally: maintenance.json NORMAL after controlled stop/start; fence is identity-bound and expiring by contract",
     "BACKEND_EXACTLY_ONE_OWNER_EVIDENCE": "PASS locally: one managed manifest for port 9119, managed=true, pid 23412, /api/status 200",
-    "WATCHDOG_WINDOWS_NATIVE_RESULT": "PASS: Go tests, vet, build, and Windows Workstation Tier-1 CI pass; local watchdog log reports healthy backend",
+    "WATCHDOG_WINDOWS_NATIVE_RESULT": "PASS: Go tests, vet, build, Windows Workstation Tier-1 CI, and canonical restart script all pass; local watchdog 9920 and log report healthy backend",
     "REBOOT_DURABILITY_RESULT": "NOT_RUN",
     "SLEEP_RESUME_RESULT": "NOT_RUN"
   },
@@ -81,16 +81,17 @@
   "COMPATIBILITY_SHIMS_REMAINING": "Start-HermesDesktopBackendWatchdog.ps1 remains a compatibility shim with no outer restart authority",
   "PARALLEL_AUTHORITIES": "0 by source policy and required CI checks; final full reverse-call audit remains pending",
   "KNOWN_INTENTIONAL_DIVERGENCES": ["Windows-native startup and recovery extensions", "profile-scoped private startup pages", "local runtime integration"],
-  "RESIDUAL_RISKS": ["fresh no-passkey Windows prompt counter not run", "current local Desktop recovery instance was launched with --no-sandbox", "post-merge release and full CI still running at capture time"],
+  "RESIDUAL_RISKS": ["fresh no-passkey Windows prompt counter not run", "current local Desktop recovery instance was launched with --no-sandbox"],
   "DEFERRED_ITEMS": ["reboot/re-login qualification", "sleep/resume qualification", "fresh clean-profile passkey native smoke", "final post-merge CodeGraph receipt SHA update"],
-  "CI_RUN_IDS": [34016535361, 34017780240, 34017779901, 34017779926, 34017779888],
+  "CI_RUN_IDS": [34018532567, 34018532196, 34017780240, 34017779901, 34017779926, 34017779888],
   "CI_STATUS_AT_CAPTURE": {
+    "PR_107_required_checks": "PASS",
     "PR_106_required_checks": "PASS",
     "main_Docker_Build_Test_Publish": "PASS",
     "main_Windows_Workstation_Tier_1": "PASS",
-    "main_CI": "PENDING",
-    "main_Windows_downstream_release": "PENDING",
-    "main_Nix_flake_check": "PENDING"
+    "main_CI": "PASS",
+    "main_Windows_downstream_release": "PASS",
+    "main_Nix_flake_check": "PASS"
   },
   "CLAUDE_FABLE_PROMPT": "MISSING: C:/Users/downl/_docs/prompts/CLAUDE-FABLE-5.md"
 }
