@@ -61,7 +61,13 @@ An unofficial, Windows-native downstream of Hermes Agent for Windows 11 AI works
 
 This single-maintainer fork is independent of, and not endorsed by, Nous Research.
 The original Hermes Agent is developed by Nous Research and licensed under MIT.
-Developed as a **generic agent harness** and **Windows universal AI workstation base** — upstream is `NousResearch/hermes-agent` until its development stalls.
+Developed as a **generic agent harness** and **Windows universal AI workstation base**.
+
+> [!IMPORTANT]
+> **Release policy:** Hermes compatibility remains a project goal; source-tree parity with `NousResearch/hermes-agent` does not.
+> This downstream maintains its own Windows-first roadmap and release policy. Upstream remains an important reference and source of security, protocol, compatibility, and correctness fixes, which are integrated selectively when they strengthen the Windows-native product.
+>
+> **Same lineage. Windows-first engineering. Independent roadmap.**
 
 [![Windows Workstation Tier-1 CI](https://github.com/zapabob/hermes-agent-windows/actions/workflows/fork-cicd.yml/badge.svg)](https://github.com/zapabob/hermes-agent-windows/actions/workflows/fork-cicd.yml)
 
@@ -321,7 +327,7 @@ documented by Hermes; non-secret settings belong in `config.yaml`.
 
 ## 12. Update and upstream integration policy
 
-Upstream is an integration input, not the downstream product authority. Each
+Upstream is an integration input, not the downstream product authority. Source-tree parity with upstream is explicitly not a project objective. Each
 campaign freezes an exact SHA in `.codex/UPSTREAM_SNAPSHOT.json`, classifies its
 commits in `UPSTREAM_ADOPTION.yaml`, and records direct carry in `CARRY.yaml`.
 `scripts/upstream/snapshot_sync.py` accepts an explicit SHA and never resolves a
