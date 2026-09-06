@@ -39,6 +39,7 @@ import requests
 from agent.secret_scope import get_secret
 from hermes_cli.config import cfg_get, load_config, read_raw_config
 from tools.browser_camofox_state import get_camofox_identity
+from tools.browser_authority import is_personal_session_url
 from tools.registry import tool_error
 
 logger = logging.getLogger(__name__)
@@ -507,12 +508,49 @@ def _delete(path: str, body: dict = None, timeout: Optional[int] = None) -> dict
     return resp.json()
 
 
+def _camofox_transport_policy_error() -> str:
+    """Refuse content access when the transport cannot enforce host blocking.
+
+    The Camofox REST API currently has no request-interception primitive that
+    Hermes can install before a tab is created. Direct URL checks therefore do
+    not cover redirects, clicks, form submissions, history traversal, or page
+    script. Until that boundary exists, content-bearing Camofox operations are
+    unavailable so X and YouTube can remain OS-default-browser-only.
+    """
+    return json.dumps({
+        "success": False,
+        "error": (
+            "Camofox is unavailable under the personal-session boundary: its "
+            "control API cannot pre-block X and YouTube requests. Select the "
+            "local agent-browser backend instead."
+        ),
+        "blocked_by_policy": {
+            "rule": "personal-os-browser-only",
+            "backend": "camofox",
+            "reason": "transport-interception-unavailable",
+        },
+    })
+
+
 # ---------------------------------------------------------------------------
 # Tool implementations
 # ---------------------------------------------------------------------------
 
 def camofox_navigate(url: str, task_id: Optional[str] = None) -> str:
     """Navigate to a URL via Camofox."""
+    transport_error = _camofox_transport_policy_error()
+    if transport_error:
+        return transport_error
+    if is_personal_session_url(url):
+        return json.dumps({
+            "success": False,
+            "error": (
+                "Blocked: X and YouTube may only open through the operator's "
+                "OS default browser and existing personal session."
+            ),
+            "blocked_by_policy": {"rule": "personal-os-browser-only"},
+        })
+
     try:
         browser_url, rewrite_info = _rewrite_loopback_url_for_camofox(url)
         session = _get_session(task_id)
@@ -634,6 +672,9 @@ def camofox_snapshot(full: bool = False, task_id: Optional[str] = None,
     ``user_task`` is deprecated and ignored — oversized snapshots always
     truncate-and-store (no LLM summarization), same as the main browser tool.
     """
+    transport_error = _camofox_transport_policy_error()
+    if transport_error:
+        return transport_error
     try:
         session = _get_session(task_id)
         if not session["tab_id"]:
@@ -674,6 +715,9 @@ def camofox_snapshot(full: bool = False, task_id: Optional[str] = None,
 
 def camofox_click(ref: str, task_id: Optional[str] = None) -> str:
     """Click an element by ref via Camofox."""
+    transport_error = _camofox_transport_policy_error()
+    if transport_error:
+        return transport_error
     try:
         session = _get_session(task_id)
         if not session["tab_id"]:
@@ -701,6 +745,9 @@ def camofox_click(ref: str, task_id: Optional[str] = None) -> str:
 
 def camofox_type(ref: str, text: str, task_id: Optional[str] = None) -> str:
     """Type text into an element by ref via Camofox."""
+    transport_error = _camofox_transport_policy_error()
+    if transport_error:
+        return transport_error
     try:
         session = _get_session(task_id)
         if not session["tab_id"]:
@@ -742,6 +789,9 @@ def camofox_type(ref: str, text: str, task_id: Optional[str] = None) -> str:
 
 def camofox_scroll(direction: str, task_id: Optional[str] = None) -> str:
     """Scroll the page via Camofox."""
+    transport_error = _camofox_transport_policy_error()
+    if transport_error:
+        return transport_error
     try:
         session = _get_session(task_id)
         if not session["tab_id"]:
@@ -758,6 +808,9 @@ def camofox_scroll(direction: str, task_id: Optional[str] = None) -> str:
 
 def camofox_back(task_id: Optional[str] = None) -> str:
     """Navigate back via Camofox."""
+    transport_error = _camofox_transport_policy_error()
+    if transport_error:
+        return transport_error
     try:
         session = _get_session(task_id)
         if not session["tab_id"]:
@@ -774,6 +827,9 @@ def camofox_back(task_id: Optional[str] = None) -> str:
 
 def camofox_press(key: str, task_id: Optional[str] = None) -> str:
     """Press a keyboard key via Camofox."""
+    transport_error = _camofox_transport_policy_error()
+    if transport_error:
+        return transport_error
     try:
         session = _get_session(task_id)
         if not session["tab_id"]:
@@ -813,6 +869,9 @@ def camofox_get_images(task_id: Optional[str] = None) -> str:
     Extracts image information from the accessibility tree snapshot,
     since Camofox does not expose a dedicated /images endpoint.
     """
+    transport_error = _camofox_transport_policy_error()
+    if transport_error:
+        return transport_error
     try:
         session = _get_session(task_id)
         if not session["tab_id"]:
@@ -861,6 +920,9 @@ def camofox_get_images(task_id: Optional[str] = None) -> str:
 def camofox_vision(question: str, annotate: bool = False,
                    task_id: Optional[str] = None) -> str:
     """Take a screenshot and analyze it with vision AI via Camofox."""
+    transport_error = _camofox_transport_policy_error()
+    if transport_error:
+        return transport_error
     try:
         session = _get_session(task_id)
         if not session["tab_id"]:
@@ -961,6 +1023,9 @@ def camofox_console(clear: bool = False, task_id: Optional[str] = None) -> str:
     Camofox does not expose browser console logs via its REST API.
     Returns an empty result with a note.
     """
+    transport_error = _camofox_transport_policy_error()
+    if transport_error:
+        return transport_error
     return json.dumps({
         "success": True,
         "console_messages": [],
@@ -970,5 +1035,3 @@ def camofox_console(clear: bool = False, task_id: Optional[str] = None) -> str:
         "note": "Console log capture is not available with the Camofox backend. "
                 "Use browser_snapshot or browser_vision to inspect page state.",
     })
-
-

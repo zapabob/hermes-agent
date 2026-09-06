@@ -1,5 +1,6 @@
 import type { ComponentProps, ReactNode } from 'react'
 import { useEffect, useMemo, useState } from 'react'
+import { isPersonalSessionUrl } from '@hermes/shared'
 
 import { ArrowUpRight } from '@/lib/icons'
 import { IS_MAC } from '@/lib/keybinds/combo'
@@ -120,7 +121,9 @@ export function isTitleFetchable(value: string): boolean {
 
   const url = parseUrl(value)
 
-  return Boolean(url && /^https?:$/.test(url.protocol) && !LOCAL_HOST_RE.test(url.host))
+  return Boolean(
+    url && /^https?:$/.test(url.protocol) && !LOCAL_HOST_RE.test(url.host) && !isPersonalSessionUrl(url.href)
+  )
 }
 
 export function fetchLinkTitle(url: string): Promise<string> {
@@ -231,7 +234,7 @@ export function openLink(href: string, options: { native?: boolean } = {}): void
     return
   }
 
-  if (options.native || !/^https?:$/i.test(parseUrl(target)?.protocol ?? '')) {
+  if (options.native || isPersonalSessionUrl(target) || !/^https?:$/i.test(parseUrl(target)?.protocol ?? '')) {
     openExternalLink(target)
 
     return

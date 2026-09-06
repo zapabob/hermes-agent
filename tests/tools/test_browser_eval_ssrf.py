@@ -29,6 +29,7 @@ METADATA_URL = "http://169.254.169.254/latest/meta-data/"
 @pytest.fixture(autouse=True)
 def _no_camofox(monkeypatch):
     monkeypatch.setattr(browser_tool, "_is_camofox_mode", lambda: False)
+    monkeypatch.setattr(browser_tool, "_browser_eval_transport_policy_error", lambda: "")
     # No supervisor — force the subprocess fallback path by default.
     monkeypatch.setattr(browser_tool, "_last_session_key", lambda key: key)
 

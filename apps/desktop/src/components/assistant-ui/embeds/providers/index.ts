@@ -1,3 +1,5 @@
+import { isPersonalSessionUrl } from '@hermes/shared'
+
 import { instagram } from './instagram'
 import { maps } from './maps'
 import { pinterest } from './pinterest'
@@ -35,6 +37,10 @@ export function detectEmbed(rawUrl: string | null | undefined): EmbedDescriptor 
   const url = parseUrl(rawUrl)
 
   if (!url) {
+    return null
+  }
+
+  if (isPersonalSessionUrl(url.href)) {
     return null
   }
 

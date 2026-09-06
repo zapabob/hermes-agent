@@ -34,6 +34,33 @@ from agent.vault_store import (  # noqa: E402
     normalize_origin,
     scrub_secret_from_text,
 )
+from tools import browser_tool as browser_tool_module  # noqa: E402
+
+_REAL_BROWSER_EVAL_TRANSPORT_POLICY_ERROR = browser_tool_module._browser_eval_transport_policy_error
+
+
+@pytest.fixture(autouse=True)
+def _exercise_vault_below_the_production_transport_policy(monkeypatch):
+    monkeypatch.setattr(browser_tool_module, "_browser_eval_transport_policy_error", lambda: "")
+
+
+def test_browser_vault_fill_fails_closed_before_reading_vault(monkeypatch):
+    from tools import browser_vault_tool
+
+    monkeypatch.setattr(
+        browser_tool_module,
+        "_browser_eval_transport_policy_error",
+        _REAL_BROWSER_EVAL_TRANSPORT_POLICY_ERROR,
+    )
+
+    result = json.loads(browser_vault_tool.browser_vault_fill("vault_unread"))
+
+    assert result["success"] is False
+    assert result["blocked_by_policy"] == {
+        "rule": "personal-os-browser-only",
+        "backend": "browser-vault-fill",
+        "reason": "transport-interception-unavailable",
+    }
 
 
 @pytest.fixture()

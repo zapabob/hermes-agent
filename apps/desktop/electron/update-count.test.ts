@@ -9,6 +9,7 @@ import { test } from 'vitest'
 import {
   compareApiUrl,
   parseCompareBehindCount,
+  parseCompareUpdate,
   resolveBehindCount,
   resolveCommitLogSelection,
   shouldCountCommits
@@ -299,4 +300,33 @@ test('parseCompareBehindCount rejects malformed payloads', () => {
   assert.equal(parseCompareBehindCount({ ahead_by: '61' }), null)
   assert.equal(parseCompareBehindCount({ ahead_by: 1.5 }), null)
   assert.equal(parseCompareBehindCount([]), null)
+})
+
+test('parseCompareUpdate preserves a bounded anonymous changelog', () => {
+  const payload = {
+    ahead_by: 2,
+    commits: [
+      {
+        sha: SHA_A,
+        commit: { message: 'First change\n\nDetails', author: { name: 'Alice', date: '2026-09-06T00:00:00Z' } }
+      },
+      {
+        sha: SHA_B,
+        commit: { message: 'Second change', author: { name: 'Bob', date: 'invalid' } }
+      },
+      { sha: 'short', commit: { message: 'Rejected malformed commit' } }
+    ]
+  }
+
+  assert.deepEqual(parseCompareUpdate(payload), {
+    behind: 2,
+    commits: [
+      { sha: SHA_A, summary: 'First change', author: 'Alice', at: Date.parse('2026-09-06T00:00:00Z') },
+      { sha: SHA_B, summary: 'Second change', author: 'Bob', at: 0 }
+    ]
+  })
+})
+
+test('parseCompareUpdate fails closed on malformed count', () => {
+  assert.equal(parseCompareUpdate({ commits: [] }), null)
 })

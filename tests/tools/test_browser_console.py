@@ -9,6 +9,15 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
+from tools import browser_tool
+
+_REAL_BROWSER_EVAL_TRANSPORT_POLICY_ERROR = browser_tool._browser_eval_transport_policy_error
+
+
+@pytest.fixture(autouse=True)
+def _exercise_eval_below_the_production_policy(monkeypatch):
+    monkeypatch.setattr(browser_tool, "_browser_eval_transport_policy_error", lambda: "")
+
 
 # ── browser_console ──────────────────────────────────────────────────
 
@@ -47,6 +56,28 @@ class TestBrowserConsole:
         assert result["console_messages"][0]["text"] == "hello"
         assert result["console_messages"][1]["text"] == "oops"
         assert result["js_errors"][0]["message"] == "Uncaught TypeError"
+
+    def test_expression_fails_closed_before_any_backend_dispatch(self, monkeypatch):
+        monkeypatch.setattr(
+            browser_tool,
+            "_browser_eval_transport_policy_error",
+            _REAL_BROWSER_EVAL_TRANSPORT_POLICY_ERROR,
+        )
+        monkeypatch.setattr(
+            browser_tool,
+            "_run_browser_command",
+            lambda *args, **kwargs: pytest.fail("browser transport must not run"),
+        )
+        monkeypatch.setattr(
+            browser_tool,
+            "_camofox_eval",
+            lambda *args, **kwargs: pytest.fail("Camofox evaluate must not run"),
+        )
+
+        result = json.loads(browser_tool.browser_console(expression="1 + 1", task_id="test"))
+
+        assert result["success"] is False
+        assert result["blocked_by_policy"]["rule"] == "personal-os-browser-only"
 
     def test_passes_clear_flag(self):
         from tools.browser_tool import browser_console

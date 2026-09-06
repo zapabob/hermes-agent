@@ -3,6 +3,10 @@
 import json
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+import tools.browser_camofox as browser_camofox
+
 
 from tools.browser_camofox import (
     camofox_back,
@@ -20,6 +24,44 @@ from tools.browser_camofox import (
     is_camofox_mode,
     _rewrite_loopback_url_for_camofox,
 )
+
+
+_REAL_TRANSPORT_POLICY_ERROR = browser_camofox._camofox_transport_policy_error
+
+
+@pytest.fixture(autouse=True)
+def _exercise_camofox_protocol_below_the_production_policy(monkeypatch):
+    """Keep protocol unit tests useful while production remains fail-closed."""
+    monkeypatch.setattr(browser_camofox, "_camofox_transport_policy_error", lambda: "")
+
+
+def test_content_operations_fail_closed_without_transport_interception(monkeypatch):
+    monkeypatch.setattr(
+        browser_camofox,
+        "_camofox_transport_policy_error",
+        _REAL_TRANSPORT_POLICY_ERROR,
+    )
+
+    operations = (
+        lambda: camofox_navigate("https://example.com", task_id="boundary"),
+        lambda: camofox_snapshot(task_id="boundary"),
+        lambda: camofox_click("@e1", task_id="boundary"),
+        lambda: camofox_type("@e1", "text", task_id="boundary"),
+        lambda: camofox_scroll("down", task_id="boundary"),
+        lambda: camofox_back(task_id="boundary"),
+        lambda: camofox_press("Enter", task_id="boundary"),
+        lambda: camofox_get_images(task_id="boundary"),
+        lambda: camofox_vision("what is shown", task_id="boundary"),
+        lambda: camofox_console(task_id="boundary"),
+    )
+    for operation in operations:
+        result = json.loads(operation())
+        assert result["success"] is False
+        assert result["blocked_by_policy"] == {
+            "rule": "personal-os-browser-only",
+            "backend": "camofox",
+            "reason": "transport-interception-unavailable",
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +140,23 @@ class TestCamofoxLoopbackRewrite:
 
 class TestCamofoxNavigate:
     @patch("tools.browser_camofox.requests.post")
+    def test_refuses_personal_session_services_before_network(self, mock_post, monkeypatch):
+        monkeypatch.setenv("CAMOFOX_URL", "http://localhost:9377")
+
+        for url in (
+            "https://x.com/hermes/status/1",
+            "https://mobile.twitter.com/hermes/status/1",
+            "https://www.youtube.com/watch?v=abc",
+            "https://music.youtube.com/watch?v=abc",
+            "https://youtu.be/abc",
+        ):
+            result = json.loads(camofox_navigate(url, task_id="personal-session"))
+            assert result["success"] is False
+            assert result["blocked_by_policy"]["rule"] == "personal-os-browser-only"
+
+        mock_post.assert_not_called()
+
+    @patch("tools.browser_camofox.requests.post")
     def test_creates_tab_on_first_navigate(self, mock_post, monkeypatch):
         monkeypatch.setenv("CAMOFOX_URL", "http://localhost:9377")
         mock_post.return_value = _mock_response(json_data={"tabId": "tab1", "url": "https://example.com"})
@@ -131,8 +190,8 @@ class TestCamofoxSnapshot:
     def test_returns_snapshot(self, mock_get, mock_post, monkeypatch):
         monkeypatch.setenv("CAMOFOX_URL", "http://localhost:9377")
         # Create session
-        mock_post.return_value = _mock_response(json_data={"tabId": "tab3", "url": "https://x.com"})
-        camofox_navigate("https://x.com", task_id="t3")
+        mock_post.return_value = _mock_response(json_data={"tabId": "tab3", "url": "https://example.com"})
+        camofox_navigate("https://example.com", task_id="t3")
 
         # Return snapshot
         mock_get.return_value = _mock_response(json_data={
@@ -154,10 +213,10 @@ class TestCamofoxInteractions:
     @patch("tools.browser_camofox.requests.post")
     def test_click(self, mock_post, monkeypatch):
         monkeypatch.setenv("CAMOFOX_URL", "http://localhost:9377")
-        mock_post.return_value = _mock_response(json_data={"tabId": "tab4", "url": "https://x.com"})
-        camofox_navigate("https://x.com", task_id="t4")
+        mock_post.return_value = _mock_response(json_data={"tabId": "tab4", "url": "https://example.com"})
+        camofox_navigate("https://example.com", task_id="t4")
 
-        mock_post.return_value = _mock_response(json_data={"ok": True, "url": "https://x.com"})
+        mock_post.return_value = _mock_response(json_data={"ok": True, "url": "https://example.com"})
         result = json.loads(camofox_click("@e5", task_id="t4"))
         assert result["success"] is True
         assert result["clicked"] == "e5"
@@ -167,8 +226,8 @@ class TestCamofoxInteractions:
     def test_type_redacts_api_key(self, mock_post, monkeypatch):
         monkeypatch.setenv("CAMOFOX_URL", "http://localhost:9377")
         monkeypatch.setenv("HERMES_REDACT_SECRETS", "true")
-        mock_post.return_value = _mock_response(json_data={"tabId": "tab5b", "url": "https://x.com"})
-        camofox_navigate("https://x.com", task_id="t5b")
+        mock_post.return_value = _mock_response(json_data={"tabId": "tab5b", "url": "https://example.com"})
+        camofox_navigate("https://example.com", task_id="t5b")
 
         secret = "sk-proj-ABCD1234567890EFGH"
         mock_post.return_value = _mock_response(json_data={"ok": True})
@@ -181,8 +240,8 @@ class TestCamofoxInteractions:
     def test_type_failure_redacts_api_key(self, mock_post, monkeypatch):
         monkeypatch.setenv("CAMOFOX_URL", "http://localhost:9377")
         monkeypatch.setenv("HERMES_REDACT_SECRETS", "true")
-        mock_post.return_value = _mock_response(json_data={"tabId": "tab5c", "url": "https://x.com"})
-        camofox_navigate("https://x.com", task_id="t5c")
+        mock_post.return_value = _mock_response(json_data={"tabId": "tab5c", "url": "https://example.com"})
+        camofox_navigate("https://example.com", task_id="t5c")
 
         secret = "sk-proj-ABCD1234567890EFGH"
         mock_post.side_effect = RuntimeError(f"camofox failed while typing {secret}")
@@ -197,8 +256,8 @@ class TestCamofoxInteractions:
     @patch("tools.browser_camofox.requests.post")
     def test_press(self, mock_post, monkeypatch):
         monkeypatch.setenv("CAMOFOX_URL", "http://localhost:9377")
-        mock_post.return_value = _mock_response(json_data={"tabId": "tab8", "url": "https://x.com"})
-        camofox_navigate("https://x.com", task_id="t8")
+        mock_post.return_value = _mock_response(json_data={"tabId": "tab8", "url": "https://example.com"})
+        camofox_navigate("https://example.com", task_id="t8")
 
         mock_post.return_value = _mock_response(json_data={"ok": True})
         result = json.loads(camofox_press("Enter", task_id="t8"))
@@ -216,8 +275,8 @@ class TestCamofoxClose:
     @patch("tools.browser_camofox.requests.post")
     def test_close_session(self, mock_post, mock_delete, monkeypatch):
         monkeypatch.setenv("CAMOFOX_URL", "http://localhost:9377")
-        mock_post.return_value = _mock_response(json_data={"tabId": "tab9", "url": "https://x.com"})
-        camofox_navigate("https://x.com", task_id="t9")
+        mock_post.return_value = _mock_response(json_data={"tabId": "tab9", "url": "https://example.com"})
+        camofox_navigate("https://example.com", task_id="t9")
 
         mock_delete.return_value = _mock_response(json_data={"ok": True})
         result = json.loads(camofox_close(task_id="t9"))
@@ -254,8 +313,8 @@ class TestCamofoxGetImages:
     @patch("tools.browser_camofox.requests.get")
     def test_get_images(self, mock_get, mock_post, monkeypatch):
         monkeypatch.setenv("CAMOFOX_URL", "http://localhost:9377")
-        mock_post.return_value = _mock_response(json_data={"tabId": "tab10", "url": "https://x.com"})
-        camofox_navigate("https://x.com", task_id="t10")
+        mock_post.return_value = _mock_response(json_data={"tabId": "tab10", "url": "https://example.com"})
+        camofox_navigate("https://example.com", task_id="t10")
 
         # camofox_get_images parses images from the accessibility tree snapshot
         snapshot_text = (
@@ -277,8 +336,8 @@ class TestCamofoxVisionConfig:
     @patch("tools.browser_camofox._get_raw")
     def test_camofox_vision_uses_configured_temperature_and_timeout(self, mock_get_raw, mock_get, mock_post, monkeypatch):
         monkeypatch.setenv("CAMOFOX_URL", "http://localhost:9377")
-        mock_post.return_value = _mock_response(json_data={"tabId": "tab11", "url": "https://x.com"})
-        camofox_navigate("https://x.com", task_id="t11")
+        mock_post.return_value = _mock_response(json_data={"tabId": "tab11", "url": "https://example.com"})
+        camofox_navigate("https://example.com", task_id="t11")
 
         snapshot_text = '- button "Submit"\n'
         raw_resp = MagicMock()
@@ -309,8 +368,8 @@ class TestCamofoxVisionConfig:
     @patch("tools.browser_camofox._get_raw")
     def test_camofox_vision_defaults_temperature_when_config_omits_it(self, mock_get_raw, mock_get, mock_post, monkeypatch):
         monkeypatch.setenv("CAMOFOX_URL", "http://localhost:9377")
-        mock_post.return_value = _mock_response(json_data={"tabId": "tab12", "url": "https://x.com"})
-        camofox_navigate("https://x.com", task_id="t12")
+        mock_post.return_value = _mock_response(json_data={"tabId": "tab12", "url": "https://example.com"})
+        camofox_navigate("https://example.com", task_id="t12")
 
         snapshot_text = '- button "Submit"\n'
         raw_resp = MagicMock()
@@ -360,5 +419,3 @@ class TestBrowserToolRouting:
         monkeypatch.setenv("CAMOFOX_URL", "http://localhost:9377")
         from tools.browser_tool import check_browser_requirements
         assert check_browser_requirements() is True
-
-

@@ -19,6 +19,31 @@ from websockets.asyncio.server import serve
 
 from tools import browser_cdp_tool
 
+_REAL_CDP_TRANSPORT_POLICY_ERROR = browser_cdp_tool._browser_cdp_transport_policy_error
+
+
+@pytest.fixture(autouse=True)
+def _exercise_cdp_below_the_production_policy(monkeypatch):
+    monkeypatch.setattr(browser_cdp_tool, "_browser_cdp_transport_policy_error", lambda: "")
+
+
+def test_raw_cdp_fails_closed_before_endpoint_or_supervisor_dispatch(monkeypatch):
+    monkeypatch.setattr(
+        browser_cdp_tool,
+        "_browser_cdp_transport_policy_error",
+        _REAL_CDP_TRANSPORT_POLICY_ERROR,
+    )
+    monkeypatch.setattr(
+        browser_cdp_tool,
+        "_resolve_cdp_endpoint",
+        lambda: (_ for _ in ()).throw(AssertionError("endpoint must not resolve")),
+    )
+
+    result = json.loads(browser_cdp_tool.browser_cdp(method="Page.navigate"))
+
+    assert "personal-session boundary" in result["error"]
+    assert result["blocked_by_policy"]["operation"] == "raw-cdp"
+
 
 # ---------------------------------------------------------------------------
 # In-process CDP mock server

@@ -20,12 +20,17 @@ import pytest
 
 import tools.browser_use_cli as bu_cli
 
+_REAL_BROWSER_EXEC_TRANSPORT_POLICY_ERROR = bu_cli._browser_exec_transport_policy_error
+
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     monkeypatch.delenv("BU_NAME", raising=False)
     monkeypatch.delenv("BU_AUTOSPAWN", raising=False)
     monkeypatch.delenv("BROWSER_USE_API_KEY", raising=False)
+    # Most tests exercise the CLI protocol below the production fail-closed
+    # boundary. A dedicated test below asserts the real policy entry point.
+    monkeypatch.setattr(bu_cli, "_browser_exec_transport_policy_error", lambda: "")
     yield
 
 
@@ -541,10 +546,11 @@ class TestOwnTabPreamble:
         # model code still present, after the preamble
         assert result["output"].index("_hermes_ensure_own_tab") < result["output"].index("print('payload')")
 
-    def test_unnamed_session_gets_no_preamble(self, tmp_path, monkeypatch):
+    def test_unnamed_session_gets_no_own_tab_preamble(self, tmp_path, monkeypatch):
         result = self._run(tmp_path, monkeypatch, session="")
         assert result["success"] is True
         assert "_hermes_ensure_own_tab" not in result["output"]
+        assert "_hermes_install_personal_session_guard" in result["output"]
 
     def test_named_provider_browser_skips_preamble(self, tmp_path, monkeypatch):
         """Per-name provider browsers are private — preamble would leak a tab."""
@@ -570,8 +576,112 @@ class TestOwnTabPreamble:
         import ast
 
         ast.parse(bu_cli._OWN_TAB_PREAMBLE)
+        ast.parse(bu_cli._PERSONAL_SESSION_PREAMBLE)
         # and composes with model code
-        ast.parse(bu_cli._OWN_TAB_PREAMBLE + "print('x')")
+        ast.parse(
+            bu_cli._PERSONAL_SESSION_PREAMBLE
+            + bu_cli._OWN_TAB_PREAMBLE
+            + "print('x')"
+        )
+
+
+class TestPersonalSessionBoundary:
+    def test_browser_exec_fails_closed_before_validation_or_cli_lookup(self, monkeypatch):
+        monkeypatch.setattr(
+            bu_cli,
+            "_browser_exec_transport_policy_error",
+            _REAL_BROWSER_EXEC_TRANSPORT_POLICY_ERROR,
+        )
+        monkeypatch.setattr(
+            bu_cli,
+            "_find_cli",
+            lambda: (_ for _ in ()).throw(AssertionError("CLI must not run")),
+        )
+
+        result = json.loads(bu_cli.browser_exec("print('safe')"))
+
+        assert "transport layer" in result["error"]
+
+    def test_literal_personal_url_is_rejected_before_cli_lookup(self, monkeypatch):
+        monkeypatch.setattr(
+            bu_cli,
+            "_find_cli",
+            lambda: (_ for _ in ()).throw(AssertionError("CLI must not run")),
+        )
+
+        result = json.loads(
+            bu_cli.browser_exec("goto_url('https://www.youtube.com/watch?v=abc')")
+        )
+
+        assert "OS default browser" in result["error"]
+
+    def test_runtime_guard_covers_dynamic_urls_clicks_and_redirects(self, monkeypatch):
+        import sys
+        from types import ModuleType
+
+        calls = []
+        package = ModuleType("browser_harness")
+        package.__path__ = []
+        helpers = ModuleType("browser_harness.helpers")
+
+        def raw_cdp(method, session_id=None, **params):
+            calls.append((method, session_id, params))
+            if method == "Target.getTargetInfo":
+                return {"targetInfo": {"url": "about:blank"}}
+            return {}
+
+        helpers.cdp = raw_cdp
+        helpers.current_tab = lambda: {"targetId": "safe", "url": "about:blank"}
+        helpers.goto_url = lambda url: calls.append(("goto", None, {"url": url}))
+        helpers.switch_tab = lambda target, activate=False: target
+        helpers._target_id = lambda target: target
+        package.helpers = helpers
+        monkeypatch.setitem(sys.modules, "browser_harness", package)
+        monkeypatch.setitem(sys.modules, "browser_harness.helpers", helpers)
+
+        namespace = {}
+        exec(bu_cli._PERSONAL_SESSION_PREAMBLE, namespace)
+
+        with pytest.raises(RuntimeError, match="OS default browser"):
+            namespace["goto_url"]("https://" + "x.com/operator")
+        with pytest.raises(RuntimeError, match="OS default browser"):
+            namespace["cdp"](
+                "Target.createTarget", url="https://" + "youtube.com/watch?v=abc"
+            )
+        with pytest.raises(RuntimeError, match="network guard is mandatory"):
+            namespace["cdp"]("Network.disable")
+
+        blocked = [
+            params["urls"]
+            for method, _, params in calls
+            if method == "Network.setBlockedURLs"
+        ]
+        assert blocked
+        assert "*://*.youtube.com/*" in blocked[-1]
+        assert "*://*.x.com/*" in blocked[-1]
+
+    @pytest.mark.parametrize(
+        "code",
+        (
+            "import browser_harness.helpers",
+            "cdp('Network.disable')",
+            "print(goto_url.__closure__)",
+            "globals()['cdp']('Network.disable')",
+            "os.system('browser-use open https://x.com')",
+        ),
+    )
+    def test_namespace_escape_hatches_are_rejected_before_execution(
+        self, code, monkeypatch
+    ):
+        monkeypatch.setattr(
+            bu_cli,
+            "_find_cli",
+            lambda: (_ for _ in ()).throw(AssertionError("CLI must not run")),
+        )
+
+        result = json.loads(bu_cli.browser_exec(code))
+
+        assert "Blocked: browser_exec" in result["error"]
 
 
 class TestProviderPickerIntegration:
@@ -831,9 +941,17 @@ class TestSkillTextDescription:
         assert overrides["description"].endswith(bu_cli._HELPERS_DIGEST)
 
     def test_digest_names_core_helpers(self):
-        for helper in ("new_tab(", "page_info()", "js(", "fill_input(",
-                       "click_at_xy(", "capture_screenshot()", "cdp("):
+        for helper in (
+            "new_tab(",
+            "page_info()",
+            "js(",
+            "fill_input(",
+            "click_at_xy(",
+            "capture_screenshot()",
+        ):
             assert helper in bu_cli._HELPERS_DIGEST
+        assert "raw CDP" in bu_cli._HELPERS_DIGEST
+        assert "cdp('" not in bu_cli._HELPERS_DIGEST
 
     def test_static_fallback_carries_digest_and_install_hint(self):
         desc = bu_cli.BROWSER_EXEC_SCHEMA["description"]
@@ -857,7 +975,8 @@ class TestBrowserExec:
         result = json.loads(bu_cli.browser_exec('print("hi")'))
         assert result["success"] is True
         assert result["exit_code"] == 0
-        assert 'got:print("hi")' in result["output"]
+        assert 'print("hi")' in result["output"]
+        assert "_hermes_install_personal_session_guard" in result["output"]
         assert "session" not in result
 
     def test_session_sets_bu_name(self, tmp_path, monkeypatch):

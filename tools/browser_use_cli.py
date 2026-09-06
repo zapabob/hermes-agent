@@ -4,6 +4,7 @@ When browser.backend is "browser-use", the model gets ``browser_exec`` tool
 instead of default browser tools
 """
 
+import ast
 import json
 import logging
 import os
@@ -72,6 +73,91 @@ _hermes_ensure_own_tab()
 del _hermes_ensure_own_tab
 """
 
+# Runtime enforcement for the operator-owned X/YouTube session boundary.
+# Literal scanning alone cannot catch concatenated URLs, link clicks, or HTTP
+# redirects.  The harness preamble therefore installs Chromium's request
+# blocker on the attached target before model code runs and keeps it installed
+# across tab switches.  Direct Page.navigate/Target.createTarget calls are
+# checked as well, so dynamically assembled URLs fail before a request starts.
+_PERSONAL_SESSION_PREAMBLE = """\
+# hermes: X and YouTube are reserved for the operator's OS-browser session
+def _hermes_install_personal_session_guard():
+    from urllib.parse import urlsplit as _urlsplit
+    import browser_harness.helpers as _bh
+
+    _reserved_hosts = ("twitter.com", "x.com", "youtu.be", "youtube.com")
+    _blocked_patterns = tuple(
+        pattern
+        for host in _reserved_hosts
+        for pattern in ("*://%s/*" % host, "*://*.%s/*" % host)
+    )
+    _raw_cdp = _bh.cdp
+    _original_goto = _bh.goto_url
+    _raw_switch_tab = _bh.switch_tab
+
+    def _reserved(raw):
+        try:
+            parsed = _urlsplit(str(raw or ""))
+        except ValueError:
+            return False
+        hostname = (parsed.hostname or "").lower().rstrip(".")
+        return parsed.scheme.lower() in ("http", "https") and any(
+            hostname == host or hostname.endswith("." + host)
+            for host in _reserved_hosts
+        )
+
+    def _install_network_floor():
+        _raw_cdp("Network.enable")
+        _raw_cdp("Network.setBlockedURLs", urls=list(_blocked_patterns))
+
+    # Never adopt an already-open personal tab from the operator's profile.
+    _current = _bh.current_tab()
+    if _reserved(_current.get("url")):
+        _blank = _raw_cdp("Target.createTarget", url="about:blank", background=True)["targetId"]
+        _raw_switch_tab(_blank)
+
+    def _guarded_cdp(method, session_id=None, **params):
+        if method in ("Page.navigate", "Target.createTarget") and _reserved(params.get("url")):
+            raise RuntimeError(
+                "Blocked: X and YouTube may only open through the operator's "
+                "OS default browser and existing personal session."
+            )
+        if method == "Network.disable":
+            raise RuntimeError("Blocked: the personal-session network guard is mandatory.")
+        if method == "Network.setBlockedURLs":
+            supplied = tuple(params.get("urls") or ())
+            params["urls"] = list(dict.fromkeys(supplied + _blocked_patterns))
+        return _raw_cdp(method, session_id=session_id, **params)
+
+    def _guarded_goto(url):
+        if _reserved(url):
+            raise RuntimeError(
+                "Blocked: X and YouTube may only open through the operator's "
+                "OS default browser and existing personal session."
+            )
+        return _original_goto(url)
+
+    def _guarded_switch(target, activate=False):
+        target_id = _bh._target_id(target)
+        info = _raw_cdp("Target.getTargetInfo", targetId=target_id).get("targetInfo", {})
+        if _reserved(info.get("url")):
+            raise RuntimeError("Blocked: refusing to attach to the operator's personal-session tab.")
+        result = _raw_switch_tab(target, activate=activate)
+        _install_network_floor()
+        return result
+
+    _bh.cdp = _guarded_cdp
+    _bh.goto_url = _guarded_goto
+    _bh.switch_tab = _guarded_switch
+    globals()["cdp"] = _guarded_cdp
+    globals()["goto_url"] = _guarded_goto
+    globals()["switch_tab"] = _guarded_switch
+    _install_network_floor()
+
+_hermes_install_personal_session_guard()
+del _hermes_install_personal_session_guard
+"""
+
 _DEFAULT_TIMEOUT_S = 300
 _MIN_TIMEOUT_S = 5
 _MAX_TIMEOUT_S = 1800
@@ -91,6 +177,152 @@ _IMAGE_PATH_RE = re.compile(
 
 # http(s) URL literals in exec code checked against browser_navigate's policy
 _URL_RE = re.compile(r"https?://[^\s'\"\\)]+", re.IGNORECASE)
+
+_SAFE_EXEC_CALLS = frozenset(
+    {
+        "abs",
+        "all",
+        "any",
+        "bool",
+        "capture_screenshot",
+        "click_at_xy",
+        "current_tab",
+        "dict",
+        "dispatch_key",
+        "enumerate",
+        "fill_input",
+        "float",
+        "goto_url",
+        "iframe_target",
+        "int",
+        "isinstance",
+        "js",
+        "len",
+        "list",
+        "max",
+        "min",
+        "new_tab",
+        "page_info",
+        "press_key",
+        "print",
+        "range",
+        "round",
+        "scroll",
+        "set",
+        "sorted",
+        "str",
+        "sum",
+        "switch_tab",
+        "tuple",
+        "type_text",
+        "upload_file",
+        "wait",
+        "wait_for_element",
+        "wait_for_load",
+        "wait_for_network_idle",
+        "zip",
+    }
+)
+_SAFE_EXEC_METHODS = frozenset(
+    {
+        "append",
+        "capitalize",
+        "casefold",
+        "clear",
+        "copy",
+        "count",
+        "endswith",
+        "extend",
+        "find",
+        "format",
+        "get",
+        "index",
+        "insert",
+        "items",
+        "join",
+        "keys",
+        "lower",
+        "lstrip",
+        "pop",
+        "remove",
+        "replace",
+        "reverse",
+        "rstrip",
+        "setdefault",
+        "sort",
+        "split",
+        "splitlines",
+        "startswith",
+        "strip",
+        "title",
+        "update",
+        "upper",
+        "values",
+    }
+)
+_FORBIDDEN_EXEC_GLOBALS = frozenset(
+    {
+        "auth",
+        "builtins",
+        "compile",
+        "daemon_alive",
+        "ensure_daemon",
+        "eval",
+        "exec",
+        "globals",
+        "help",
+        "input",
+        "locals",
+        "open",
+        "os",
+        "recorder",
+        "restart_daemon",
+        "start_remote_daemon",
+        "stop_remote_daemon",
+        "subprocess",
+        "sys",
+        "telemetry",
+        "urllib",
+        "vars",
+    }
+)
+
+
+def _validate_browser_exec_code(code: str) -> Optional[str]:
+    """Restrict model code to the guarded Browser Harness helper surface.
+
+    Browser Harness executes input as Python in a privileged module namespace.
+    Without a structural gate, an import or dunder traversal can recover the
+    unwrapped CDP callable and remove the mandatory personal-session network
+    floor.  Keep ordinary data manipulation, loops, and guarded browser helpers
+    while rejecting namespace escape hatches and raw CDP.
+    """
+    try:
+        tree = ast.parse(code or "", mode="exec")
+    except SyntaxError as exc:
+        return f"Invalid browser_exec Python: {exc.msg}"
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            return "Blocked: browser_exec imports are disabled by the browser authority policy."
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            return "Blocked: browser_exec dynamic callables are disabled by the browser authority policy."
+        if isinstance(node, ast.Name):
+            if node.id.startswith("_") or node.id in _FORBIDDEN_EXEC_GLOBALS:
+                return f"Blocked: browser_exec cannot access {node.id!r}."
+        if isinstance(node, ast.Attribute):
+            if node.attr.startswith("_"):
+                return "Blocked: browser_exec cannot access private or dunder attributes."
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name):
+                if node.func.id not in _SAFE_EXEC_CALLS:
+                    return f"Blocked: browser_exec call {node.func.id!r} is outside the guarded helper surface."
+            elif isinstance(node.func, ast.Attribute):
+                if node.func.attr not in _SAFE_EXEC_METHODS:
+                    return f"Blocked: browser_exec method {node.func.attr!r} is outside the guarded data surface."
+            else:
+                return "Blocked: browser_exec indirect calls are disabled by the browser authority policy."
+    return None
 
 
 def _blocked_url_in_code(code: str) -> Optional[str]:
@@ -674,6 +906,21 @@ def _resolve_real_profile_cdp(env: dict, force_local: bool) -> Optional[str]:
     return None
 
 
+def _browser_exec_transport_policy_error() -> str:
+    """Refuse privileged Browser Harness code without a universal route guard.
+
+    Browser Harness exposes a privileged Python namespace.  A preamble and AST
+    validator cannot prove that every present and future CDP recovery path,
+    popup, or newly-created target inherits the personal-session block.  Keep
+    the backend unavailable until the transport itself owns that invariant.
+    """
+    return (
+        "Blocked: browser_exec is unavailable under the personal-session "
+        "boundary until Browser Use enforces X and YouTube blocking at the "
+        "transport layer. Select the local agent-browser backend instead."
+    )
+
+
 def browser_exec(
     code: str,
     session: str = "",
@@ -684,8 +931,16 @@ def browser_exec(
     """Run Python code through the browser-use CLI, and return its output"""
     from tools.registry import tool_error, tool_result
 
+    transport_error = _browser_exec_transport_policy_error()
+    if transport_error:
+        return tool_error(transport_error)
+
     if not code or not code.strip():
         return tool_error("No code provided. Pass Python that uses the pre-imported helpers, e.g. new_tab(\"https://example.com\") then print(page_info()).")
+
+    validation_error = _validate_browser_exec_code(code)
+    if validation_error:
+        return tool_error(validation_error)
 
     blocked = _blocked_url_in_code(code)
     if blocked:
@@ -746,6 +1001,7 @@ def browser_exec(
     private_browser = env.pop(_PRIVATE_BROWSER_SENTINEL, None)
     if session and not private_browser:
         code = _OWN_TAB_PREAMBLE + code
+    code = _PERSONAL_SESSION_PREAMBLE + code
 
     workspace = _workspace_dir(task_id)
     if workspace:
@@ -898,12 +1154,10 @@ _HELPERS_DIGEST = (
     "a bare '() => {...}' returns the function itself, uncalled), "
     "fill_input(selector, text) types into inputs, click_at_xy(x, y) clicks "
     "viewport coordinates, capture_screenshot() saves and prints a "
-    "screenshot path, cdp('Domain.method', **kwargs) is raw CDP — "
-    "cdp('Accessibility.getFullAXTree')['nodes'] lists every element's "
-    "role/name/backendDOMNodeId (filter in Python before printing; it is "
-    "thousands of nodes), then cdp('DOM.getBoxModel', backendNodeId=n) gives "
-    "click coordinates. ensure_real_tab() recovers from a stale/internal "
-    "tab. Login walls: stop and ask the user; never guess credentials."
+    "screenshot path. Code is restricted to these guarded helpers and plain "
+    "data operations; imports, raw CDP, private attributes, and indirect "
+    "calls are refused. Login walls: stop and ask the user; never guess "
+    "credentials."
 )
 
 

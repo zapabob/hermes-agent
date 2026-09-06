@@ -25,6 +25,7 @@ def _disable_camofox(monkeypatch):
 
     monkeypatch.setattr(bt, "_is_camofox_mode", lambda: False)
     monkeypatch.setattr(bt, "_last_session_key", lambda task_id: "test-task")
+    monkeypatch.setattr(bt, "_browser_eval_transport_policy_error", lambda: "")
 
 
 def _patch_supervisor(monkeypatch, supervisor):

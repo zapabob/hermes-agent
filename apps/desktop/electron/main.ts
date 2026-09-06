@@ -7,6 +7,10 @@ import os from 'node:os'
 import path from 'node:path'
 import tls from 'node:tls'
 import { pathToFileURL } from 'node:url'
+import {
+  isPersonalSessionTransportUrl,
+  isPersonalSessionUrl
+} from '../../shared/src/personal-session-url'
 
 import {
   app,
@@ -161,6 +165,7 @@ import { adoptServedDashboardToken } from './dashboard-token'
 import { loadOrCreateInstallationId, sshOwnershipId } from './desktop-installation'
 import { formatDesktopLogLine } from './desktop-log-line'
 import { resolveDesktopRemoteRoute } from './desktop-remote-route'
+import { installPersonalSessionRequestGuard } from './personal-session-request-guard'
 import {
   buildPosixCleanupScript,
   buildWindowsCleanupScript,
@@ -201,7 +206,6 @@ import {
 } from './gateway-file-download'
 import { probeGatewayWebSocket } from './gateway-ws-probe'
 import { registerGitIpc } from './git-ipc'
-import { clearStaleGitLocks } from './gitlock'
 import { readAndConsumeHandoffResult } from './handoff-result'
 import {
   ATTACHMENT_UPLOAD_DEFAULT_MAX_BYTES,
@@ -366,16 +370,10 @@ import {
   windowOpacityFor,
   windowOpacityOptions
 } from './translucency'
-import {
-  compareApiUrl,
-  parseCompareBehindCount,
-  resolveBehindCount,
-  resolveCommitLogSelection,
-  shouldCountCommits
-} from './update-count'
+import { compareApiUrl, parseCompareUpdate } from './update-count'
 import { waitForUpdateClearance } from './update-gate'
 import { readLiveUpdateMarker, updateHandoffConflict, writeUpdateMarker } from './update-marker'
-import { isSshRemote, resolvePassiveUpdateRemote } from './update-remote'
+import { passiveGitArgs, passiveGitEnvironment, resolvePassiveUpdateRemote } from './update-remote'
 import {
   collectRelaunchArgs,
   observeUpdaterHandoff,
@@ -1745,6 +1743,43 @@ function openExternalUrl(rawUrl) {
   return true
 }
 
+// A guest webview can navigate itself through redirects or in-page links,
+// bypassing the renderer's openPreview gate. Keep the personal-session policy
+// at the Electron navigation boundary too: X and YouTube leave the guest and
+// open only in the operator's OS browser.
+app.on('web-contents-created', (_event, contents) => {
+  if (contents.getType() !== 'webview') {
+    return
+  }
+
+  const handOffPersonalSessionUrl = (event, url) => {
+    if (!isPersonalSessionUrl(url)) {
+      return
+    }
+
+    event.preventDefault()
+    openExternalUrl(url)
+  }
+
+  contents.on('will-navigate', handOffPersonalSessionUrl)
+  contents.on('will-redirect', handOffPersonalSessionUrl)
+  contents.setWindowOpenHandler(({ url }) => {
+    if (isPersonalSessionUrl(url)) {
+      openExternalUrl(url)
+    }
+
+    return { action: 'deny' }
+  })
+})
+
+// Cover session traffic that navigation events never see: subframes,
+// subresources, fetch/XHR, service workers, and redirect targets. Newly created
+// app-owned partitions inherit the same boundary; the already-existing default
+// session is installed explicitly in whenReady below.
+app.on('session-created', createdSession => {
+  installPersonalSessionRequestGuard(createdSession)
+})
+
 async function openPreviewInBrowser(rawUrl) {
   const raw = String(rawUrl || '').trim()
 
@@ -2831,14 +2866,44 @@ function resolveUpdateRoot() {
   return candidates.find(c => directoryExists(path.join(c, '.git'))) || candidates[0] || ACTIVE_HERMES_ROOT
 }
 
+let passiveGitIsolation: { cwd: string; home: string } | null = null
+
+function getPassiveGitIsolation() {
+  if (passiveGitIsolation) {
+    return passiveGitIsolation
+  }
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-passive-git-'))
+  const cwd = path.join(root, 'repo-free')
+  const home = path.join(root, 'empty-home')
+
+  fs.mkdirSync(cwd, { recursive: true })
+  fs.mkdirSync(home, { recursive: true })
+  passiveGitIsolation = { cwd, home }
+
+  return passiveGitIsolation
+}
+
 function runGit(args, options: any = {}): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
+    const noCredentialUI = options.noCredentialUI === true
+    const inheritedEnv = { ...process.env, ...((options.env || {}) as any) }
+    const isolation = noCredentialUI ? getPassiveGitIsolation() : null
+    const env = noCredentialUI
+      ? passiveGitEnvironment(
+          inheritedEnv,
+          IS_WINDOWS ? 'NUL' : '/dev/null',
+          isolation?.home,
+          isolation?.cwd
+        )
+      : inheritedEnv
+
     const child = spawn(
       resolveGitBinary(),
       IS_WINDOWS ? ['-c', 'windows.appendAtomically=false', ...args] : args,
       hiddenWindowsChildOptions({
         cwd: options.cwd,
-        env: { ...process.env, ...((options.env || {}) as any), GIT_TERMINAL_PROMPT: '0' },
+        env,
         stdio: ['ignore', 'pipe', 'pipe']
       })
     )
@@ -2863,7 +2928,10 @@ function runGit(args, options: any = {}): Promise<{ code: number; stdout: string
 const firstLine = text => (text || '').split('\n').find(Boolean) || ''
 
 async function getOriginUrl(updateRoot) {
-  const origin = await runGit(['remote', 'get-url', 'origin'], { cwd: updateRoot })
+  const origin = await runGit(passiveGitArgs(['remote', 'get-url', 'origin']), {
+    cwd: updateRoot,
+    noCredentialUI: true
+  })
 
   return origin.code === 0 ? origin.stdout.trim() : ''
 }
@@ -2892,15 +2960,15 @@ async function resolveHealedBranch(updateRoot, branch) {
   const remote = resolvePassiveUpdateRemote(originUrl)
 
   if (!remote) {
-    rememberLog(`[updates] passive branch probe skipped for SSH origin ${originUrl || '<unknown>'}`)
+    rememberLog(`[updates] passive branch probe skipped for unsupported origin ${originUrl || '<unknown>'}`)
 
     return branch
   }
 
-  // An empty credential.helper resets inherited helpers. Together with
-  // GIT_TERMINAL_PROMPT=0 in runGit(), this keeps the probe non-interactive.
-  const probe = await runGit(['-c', 'credential.helper=', 'ls-remote', '--exit-code', '--heads', remote, branch], {
-    cwd: updateRoot
+  // This direct URL probe resets credential helpers and every askpass surface.
+  const probe = await runGit(passiveGitArgs(['ls-remote', '--exit-code', '--heads', remote, branch]), {
+    cwd: getPassiveGitIsolation().cwd,
+    noCredentialUI: true
   })
 
   if (probe.code !== 2) {
@@ -2936,153 +3004,75 @@ async function checkUpdates() {
   const originUrl = await getOriginUrl(updateRoot)
   const passiveRemote = resolvePassiveUpdateRemote(originUrl)
 
-  if (isSshRemote(originUrl)) {
-    if (!passiveRemote) {
-      return {
-        supported: true,
-        branch,
-        error: 'passive-ssh-check-disabled',
-        message: 'Automatic update checks do not authenticate to SSH remotes. Run an explicit update when ready.',
-        hermesRoot: updateRoot,
-        fetchedAt: Date.now()
-      }
-    }
-
-    const git = args => runGit(args, { cwd: updateRoot }).then(r => r.stdout.trim())
-
-    const [currentSha, target, dirtyStr, currentBranch] = await Promise.all([
-      git(['rev-parse', 'HEAD']),
-      runGit(['-c', 'credential.helper=', 'ls-remote', passiveRemote, `refs/heads/${branch}`], { cwd: updateRoot }),
-      git(['status', '--porcelain']),
-      git(['rev-parse', '--abbrev-ref', 'HEAD'])
-    ])
-
-    const targetSha = firstLine(target.stdout).split(/\s+/)[0] || ''
-
-    if (target.code !== 0 || !targetSha) {
-      return {
-        supported: true,
-        branch,
-        error: 'fetch-failed',
-        message: firstLine(target.stderr) || 'git ls-remote failed.',
-        hermesRoot: updateRoot,
-        fetchedAt: Date.now()
-      }
-    }
-
-    // Passive SSH checks only know tip SHAs (ls-remote) — never
-    // fabricate a "1 commit behind". Recover the exact count via the GitHub
-    // compare API when possible; otherwise behind stays null ("update
-    // available, count unknown") and updateAvailable carries the signal.
-    // ahead_by === 0 with differing tips means the remote tip is reachable
-    // from our HEAD — a local carried commit sitting AHEAD, not behind:
-    // flagging that as an update nudges the user into wiping their work.
-    const tipsEqual = Boolean(currentSha && currentSha === targetSha)
-
-    const sshBehind = tipsEqual ? 0 : await fetchCompareBehindCount({ currentSha, originUrl: passiveRemote, targetSha })
-
-    const upToDate = tipsEqual || sshBehind === 0
-
+  if (!passiveRemote) {
     return {
       supported: true,
       branch,
-      currentBranch,
-      behind: upToDate ? 0 : sshBehind,
-      updateAvailable: !upToDate,
-      currentSha,
-      targetSha,
-      commits: [],
-      dirty: dirtyStr.length > 0,
+      error: 'passive-credential-check-disabled',
+      message: 'Automatic update checks require an explicit HTTP(S) remote. Run an explicit update when ready.',
       hermesRoot: updateRoot,
       fetchedAt: Date.now()
     }
   }
 
-  // Self-heal abandoned git lock files before fetching. A stale
-  // .git/shallow.lock from a crashed/interrupted fetch otherwise fails every
-  // later fetch ("Unable to create '.git/shallow.lock': File exists") and this
-  // check reports 'fetch-failed' forever — git never removes these itself.
-  await clearStaleGitLocks(updateRoot)
+  const git = args =>
+    runGit(passiveGitArgs(args), { cwd: updateRoot, noCredentialUI: true }).then(r => r.stdout.trim())
 
-  const fetched = await runGit(['fetch', '--quiet', 'origin', branch], { cwd: updateRoot })
+  const [currentSha, target, dirtyStr, currentBranch] = await Promise.all([
+    git(['rev-parse', 'HEAD']),
+    runGit(passiveGitArgs(['ls-remote', passiveRemote, `refs/heads/${branch}`]), {
+      cwd: getPassiveGitIsolation().cwd,
+      noCredentialUI: true
+    }),
+    git(['status', '--porcelain']),
+    git(['rev-parse', '--abbrev-ref', 'HEAD'])
+  ])
 
-  if (fetched.code !== 0) {
+  const targetSha = firstLine(target.stdout).split(/\s+/)[0] || ''
+
+  if (target.code !== 0 || !targetSha) {
     return {
       supported: true,
       branch,
       error: 'fetch-failed',
-      message: firstLine(fetched.stderr) || 'git fetch failed.',
+      message: firstLine(target.stderr) || 'git ls-remote failed without requesting credentials.',
       hermesRoot: updateRoot,
       fetchedAt: Date.now()
     }
   }
 
-  const git = args => runGit(args, { cwd: updateRoot }).then(r => r.stdout.trim())
+  const tipsEqual = Boolean(currentSha && currentSha === targetSha)
 
-  const [currentSha, targetSha, dirtyStr, currentBranch, shallowStr] = await Promise.all([
-    git(['rev-parse', 'HEAD']),
-    git(['rev-parse', `origin/${branch}`]),
-    git(['status', '--porcelain']),
-    git(['rev-parse', '--abbrev-ref', 'HEAD']),
-    git(['rev-parse', '--is-shallow-repository'])
-  ])
+  const compare = tipsEqual
+    ? { behind: 0, commits: [] }
+    : await fetchCompareUpdate({
+        currentSha,
+        originUrl: passiveRemote,
+        targetSha
+      })
 
-  const isShallow = shallowStr === 'true'
-
-  // A shallow graph cannot provide a trustworthy exact count, even when it has
-  // a visible merge-base. Skip the ancestry walk and use the SHA fallback.
-  const countStr = shouldCountCommits({ isShallow }) ? await git(['rev-list', `HEAD..origin/${branch}`, '--count']) : ''
-
-  // A positive directional ancestry result remains trustworthy in a shallow
-  // graph and prevents a local commit on top of origin from looking outdated.
-  const targetIsAncestorOfHead =
-    isShallow &&
-    currentSha !== targetSha &&
-    (await runGit(['merge-base', '--is-ancestor', `origin/${branch}`, 'HEAD'], { cwd: updateRoot })).code === 0
-
-  let behind = resolveBehindCount({
-    countStr,
-    currentSha,
-    targetSha,
-    isShallow,
-    targetIsAncestorOfHead
-  })
-
-  // Recover the exact count a shallow clone can't compute: the GitHub compare
-  // API knows the full graph regardless of local clone depth. Best-effort —
-  // offline, rate-limited, or non-GitHub origins keep the honest null
-  // ("update available", no fabricated number).
-  if (behind === null) {
-    behind = await fetchCompareBehindCount({ currentSha, originUrl, targetSha })
-  }
-
-  // behind === null means "update available, exact count unknown" (shallow
-  // clone): still list what origin offers — resolveCommitLogSelection keeps
-  // the shallow log to the fetched tip so the range walk can't enumerate the
-  // contaminated ancestry — so "See what's new" stays useful and honest.
-  const commits = behind !== 0 ? await readCommitLog(updateRoot, branch, isShallow) : []
+  const behind = compare?.behind ?? null
+  const upToDate = tipsEqual || behind === 0
 
   return {
     supported: true,
     branch,
     currentBranch,
-    behind,
-    updateAvailable: behind === null || behind > 0,
+    behind: upToDate ? 0 : behind,
+    updateAvailable: !upToDate,
     currentSha,
     targetSha,
-    commits,
+    commits: compare?.commits ?? [],
     dirty: dirtyStr.length > 0,
     hermesRoot: updateRoot,
     fetchedAt: Date.now()
   }
 }
 
-// Best-effort exact behind-count for graphs the local clone can't measure.
-// Delegates URL building + response parsing to update-count.ts (pure, unit
-// tested); this wrapper only does the bounded network call. Any failure —
-// offline, 4xx/5xx, rate limit, shape surprise — returns null so callers keep
-// the honest "update available, count unknown" state.
-async function fetchCompareBehindCount({ currentSha, originUrl, targetSha }) {
+// Best-effort anonymous compare for exact behind count and a bounded changelog.
+// URL building and response parsing stay pure and unit tested in update-count.
+// Any network or shape failure returns null, preserving honest unknown state.
+async function fetchCompareUpdate({ currentSha, originUrl, targetSha }) {
   const url = compareApiUrl({ currentSha, originUrl, targetSha })
 
   if (!url) {
@@ -3125,31 +3115,10 @@ async function fetchCompareBehindCount({ currentSha, originUrl, targetSha }) {
       req.on('error', reject)
     })
 
-    return parseCompareBehindCount(payload)
+    return parseCompareUpdate(payload)
   } catch {
     return null
   }
-}
-
-async function readCommitLog(cwd, branch, isShallow) {
-  const SEP = '\x1f'
-  const REC = '\x1e'
-  const { limit, revision } = resolveCommitLogSelection({ branch, isShallow })
-
-  const { stdout } = await runGit(
-    ['log', revision, `--pretty=format:%H${SEP}%s${SEP}%an${SEP}%at${REC}`, '-n', String(limit)],
-    { cwd }
-  )
-
-  return stdout
-    .split(REC)
-    .map(line => line.trim())
-    .filter(Boolean)
-    .map(line => {
-      const [sha, summary, author, at] = line.split(SEP)
-
-      return { sha, summary, author, at: Number.parseInt(at, 10) * 1000 }
-    })
 }
 
 let updateInFlight = false
@@ -5493,7 +5462,11 @@ function getLinkTitleSession() {
 
   linkTitleSession = session.fromPartition('hermes:link-titles', { cache: false })
   linkTitleSession.webRequest.onBeforeRequest((details, callback) => {
-    callback({ cancel: RENDER_TITLE_BLOCKED_RESOURCES.has(details.resourceType) })
+    callback({
+      cancel:
+        isPersonalSessionTransportUrl(details.url) ||
+        RENDER_TITLE_BLOCKED_RESOURCES.has(details.resourceType)
+    })
   })
   guardLinkTitleSession(linkTitleSession)
 
@@ -5606,11 +5579,30 @@ function usableTitle(value: string): string {
   return value && !TITLE_ERROR_RE.test(value) ? value : ''
 }
 
+function linkTitleTransportAllowsRemoteFetch() {
+  // Both curl --location and the hidden renderer can cross an HTTP redirect
+  // before JavaScript sees the destination. Keep remote title resolution off
+  // until every redirect hop is validated before the request is emitted.
+  return false
+}
+
 function fetchLinkTitle(rawUrl) {
   const url = String(rawUrl || '').trim()
+
+  // This is an IPC boundary, not merely a renderer convenience.  A forged
+  // renderer invocation must not make Electron fetch a page that belongs in
+  // the operator's existing OS-browser session.
+  if (isPersonalSessionUrl(url)) {
+    return Promise.resolve('')
+  }
+
   const key = canonicalTitleCacheKey(url)
 
   if (!key) {
+    return Promise.resolve('')
+  }
+
+  if (!linkTitleTransportAllowsRemoteFetch()) {
     return Promise.resolve('')
   }
 
@@ -17395,6 +17387,9 @@ app.on('open-url', (event, url) => {
 })
 
 app.whenReady().then(() => {
+  installPersonalSessionRequestGuard(session.defaultSession)
+  installPersonalSessionRequestGuard(session.fromPartition('persist:hermes-preview'))
+
   // Warm the login-shell PATH resolution immediately so it usually completes
   // before the backend start path awaits the same single-flight promise.
   void ensureLoginShellPath()

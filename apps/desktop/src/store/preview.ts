@@ -1,4 +1,5 @@
 import { atom, computed } from 'nanostores'
+import { isPersonalSessionUrl } from '@hermes/shared'
 
 import { persistentAtom } from '@/lib/persisted'
 import { readKey } from '@/lib/storage'
@@ -117,35 +118,18 @@ function isPdfFileTarget(target: PreviewTarget): boolean {
 /** Upgrade tabs persisted by builds that classified PDFs as generic binary.
  * Without this restore-time migration, an already-open PDF keeps taking the
  * obsolete raw-binary path after Desktop itself has been upgraded. */
-export const DEFAULT_PREVIEW_TABS: PreviewTab[] = [
-  {
-    id: 'url:https://www.youtube.com',
-    target: {
-      kind: 'url',
-      label: 'YouTube',
-      source: 'https://www.youtube.com',
-      url: 'https://www.youtube.com'
-    }
-  },
-  {
-    id: 'url:https://x.com',
-    target: {
-      kind: 'url',
-      label: 'X',
-      source: 'https://x.com',
-      url: 'https://x.com'
-    }
-  }
-]
+export const DEFAULT_PREVIEW_TABS: PreviewTab[] = []
 
 export function decodePreviewTabs(raw: string): PreviewTab[] {
   const parsed = JSON.parse(raw) as unknown
 
-  return (Array.isArray(parsed) ? parsed.filter(isPreviewTab) : []).map(tab =>
-    isPdfFileTarget(tab.target) && tab.target.previewKind === 'binary'
-      ? { ...tab, target: { ...tab.target, previewKind: 'pdf' as const } }
-      : tab
-  )
+  return (Array.isArray(parsed) ? parsed.filter(isPreviewTab) : [])
+    .filter(tab => tab.target.kind !== 'url' || !isPersonalSessionUrl(tab.target.url))
+    .map(tab =>
+      isPdfFileTarget(tab.target) && tab.target.previewKind === 'binary'
+        ? { ...tab, target: { ...tab.target, previewKind: 'pdf' as const } }
+        : tab
+    )
 }
 
 export const $previewTabs = persistentAtom<PreviewTab[]>(TABS_STORAGE_KEY, DEFAULT_PREVIEW_TABS, {
@@ -404,6 +388,10 @@ function previewTargetForSource(target: PreviewTarget, source: PreviewRecordSour
  *  its target so a stale label/path can't outlive the thing it points at. The
  *  only way anything reaches a preview. */
 export function openPreview(target: PreviewTarget, source: PreviewRecordSource = 'manual') {
+  if (target.kind === 'url' && isPersonalSessionUrl(target.url)) {
+    return
+  }
+
   const resolved = previewTargetForSource(target, source)
   const current = $previewTabs.get()
   const id = resolved.kind === 'url' ? browserTabId(current) : previewTabId(resolved)

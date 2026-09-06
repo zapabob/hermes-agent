@@ -89,4 +89,34 @@ function parseCompareBehindCount(payload) {
   return ahead
 }
 
-export { compareApiUrl, parseCompareBehindCount, resolveBehindCount, resolveCommitLogSelection, shouldCountCommits }
+function parseCompareUpdate(payload) {
+  const behind = parseCompareBehindCount(payload)
+
+  if (behind === null) {
+    return null
+  }
+
+  const commits = Array.isArray(payload.commits)
+    ? payload.commits.slice(0, 40).flatMap(item => {
+        const sha = typeof item?.sha === 'string' ? item.sha : ''
+        const summary = typeof item?.commit?.message === 'string' ? item.commit.message.split('\n')[0] : ''
+        const author = typeof item?.commit?.author?.name === 'string' ? item.commit.author.name : ''
+        const parsedAt = Date.parse(item?.commit?.author?.date || '')
+
+        return /^[0-9a-f]{40}$/i.test(sha) && summary
+          ? [{ sha, summary, author, at: Number.isFinite(parsedAt) ? parsedAt : 0 }]
+          : []
+      })
+    : []
+
+  return { behind, commits }
+}
+
+export {
+  compareApiUrl,
+  parseCompareBehindCount,
+  parseCompareUpdate,
+  resolveBehindCount,
+  resolveCommitLogSelection,
+  shouldCountCommits
+}

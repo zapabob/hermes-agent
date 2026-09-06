@@ -1,6 +1,8 @@
 """Tests for browser_tool.py hardening: caching, security, thread safety, truncation."""
 
 import inspect
+import json
+import os
 import re
 from unittest.mock import MagicMock, patch
 
@@ -156,6 +158,31 @@ class TestUrlDecodedSecretCheck:
         result = json.loads(browser_navigate(url, task_id="test"))
         assert result["success"] is False
         assert "API key" in result["error"] or "Blocked" in result["error"]
+
+
+class TestPersonalSessionAuthority:
+    def test_navigate_refuses_x_and_youtube_before_any_backend(self):
+        import json
+
+        import tools.browser_tool as bt
+
+        urls = (
+            "https://x.com/hermes/status/1",
+            "https://mobile.twitter.com/hermes/status/1",
+            "https://www.youtube.com/watch?v=abc",
+            "https://music.youtube.com/watch?v=abc",
+            "https://youtu.be/abc",
+        )
+        with patch.object(bt, "_is_camofox_mode") as camofox, patch.object(
+            bt, "_run_browser_command"
+        ) as command:
+            for url in urls:
+                result = json.loads(bt.browser_navigate(url, task_id="test"))
+                assert result["success"] is False
+                assert result["blocked_by_policy"]["rule"] == "personal-os-browser-only"
+
+        camofox.assert_not_called()
+        command.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -314,6 +341,72 @@ class TestEmptyStdoutFailure:
         assert isinstance(bt._EMPTY_OK_COMMANDS, frozenset)
         assert "close" in bt._EMPTY_OK_COMMANDS
         assert "record" in bt._EMPTY_OK_COMMANDS
+
+
+class TestPersonalSessionNetworkFloor:
+    @staticmethod
+    def _prepare(monkeypatch, tmp_path, route_success=True):
+        import tools.browser_tool as bt
+
+        calls = []
+
+        class FakeProcess:
+            returncode = 0
+
+            def __init__(self, argv, stdout, stderr, **kwargs):
+                command_index = argv.index("--json") + 1
+                command = argv[command_index]
+                args = argv[command_index + 1 :]
+                calls.append((command, args))
+                success = route_success if command == "network" else True
+                data = {"url": "https://example.com"} if command == "get" else {}
+                os.write(stdout, json.dumps({"success": success, "data": data}).encode())
+
+            def wait(self, timeout=None):
+                return 0
+
+        monkeypatch.setattr(bt, "_find_agent_browser", lambda: "agent-browser.exe")
+        monkeypatch.setattr(bt, "_requires_real_termux_browser_install", lambda _: False)
+        monkeypatch.setattr(bt, "_is_local_mode", lambda: False)
+        monkeypatch.setattr(
+            bt,
+            "_get_session_info",
+            lambda _: {"session_name": "guard-test", "cdp_url": ""},
+        )
+        monkeypatch.setattr(bt, "_socket_safe_tmpdir", lambda: str(tmp_path))
+        monkeypatch.setattr(bt, "_write_owner_pid", lambda *_: None)
+        monkeypatch.setattr(bt, "_build_browser_env", lambda: {"PATH": os.environ.get("PATH", "")})
+        monkeypatch.setattr(bt.subprocess, "Popen", FakeProcess)
+        monkeypatch.setattr("tools.interrupt.is_interrupted", lambda: False)
+        return bt, calls
+
+    def test_route_is_installed_before_every_content_command(self, monkeypatch, tmp_path):
+        bt, calls = self._prepare(monkeypatch, tmp_path)
+
+        result = bt._run_browser_command("guard", "click", ["@e1"])
+
+        assert result["success"] is True
+        assert [command for command, _ in calls] == [
+            *(["network"] * len(bt._PERSONAL_SESSION_ROUTE_PATTERNS)),
+            "get",
+            "click",
+        ]
+        assert [
+            args[1]
+            for command, args in calls
+            if command == "network"
+        ] == list(bt._PERSONAL_SESSION_ROUTE_PATTERNS)
+        assert bt._PERSONAL_SESSION_ROUTE_PATTERNS == ("http://*", "https://*")
+        assert all(pattern.count("*") == 1 for pattern in bt._PERSONAL_SESSION_ROUTE_PATTERNS)
+
+    def test_content_command_fails_closed_when_route_installation_fails(self, monkeypatch, tmp_path):
+        bt, calls = self._prepare(monkeypatch, tmp_path, route_success=False)
+
+        result = bt._run_browser_command("guard", "click", ["@e1"])
+
+        assert result["success"] is False
+        assert "mandatory X/YouTube" in result["error"]
+        assert [command for command, _ in calls] == ["network"]
 
 
 # ---------------------------------------------------------------------------

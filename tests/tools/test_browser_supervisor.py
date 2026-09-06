@@ -292,9 +292,11 @@ def test_prompt_dialog_with_response_text(chrome_cdp, supervisor_registry):
     assert result["ok"] is True
 
 
-def test_browser_dialog_tool_end_to_end(chrome_cdp, supervisor_registry):
+def test_browser_dialog_tool_end_to_end(chrome_cdp, supervisor_registry, monkeypatch):
     """Full agent-path check: fire an alert, call the tool handler directly."""
-    from tools.browser_dialog_tool import browser_dialog
+    from tools import browser_dialog_tool
+
+    monkeypatch.setattr(browser_dialog_tool, "_browser_dialog_transport_policy_error", lambda: "")
 
     cdp_url, _port = chrome_cdp
     supervisor = supervisor_registry.get_or_start(task_id="pytest-tool", cdp_url=cdp_url)
@@ -302,10 +304,29 @@ def test_browser_dialog_tool_end_to_end(chrome_cdp, supervisor_registry):
     _fire_on_page(cdp_url, "setTimeout(() => alert('PYTEST-TOOL-END2END'), 50)")
     assert _wait_for_dialog(supervisor), "no dialog detected via wait_for_dialog"
 
-    r = json.loads(browser_dialog(action="dismiss", task_id="pytest-tool"))
+    r = json.loads(browser_dialog_tool.browser_dialog(action="dismiss", task_id="pytest-tool"))
     assert r["success"] is True
     assert r["action"] == "dismiss"
     assert "PYTEST-TOOL-END2END" in r["dialog"]["message"]
+
+
+def test_browser_dialog_fails_closed_before_supervisor_lookup(monkeypatch):
+    from tools import browser_dialog_tool
+
+    monkeypatch.setattr(
+        browser_dialog_tool.SUPERVISOR_REGISTRY,
+        "get",
+        lambda *_args, **_kwargs: pytest.fail("supervisor lookup must not run"),
+    )
+
+    result = json.loads(browser_dialog_tool.browser_dialog(action="accept", task_id="guard"))
+
+    assert result["success"] is False
+    assert result["blocked_by_policy"] == {
+        "rule": "personal-os-browser-only",
+        "backend": "browser-dialog",
+        "reason": "transport-interception-unavailable",
+    }
 
 
 def test_browser_cdp_frame_id_real_oopif_smoke_documented():
