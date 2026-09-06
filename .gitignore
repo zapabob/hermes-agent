@@ -258,6 +258,19 @@ native/fts5_cjk/*.so
 # local state or output only and must never be staged as source files.
 /_delivery_weekly_report.md
 /dream_verify_insert.py
+
+# Operator-local evidence, credentials, and investigation leftovers. These
+# files are not source, are not reproducible build inputs, and may contain
+# private paths, session data, or local policy/configuration.
+/.codex/config.toml
+/20260815_084502_f3a3d3
+/output.json
+/pr2382-comments.json
+/pr2382-reviews.json
+/prs.json
+/_tmp_*.py
+/query_db.py
+/test_py.py
 /h.includes('relay')
 /linejs-storage.json
 /nul
