@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -64,7 +65,42 @@ func writeRecoveryState(path string, state recoveryState) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, raw, 0o600)
+	if path == "" {
+		return fmt.Errorf("recovery state path is empty")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	// Never truncate the live state file in place. A terminated watchdog or a
+	// concurrent reader during os.WriteFile can leave a zero-filled/partial JSON
+	// document, which disables the recovery budget and blocks all future starts.
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".recovery-budget-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		_ = os.Remove(tmpPath)
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(raw); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("replace recovery state: %w", err)
+	}
+	return nil
 }
 
 func reserveRecovery(path, action string, now time.Time) (recoveryState, bool, time.Duration, error) {

@@ -2,8 +2,8 @@ from pathlib import Path
 
 
 def test_windows_native_install_path_docs_match_installer() -> None:
-    doc = Path("website/docs/user-guide/windows-native.md").read_text()
-    install = Path("scripts/install.ps1").read_text()
+    doc = Path("website/docs/user-guide/windows-native.md").read_text(encoding="utf-8")
+    install = Path("scripts/install.ps1").read_text(encoding="utf-8")
 
     # The launchers live in the managed binary dir OUTSIDE the git checkout
     # (HERMES_HOME\bin, next to the managed uv) — NOT the whole venv\Scripts
