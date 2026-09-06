@@ -320,6 +320,7 @@ class TestEngineOverride:
 
         # We need to mock the file operations too
         with patch("subprocess.Popen", side_effect=capture_popen), \
+             patch("tools.browser_tool._ensure_agent_browser_runtime", return_value=True), \
              patch("os.open", return_value=99), \
              patch("os.close"), \
              patch("os.unlink"), \
@@ -366,6 +367,7 @@ class TestEngineOverride:
         # Return a substantive snapshot so the LP fallback does NOT trigger.
         mock_stdout = '{"success": true, "data": {"snapshot": "- heading \\"Hello\\" [ref=e1]", "refs": {"e1": {}}}}'
         with patch("subprocess.Popen", side_effect=capture_popen), \
+             patch("tools.browser_tool._ensure_agent_browser_runtime", return_value=True), \
              patch("os.open", return_value=99), \
              patch("os.close"), \
              patch("os.unlink"), \
@@ -407,6 +409,7 @@ class TestEngineOverride:
         })
         with patch("tools.browser_tool._get_session_info", return_value={"session_name": "local-sidecar"}), \
              patch("tools.browser_tool._find_agent_browser", return_value="/usr/bin/agent-browser"), \
+             patch("tools.browser_tool._ensure_agent_browser_runtime", return_value=True), \
              patch("tools.browser_tool._is_local_mode", return_value=False), \
              patch("tools.browser_tool._chromium_installed", return_value=True), \
              patch("tools.browser_tool._get_cloud_provider", return_value=mock_provider), \

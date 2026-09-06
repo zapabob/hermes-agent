@@ -114,6 +114,7 @@ class TestHeadedFlagInjection:
             '"- heading \\"Hi\\" [ref=e1]", "refs": {"e1": {}}}}'
         )
         with patch("subprocess.Popen", side_effect=capture_popen), \
+             patch("tools.browser_tool._ensure_agent_browser_runtime", return_value=True), \
              patch("os.open", return_value=99), \
              patch("os.close"), \
              patch("os.unlink"), \

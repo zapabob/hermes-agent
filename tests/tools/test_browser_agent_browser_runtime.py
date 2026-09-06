@@ -63,13 +63,79 @@ def test_runtime_provisioning_is_npx_only_and_rechecks_node(monkeypatch):
     assert calls == ["agent_browser"]
 
 
-def test_direct_native_agent_browser_does_not_probe_or_provision(monkeypatch):
+def test_exact_native_agent_browser_does_not_require_node(monkeypatch, tmp_path):
+    executable = tmp_path / "agent-browser.exe"
+    executable.write_bytes(b"MZ")
     monkeypatch.setattr(
         bt, "_agent_browser_node_is_compatible",
         lambda: (_ for _ in ()).throw(AssertionError("native executable must not probe Node")),
     )
+    monkeypatch.setattr(bt, "_agent_browser_executable_is_native", lambda _path: True)
+    monkeypatch.setattr(
+        bt.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="agent-browser 0.36.0\n"),
+    )
 
-    assert bt._ensure_agent_browser_runtime("C:\\tools\\agent-browser.exe") is True
+    assert bt._ensure_agent_browser_runtime(str(executable)) is True
+
+
+def test_stale_native_agent_browser_is_rejected(monkeypatch, tmp_path):
+    executable = tmp_path / "agent-browser.exe"
+    executable.write_bytes(b"MZ")
+    monkeypatch.setattr(bt, "_agent_browser_executable_is_native", lambda _path: True)
+    monkeypatch.setattr(
+        bt.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="agent-browser 0.35.1\n"),
+    )
+
+    assert bt._ensure_agent_browser_runtime(str(executable)) is False
+
+
+def test_exact_node_shim_cannot_bypass_node_24_floor(monkeypatch, tmp_path):
+    shim = tmp_path / "agent-browser.cmd"
+    shim.write_text("@echo off\n", encoding="utf-8")
+    monkeypatch.setattr(bt, "_agent_browser_executable_is_native", lambda _path: False)
+    monkeypatch.setattr(bt, "_agent_browser_node_is_compatible", lambda: False)
+    monkeypatch.setattr(
+        bt.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("Node 22 shim must not execute")),
+    )
+
+    assert bt._ensure_agent_browser_runtime(str(shim)) is False
+
+
+def test_exact_node_shim_is_allowed_with_node_24(monkeypatch, tmp_path):
+    shim = tmp_path / "agent-browser.cmd"
+    shim.write_text("@echo off\n", encoding="utf-8")
+    monkeypatch.setattr(bt, "_agent_browser_executable_is_native", lambda _path: False)
+    monkeypatch.setattr(bt, "_agent_browser_node_is_compatible", lambda: True)
+    monkeypatch.setattr(
+        bt.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="agent-browser 0.36.0\n"),
+    )
+
+    assert bt._ensure_agent_browser_runtime(str(shim)) is True
+
+
+def test_stale_path_candidate_falls_through_to_exact_npx(monkeypatch, tmp_path):
+    stale = tmp_path / "agent-browser.cmd"
+    stale.write_text("@echo off\n", encoding="utf-8")
+    monkeypatch.setattr(bt, "_cached_agent_browser", None)
+    monkeypatch.setattr(bt, "_agent_browser_resolved", False)
+    monkeypatch.setattr(bt, "_merge_browser_path", lambda _path: "")
+    monkeypatch.setattr(
+        bt.shutil,
+        "which",
+        lambda command, path=None: str(stale) if command == "agent-browser" else "npx",
+    )
+    monkeypatch.setattr(bt, "_agent_browser_direct_is_compatible", lambda _path: False)
+    monkeypatch.setattr(bt, "_resolve_npx_bin", lambda: "npx")
+
+    assert bt._find_agent_browser(validate=True) == bt.NPX_AGENT_BROWSER_SENTINEL
 
 
 def test_npx_argv_refuses_node_22_if_a_caller_misses_provisioning(monkeypatch):

@@ -195,6 +195,7 @@ class TestOwnerPidCrossProcess:
 
         monkeypatch.setattr(bt.subprocess, "Popen", _FakePopen)
         monkeypatch.setattr(bt, "_find_agent_browser", lambda: "/bin/true")
+        monkeypatch.setattr(bt, "_ensure_agent_browser_runtime", lambda _cmd: True)
         monkeypatch.setattr(
             bt, "_requires_real_termux_browser_install", lambda *a: False
         )

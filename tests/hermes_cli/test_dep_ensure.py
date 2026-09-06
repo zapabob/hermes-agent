@@ -58,6 +58,21 @@ def test_has_npx_agent_browser_false_when_nothing_resolves():
         assert _has_npx_agent_browser() is False
 
 
+@pytest.mark.parametrize("compatible", [True, False])
+def test_agent_browser_capability_validates_direct_launcher(compatible):
+    from hermes_cli.dep_ensure import _has_compatible_agent_browser_runtime
+    import tools.browser_tool as bt
+
+    with patch.object(
+        bt, "_find_agent_browser", return_value="C:\\tools\\agent-browser.cmd"
+    ), patch.object(
+        bt, "_agent_browser_direct_is_compatible", return_value=compatible
+    ) as validate:
+        assert _has_compatible_agent_browser_runtime() is compatible
+
+    validate.assert_called_once_with("C:\\tools\\agent-browser.cmd")
+
+
 def test_find_agent_browser_lazy_install_cycle_terminates(monkeypatch):
     """tools.browser_tool._find_agent_browser's "nothing found" branch calls
     ensure_dependency("browser"), whose "browser" check now includes

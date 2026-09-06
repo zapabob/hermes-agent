@@ -91,11 +91,12 @@ def _has_compatible_agent_browser_runtime() -> bool:
     A system Chromium is sufficient for the historical ``browser`` dependency,
     but it cannot execute agent-browser v0.36.0. Keep this capability-specific
     check separate so the lazy npx path can provision Hermes-managed Node 24+
-    without changing Hermes' general Node 22.22+ support. A direct executable
-    may be native and owns its own runtime, so it does not need a Node probe.
+    without changing Hermes' general Node 22.22+ support. Direct launchers must
+    also report the pinned release; script shims are held to the Node 24 floor.
     """
     try:
         from tools.browser_tool import (
+            _agent_browser_direct_is_compatible,
             _agent_browser_node_is_compatible,
             _find_agent_browser,
             _is_npx_agent_browser_sentinel,
@@ -103,7 +104,7 @@ def _has_compatible_agent_browser_runtime() -> bool:
 
         browser_cmd = _find_agent_browser(validate=False)
         if not _is_npx_agent_browser_sentinel(browser_cmd):
-            return True
+            return _agent_browser_direct_is_compatible(browser_cmd)
         return _agent_browser_node_is_compatible() and _has_npx_agent_browser()
     except Exception:
         return False

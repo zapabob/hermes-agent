@@ -67,7 +67,6 @@ from typing import Dict, Any, Optional, List, Tuple, Union
 from pathlib import Path
 from agent.redact import redact_cdp_url
 from hermes_constants import (
-    agent_browser_runnable,
     find_node_executable,
     get_hermes_home,
     get_hermes_home_override,
@@ -1007,6 +1006,19 @@ NPX_AGENT_BROWSER_SENTINEL = "npx agent-browser"
 # multi-wildcard route matcher and hardened domain-filter handling for popups,
 # workers, service workers, WebSockets, EventSource, and WebRTC.
 AGENT_BROWSER_NPX_SPEC = "agent-browser@0.36.0"
+_AGENT_BROWSER_EXPECTED_VERSION = AGENT_BROWSER_NPX_SPEC.rsplit("@", 1)[1]
+
+_NATIVE_EXECUTABLE_MAGICS = {
+    b"\x7fELF",
+    b"\xce\xfa\xed\xfe",
+    b"\xcf\xfa\xed\xfe",
+    b"\xca\xfe\xba\xbe",
+    b"\xca\xfe\xba\xbf",
+    b"\xbe\xba\xfe\xca",
+    b"\xbf\xba\xfe\xca",
+    b"\xfe\xed\xfa\xce",
+    b"\xfe\xed\xfa\xcf",
+}
 
 
 def _is_npx_agent_browser_sentinel(browser_cmd: str) -> bool:
@@ -2987,6 +2999,48 @@ def _agent_browser_candidate_present(path: str | None) -> bool:
     return os.path.exists(path) and (os.name == "nt" or os.access(path, os.X_OK))
 
 
+def _agent_browser_executable_is_native(path: str) -> bool:
+    """Identify a native launcher without trusting its filename on POSIX."""
+    candidate = Path(path)
+    if os.name == "nt":
+        return candidate.suffix.lower() == ".exe"
+    try:
+        with candidate.resolve(strict=True).open("rb") as handle:
+            return handle.read(4) in _NATIVE_EXECUTABLE_MAGICS
+    except OSError:
+        return False
+
+
+def _agent_browser_direct_is_compatible(path: str | None) -> bool:
+    """Accept only the pinned release; Node-backed shims also need Node 24+."""
+    if not _agent_browser_candidate_present(path):
+        return False
+
+    assert path is not None
+    if not _agent_browser_executable_is_native(path) and not _agent_browser_node_is_compatible():
+        return False
+
+    try:
+        result = subprocess.run(
+            [path, "--version"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            env=_build_browser_env(),
+            creationflags=windows_hide_flags(),
+        )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return False
+
+    if result.returncode != 0:
+        return False
+    match = re.fullmatch(r"\s*agent-browser\s+(\d+\.\d+\.\d+)\s*", result.stdout or "")
+    return bool(match and match.group(1) == _AGENT_BROWSER_EXPECTED_VERSION)
+
+
 def _resolve_npx_bin() -> Optional[str]:
     """Resolve a runnable npx binary, preferring the Hermes-managed/Homebrew
     extended search over a bare ambient PATH lookup.
@@ -3017,14 +3071,9 @@ def _agent_browser_runtime_error() -> str:
 
 
 def _ensure_agent_browser_runtime(browser_cmd: str) -> bool:
-    """Ensure the npx execution path has agent-browser's Node floor.
-
-    Concrete agent-browser binaries are deliberately left alone: they may be
-    native launchers with their own embedded runtime. The npx sentinel is the
-    only path Hermes owns and therefore the only one that needs provisioning.
-    """
+    """Ensure every execution path is the pinned, runtime-compatible release."""
     if not _is_npx_agent_browser_sentinel(browser_cmd):
-        return True
+        return _agent_browser_direct_is_compatible(browser_cmd)
     if _agent_browser_node_is_compatible():
         return True
     try:
@@ -3063,7 +3112,7 @@ def _find_agent_browser(*, validate: bool = True) -> str:
     # (not before the search) to prevent a race where a concurrent thread
     # sees resolved=True but _cached_agent_browser is still None.
     #
-    # Every candidate below is validated with ``agent_browser_runnable`` before
+    # Every candidate below is validated for the exact pinned release before
     # it is cached. A bare ``shutil.which`` hit is NOT trusted: agent-browser's
     # npm postinstall re-points a global install symlink at our local
     # node_modules binary, which disappears on the next ``hermes update`` and
@@ -3075,7 +3124,9 @@ def _find_agent_browser(*, validate: bool = True) -> str:
     # Check if it's in PATH (global install)
     which_result = shutil.which("agent-browser")
     if which_result and (
-        agent_browser_runnable(which_result) if validate else _agent_browser_candidate_present(which_result)
+        _agent_browser_direct_is_compatible(which_result)
+        if validate
+        else _agent_browser_candidate_present(which_result)
     ):
         if not validate:
             return which_result
@@ -3089,7 +3140,9 @@ def _find_agent_browser(*, validate: bool = True) -> str:
     if extended_path:
         which_result = shutil.which("agent-browser", path=extended_path)
         if which_result and (
-            agent_browser_runnable(which_result) if validate else _agent_browser_candidate_present(which_result)
+            _agent_browser_direct_is_compatible(which_result)
+            if validate
+            else _agent_browser_candidate_present(which_result)
         ):
             if not validate:
                 return which_result
@@ -3110,7 +3163,9 @@ def _find_agent_browser(*, validate: bool = True) -> str:
     if local_bin_dir.is_dir():
         local_which = shutil.which("agent-browser", path=str(local_bin_dir))
         if local_which and (
-            agent_browser_runnable(local_which) if validate else _agent_browser_candidate_present(local_which)
+            _agent_browser_direct_is_compatible(local_which)
+            if validate
+            else _agent_browser_candidate_present(local_which)
         ):
             if not validate:
                 return local_which
@@ -3142,7 +3197,7 @@ def _find_agent_browser(*, validate: bool = True) -> str:
                 shutil.which("agent-browser", path=str(get_hermes_home() / "node")),
             ]
             for recheck in candidates:
-                if recheck and agent_browser_runnable(recheck):
+                if recheck and _agent_browser_direct_is_compatible(recheck):
                     _cached_agent_browser = recheck
                     _agent_browser_resolved = True
                     return recheck
