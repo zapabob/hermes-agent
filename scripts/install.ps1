@@ -446,7 +446,7 @@ $PythonVersion = "3.11"
 # interpreters, so this list also matches a pre-existing system Python.  Single
 # source of truth shared by Test-Python's fallback and Resolve-AvailablePythonVersion.
 $PythonFallbackVersions = @("3.12", "3.13", "3.10")
-$NodeVersion = "26"
+$NodeVersion = "22"
 # The npm range the root package.json pins in `engines.npm`.  A constant rather
 # than a manifest read like the POSIX side does: Test-Node runs BEFORE the repo
 # is cloned, so there is usually no package.json on disk yet (and none at all
@@ -1702,10 +1702,11 @@ function Set-GitBashEnvVar {
     Write-Info "If needed, set HERMES_GIT_BASH_PATH manually to your bash.exe path."
 }
 
-# The browser runtime requires Node 24+, while the dependency tree additionally
-# excludes early Node 24 and Node 25. Accept Node 24.11+ or 26+ so a successful
-# installer preflight cannot later fail when the pinned agent-browser package
-# starts. Keep this in sync with the managed Node major above.
+# The dependency tree supports Node 22.22+, 24.11+, and 26+. nanoid 6 excludes
+# Node 23 and 25 while its >=26 arm accepts later releases, and @babel/* 8.x
+# requires ^22.18.0 || >=24.11.0 -- so accepting 23/25 or an early Node 24
+# only defers the failure to `npm ci` under engine-strict. Keep this in sync
+# with the root package.json.
 function Test-NodeVersionOk {
     param([string]$Version)
     if ($Version -match '-') { return $false }
@@ -1714,6 +1715,7 @@ function Test-NodeVersionOk {
     } catch {
         return $false
     }
+    if ($v.Major -eq 22) { return ($v.Minor -ge 22) }
     if ($v.Major -eq 24) { return ($v.Minor -ge 11) }
     return ($v.Major -ge 26)
 }
@@ -1726,7 +1728,7 @@ function Test-SystemNodeReady {
 
     $version = node --version
     if (-not (Test-NodeVersionOk $version)) {
-        Write-Warn "Node.js $version is unsupported (Hermes requires Node 24.11+ or 26+)"
+        Write-Warn "Node.js $version is unsupported (Hermes requires Node 22.22+, 24.11+, or 26+)"
         return $false
     }
 

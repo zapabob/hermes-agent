@@ -324,11 +324,6 @@ class TestAgentBrowserRelease:
 
         assert bt.AGENT_BROWSER_NPX_SPEC == "agent-browser@0.36.0"
 
-    def test_experimental_webmcp_launch_surface_is_disabled(self):
-        import tools.browser_tool as bt
-
-        assert bt._agent_browser_argv("agent-browser") == ["agent-browser", "--no-webmcp"]
-
 
 # ---------------------------------------------------------------------------
 # _camofox_eval bug fix

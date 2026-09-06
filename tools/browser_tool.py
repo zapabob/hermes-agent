@@ -964,11 +964,6 @@ NPX_AGENT_BROWSER_SENTINEL = "npx agent-browser"
 # workers, service workers, WebSockets, EventSource, and WebRTC.
 AGENT_BROWSER_NPX_SPEC = "agent-browser@0.36.0"
 
-# WebMCP 0.36 is experimental and page-defined tools are untrusted. Hermes
-# does not expose WebMCP commands, so keep that launch surface disabled while
-# retaining the corrected release's ordinary browser automation features.
-AGENT_BROWSER_RUNTIME_SAFETY_ARGS = ["--no-webmcp"]
-
 
 def _is_npx_agent_browser_sentinel(browser_cmd: str) -> bool:
     return browser_cmd.strip() == NPX_AGENT_BROWSER_SENTINEL
@@ -1286,9 +1281,13 @@ def _run_chrome_fallback_command(
     # found at all (Termux, bare container), fall back to the bare name and
     # let Popen raise with a readable "FileNotFoundError: 'npx'" rather than
     # WinError 193.
-    # _agent_browser_argv keeps the exact npx pin and launch safeguards shared
-    # with the primary and real-profile paths.
-    cmd_prefix = _agent_browser_argv(browser_cmd)
+    if _is_npx_agent_browser_sentinel(browser_cmd):
+        _npx_bin = _resolve_npx_bin() or "npx"
+        # --ignore-scripts: keep lifecycle scripts disabled even for the exact,
+        # audited package pin used by the fork.
+        cmd_prefix = [_npx_bin, "--ignore-scripts", "--prefer-offline", "-y", AGENT_BROWSER_NPX_SPEC]
+    else:
+        cmd_prefix = [browser_cmd]
     base_args = cmd_prefix + ["--engine", "chrome", "--session", tmp_session, "--json"]
 
     task_socket_dir = os.path.join(_socket_safe_tmpdir(), f"agent-browser-{tmp_session}")
@@ -1464,15 +1463,8 @@ def _agent_browser_argv(browser_cmd: str) -> list:
     """Command prefix to invoke agent-browser (binary or npx sentinel)."""
     if _is_npx_agent_browser_sentinel(browser_cmd):
         _npx_bin = _resolve_npx_bin() or "npx"
-        return [
-            _npx_bin,
-            "--ignore-scripts",
-            "--prefer-offline",
-            "-y",
-            AGENT_BROWSER_NPX_SPEC,
-            *AGENT_BROWSER_RUNTIME_SAFETY_ARGS,
-        ]
-    return [browser_cmd, *AGENT_BROWSER_RUNTIME_SAFETY_ARGS]
+        return [_npx_bin, "--ignore-scripts", "--prefer-offline", "-y", AGENT_BROWSER_NPX_SPEC]
+    return [browser_cmd]
 
 
 def _run_agent_browser_capture(argv: list[str], timeout: float):
@@ -3547,7 +3539,12 @@ def _run_browser_command(
     # Resolve via the same PATH + extended-PATH cascade _find_agent_browser
     # uses (see the chrome-fallback call site above for why a bare
     # shutil.which("npx") is wrong here).
-    cmd_prefix = _agent_browser_argv(browser_cmd)
+    if _is_npx_agent_browser_sentinel(browser_cmd):
+        _npx_bin = _resolve_npx_bin() or "npx"
+        # --ignore-scripts: see _run_chrome_fallback_command's identical comment.
+        cmd_prefix = [_npx_bin, "--ignore-scripts", "--prefer-offline", "-y", AGENT_BROWSER_NPX_SPEC]
+    else:
+        cmd_prefix = [browser_cmd]
 
     cmd_parts = cmd_prefix + backend_args + [
         "--json",
