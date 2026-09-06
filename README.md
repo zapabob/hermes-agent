@@ -338,6 +338,14 @@ composed with stronger verified downstream properties. A downstream feature is
 not removed merely because upstream adds a similar name; replacement requires
 parity evidence.
 
+Semantic-preserving refactoring is an explicit maintenance policy. The present
+refactored surfaces continue to operate normally even where their internal
+implementation has been reorganised, provided that externally observable
+behaviour remains equivalent. Acceptance therefore follows preserved public
+contracts, side-effect boundaries, profile isolation, relevant test coverage,
+and live service health rather than source-level resemblance to the previous
+implementation.
+
 ## 13. Architecture
 
 Fork-owned Python boundaries live under `downstream/`: `compat/hermes` delegates
