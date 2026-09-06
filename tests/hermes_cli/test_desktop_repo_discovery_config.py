@@ -8,9 +8,12 @@ def test_desktop_repo_discovery_defaults_preserve_existing_behavior():
     assert desktop["repo_scan_enabled"] is True
     assert desktop["repo_scan_roots"] == []
     assert desktop["repo_scan_exclude_paths"] == []
+    assert desktop["startup_external_urls"] == {"x": "", "youtube": ""}
 
 
 def test_desktop_repo_discovery_keys_are_in_generated_schema():
     assert CONFIG_SCHEMA["desktop.repo_scan_enabled"]["type"] == "boolean"
     assert CONFIG_SCHEMA["desktop.repo_scan_roots"]["type"] == "list"
     assert CONFIG_SCHEMA["desktop.repo_scan_exclude_paths"]["type"] == "list"
+    assert CONFIG_SCHEMA["desktop.startup_external_urls.x"]["type"] == "string"
+    assert CONFIG_SCHEMA["desktop.startup_external_urls.youtube"]["type"] == "string"

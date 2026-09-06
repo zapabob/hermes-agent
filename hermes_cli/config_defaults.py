@@ -3930,6 +3930,13 @@ DEFAULT_CONFIG = {
         "repo_scan_enabled": True,
         "repo_scan_roots": [],
         "repo_scan_exclude_paths": [],
+        # Optional operator-owned pages opened once in the OS default browser
+        # when Desktop starts. Empty values keep public/default installs free
+        # of account-specific destinations.
+        "startup_external_urls": {
+            "x": "",
+            "youtube": "",
+        },
         # Extra Electron command-line flags appended to every desktop launch,
         # e.g. ["--ozone-platform=x11"] on headless/VM X11 hosts that need an
         # explicit ozone backend, or GPU workaround flags. A list of strings;

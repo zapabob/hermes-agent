@@ -289,7 +289,7 @@ import { selectPoolEvictions } from './pool-eviction'
 import { createPoolStopper } from './pool-stop'
 import { poolTouchKeys } from './pool-touch-scope'
 import { createKeepAwake } from './power-save'
-import { configuredStartupExternalUrls } from './startup-external-urls'
+import { configuredStartupExternalUrlsFromYaml, startupExternalUrlsConfigPath } from './startup-external-urls'
 import { PreviewReachRegistry } from './preview-reach'
 import {
   createPrimaryRemoteConnection,
@@ -17357,9 +17357,19 @@ app.whenReady().then(() => {
   createWindow()
 
   // Personal services are an operator-owned startup convenience, not an
-  // app-wide browser policy. Public builds carry no account URL; each valid
-  // environment value opens once in the existing OS-browser session.
-  for (const url of configuredStartupExternalUrls(process.env)) {
+  // app-wide browser policy. Public builds carry no account URL; profile-scoped
+  // config values open once in the existing OS-browser session.
+  const startupExternalUrls = (() => {
+    try {
+      const configPath = startupExternalUrlsConfigPath(HERMES_HOME, readActiveDesktopProfile())
+
+      return configuredStartupExternalUrlsFromYaml(fs.readFileSync(configPath, 'utf8'))
+    } catch {
+      return []
+    }
+  })()
+
+  for (const url of startupExternalUrls) {
     openExternalUrl(url)
   }
 

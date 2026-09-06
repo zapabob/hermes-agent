@@ -1,10 +1,13 @@
+import path from 'node:path'
+import { parse } from 'yaml'
+
 const STARTUP_URL_RULES = [
   {
-    env: 'HERMES_DESKTOP_STARTUP_X_URL',
+    key: 'x',
     hosts: new Set(['twitter.com', 'x.com'])
   },
   {
-    env: 'HERMES_DESKTOP_STARTUP_YOUTUBE_URL',
+    key: 'youtube',
     hosts: new Set(['youtu.be', 'youtube.com'])
   }
 ] as const
@@ -16,15 +19,33 @@ function matchesHost(hostname: string, allowed: ReadonlySet<string>): boolean {
 }
 
 /**
- * Read optional, operator-owned startup URLs without shipping an account or
- * destination in the public build. Invalid or cross-service values are
- * ignored; the caller opens returned URLs through the OS default browser.
+ * Read optional, operator-owned startup URLs from profile-scoped config.yaml
+ * without shipping an account or destination in the public build. Invalid or
+ * cross-service values are ignored; the caller opens returned URLs through
+ * the OS default browser.
  */
-export function configuredStartupExternalUrls(env: NodeJS.ProcessEnv): string[] {
+export function configuredStartupExternalUrls(config: unknown): string[] {
+  if (!config || typeof config !== 'object') {
+    return []
+  }
+
+  const desktop = (config as Record<string, unknown>).desktop
+
+  if (!desktop || typeof desktop !== 'object') {
+    return []
+  }
+
+  const configured = (desktop as Record<string, unknown>).startup_external_urls
+
+  if (!configured || typeof configured !== 'object') {
+    return []
+  }
+
   const urls: string[] = []
 
   for (const rule of STARTUP_URL_RULES) {
-    const raw = String(env[rule.env] || '').trim()
+    const value = (configured as Record<string, unknown>)[rule.key]
+    const raw = typeof value === 'string' ? value.trim() : ''
 
     if (!raw) {
       continue
@@ -33,7 +54,12 @@ export function configuredStartupExternalUrls(env: NodeJS.ProcessEnv): string[] 
     try {
       const parsed = new URL(raw)
 
-      if (!['http:', 'https:'].includes(parsed.protocol) || !matchesHost(parsed.hostname, rule.hosts)) {
+      if (
+        parsed.protocol !== 'https:' ||
+        parsed.username ||
+        parsed.password ||
+        !matchesHost(parsed.hostname, rule.hosts)
+      ) {
         continue
       }
 
@@ -44,4 +70,19 @@ export function configuredStartupExternalUrls(env: NodeJS.ProcessEnv): string[] 
   }
 
   return [...new Set(urls)]
+}
+
+export function configuredStartupExternalUrlsFromYaml(rawConfig: string): string[] {
+  try {
+    return configuredStartupExternalUrls(parse(rawConfig))
+  } catch {
+    return []
+  }
+}
+
+export function startupExternalUrlsConfigPath(hermesHome: string, activeProfile: string | null): string {
+  const profile = String(activeProfile || '').trim()
+  const profileHome = profile && profile !== 'default' ? path.join(hermesHome, 'profiles', profile) : hermesHome
+
+  return path.join(profileHome, 'config.yaml')
 }

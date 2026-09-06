@@ -344,7 +344,8 @@ class TestRunBrowserCommandPathConstruction:
 
         assert captured_cmd is not None
         assert captured_cmd[0] == browser_path
-        assert captured_cmd[1:5] == [
+        assert captured_cmd[1:6] == [
+            "--no-webmcp",
             "--session",
             "test-session",
             "--json",
@@ -404,7 +405,7 @@ class TestRunBrowserCommandPathConstruction:
             "/opt/hermes/node/bin/npx", "--ignore-scripts", "--prefer-offline", "-y",
             AGENT_BROWSER_NPX_SPEC,
         ]
-        assert captured_cmd[5:9] == ["--session", "test-session", "--json", "navigate"]
+        assert captured_cmd[5:10] == ["--no-webmcp", "--session", "test-session", "--json", "navigate"]
 
     def test_subprocess_path_includes_termux_fallback_dirs(self, tmp_path):
         """Termux fallback dirs should survive browser PATH rebuilding."""
@@ -499,9 +500,10 @@ class TestRunChromeFallbackCommandNpxResolution:
             "/opt/hermes/node/bin/npx", "--ignore-scripts", "--prefer-offline", "-y",
             AGENT_BROWSER_NPX_SPEC,
         ]
-        assert first_cmd[5] == "--engine" and first_cmd[6] == "chrome"
-        assert first_cmd[7] == "--session" and first_cmd[8].startswith("h_cfb_")
-        assert first_cmd[9] == "--json"
+        assert first_cmd[5] == "--no-webmcp"
+        assert first_cmd[6] == "--engine" and first_cmd[7] == "chrome"
+        assert first_cmd[8] == "--session" and first_cmd[9].startswith("h_cfb_")
+        assert first_cmd[10] == "--json"
 
 
 class TestResolveNpxBinPriority:

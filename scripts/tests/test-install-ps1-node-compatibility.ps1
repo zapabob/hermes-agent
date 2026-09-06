@@ -45,7 +45,7 @@ $script:FakeNpmVersion = '11.16.0'
 $script:FakeNodeVersion = 'v24.18.0'
 $script:DownloadAttempts = 0
 $script:HasNode = $null
-$NodeVersion = '22'
+$NodeVersion = '26'
 
 function node { $script:FakeNodeVersion }
 function npm.cmd { $script:FakeNpmVersion }
@@ -104,8 +104,8 @@ Assert-Equal $true $result.HasNode 'compatible system Node/npm is accepted'
 Assert-Equal 0 $result.DownloadAttempts 'compatible system npm avoids managed download'
 
 $result = Invoke-SystemNodeProbe 'v22.22.0' '10.9.8'
-Assert-Equal $true $result.HasNode 'minimum Node with bundled npm is accepted'
-Assert-Equal 0 $result.DownloadAttempts 'bundled npm avoids managed download'
+Assert-Equal $false $result.HasNode 'Node 22 is rejected because agent-browser requires Node 24 or newer'
+Assert-Equal 1 $result.DownloadAttempts 'Node 22 falls through to managed Node 26'
 
 $result = Invoke-SystemNodeProbe 'v24.18.0' '11.16.0'
 Assert-Equal $false $result.HasNode 'incompatible system npm is not accepted'
